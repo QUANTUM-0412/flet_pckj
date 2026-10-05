@@ -40,6 +40,8 @@ uv run flet run --web main.py
 - **Ubuntu Server / Linux**：`./启动.sh`，第一次会自己 `uv sync`；
   做成开机自启的常驻服务：`sudo ./scripts/安装服务.sh`，
   完整步骤见 [docs/UbuntuServer部署.md](docs/UbuntuServer部署.md)
+- **Windows（WSL）后台静默跑**：`./scripts/wsl-静默启动.sh`，
+  不弹窗口、开机自动起：见 [docs/WSL静默运行.md](docs/WSL静默运行.md)
 
 跑起来以后：这台电脑开 `http://localhost:8550`，手机连同一个 WiFi
 用终端里打印的那个地址。

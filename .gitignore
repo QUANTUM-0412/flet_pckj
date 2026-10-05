@@ -21,6 +21,10 @@ data/
 # 打包出来的部署包（里面也带着 data）
 *.tar.gz
 
+# WSL 静默启动留下来的东西
+运行日志.log
+.run.pid
+
 # SSH 私钥：仓库里绝不放钥匙
 # （提交上去会被 GitHub push protection 拦下来：push declined due to repository rule violations）
 .ssh/
