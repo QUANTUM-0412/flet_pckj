@@ -15,7 +15,7 @@ class LessonDetailMixin:
         lesson = db.get_lesson(lesson_id)
         if not lesson:
             self.lesson_id = None
-            return self._lessons_view()
+            return self._schedule_view()
         self._row_refs = {}
 
         stats = ft.Text(_lessons_stats(lesson), size=12, color=ft.Colors.GREY_600)
@@ -24,7 +24,7 @@ class LessonDetailMixin:
             [
                 ft.IconButton(
                     ft.Icons.ARROW_BACK,
-                    tooltip="返回上课记录",
+                    tooltip="返回",
                     on_click=lambda e: self.open_lesson(None),
                 ),
                 ft.Column(
@@ -40,6 +40,17 @@ class LessonDetailMixin:
                     spacing=2,
                     expand=True,
                 ),
+                *(
+                    [
+                        ft.Button(
+                            "点名",
+                            icon=ft.Icons.FACT_CHECK,
+                            on_click=lambda e: self._ask_roll_call(lesson),
+                        )
+                    ]
+                    if not lesson.get("rolled", 1)
+                    else []
+                ),
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
@@ -49,7 +60,41 @@ class LessonDetailMixin:
                 [
                     ft.Row(
                         [
-                            ft.Text(f"时长 {lesson['minutes']} 分钟", size=13, expand=True),
+                            ft.Text(f"时长 {lesson['minutes']} 分钟", size=13),
+                            *(
+                                [
+                                    ft.Text(
+                                        f"课程：{db.lesson_class_label(lesson)}",
+                                        size=13,
+                                        color=ft.Colors.GREY_700,
+                                    )
+                                ]
+                                if db.lesson_class_label(lesson)
+                                else []
+                            ),
+                            ft.Text(
+                                f"上课老师：{lesson.get('teacher_name') or '未指定'}",
+                                size=13,
+                                color=ft.Colors.GREY_700,
+                            ),
+                            *(
+                                [
+                                    ft.Text(
+                                        f"归属：{lesson['owner_names']}",
+                                        size=13,
+                                        color=ft.Colors.GREY_700,
+                                    )
+                                ]
+                                if lesson.get("owner_names")
+                                else []
+                            ),
+                        ],
+                        spacing=14,
+                        wrap=True,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Container(expand=True),
                             ft.Button(
                                 "编辑课次",
                                 icon=ft.Icons.EDIT,
@@ -174,6 +219,25 @@ class LessonDetailMixin:
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
         )
+
+    def _ask_roll_call(self, lesson: dict) -> None:
+        """这节课真上完了：点名之后才开始扣课时、加积分。"""
+        rows = db.list_attendance(lesson["id"])
+        hours = 0.0
+        points = 0.0
+        for a in rows:
+            h, p = _attendance_calc(a, lesson)
+            hours += h
+            points += p
+        self._confirm(
+            "点名",
+            f"按现在的名单算：{len(rows)} 人，扣 {db.num_text(hours)} 课时、"
+            f"加 {db.num_text(points)} 分。点完还能改。",
+            lambda: db.roll_call(lesson["id"]),
+            ok_text="点名",
+            done_text="点完名了，课时和积分算上了",
+        )
+
 
     def _lesson_files_card(self, lesson: dict) -> ft.Container:
         files = db.list_files("lesson", lesson["id"], "附件")
@@ -305,6 +369,17 @@ class LessonDetailMixin:
                     ft.Row(
                         [
                             ft.Text(a["student_name"], size=15, weight=ft.FontWeight.W_600, expand=True),
+                            *(
+                                [
+                                    ft.Text(
+                                        f"归属 {a['owner_teacher_name']}",
+                                        size=12,
+                                        color=ft.Colors.BLUE_700,
+                                    )
+                                ]
+                                if a.get("owner_teacher_name")
+                                else []
+                            ),
                             balance,
                             ft.IconButton(
                                 ft.Icons.CLOSE,
@@ -332,7 +407,22 @@ class LessonDetailMixin:
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     comment,
-                    self._photo_strip(a["id"], photos),
+                    ft.Row(
+                        [
+                            self._photo_strip(a["id"], photos),
+                            ft.Button(
+                                "做海报",
+                                icon=ft.Icons.AUTO_AWESOME,
+                                tooltip="把孩子的照片和课评拼成一张图，发给家长",
+                                on_click=lambda e, att_id=a["id"], lid=lesson["id"]: (
+                                    self._open_poster_for(att_id, lid)
+                                ),
+                            ),
+                        ],
+                        spacing=8,
+                        wrap=True,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                     summary,
                 ],
                 spacing=6,

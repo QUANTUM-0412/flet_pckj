@@ -34,6 +34,19 @@ uv run flet run --web main.py
 
 ```
 
+## 在别的电脑上跑
+
+- **Mac**：双击 `启动.command`（或者 `uv run python main.py`）
+- **Ubuntu Server / Linux**：`./启动.sh`，第一次会自己 `uv sync`；
+  做成开机自启的常驻服务：`sudo ./scripts/安装服务.sh`，
+  完整步骤见 [docs/UbuntuServer部署.md](docs/UbuntuServer部署.md)
+
+跑起来以后：这台电脑开 `http://localhost:8550`，手机连同一个 WiFi
+用终端里打印的那个地址。
+
+代码托管到 GitHub 的话，服务器上用 `git clone` 拉代码 + 部署包搬一次 `data/`，
+以后更新跑 `./scripts/更新服务.sh` 就行（`data/` 不在 git 里，不会被覆盖）。
+
 我需要一个记录课时的平台
 
 他能满足多端访问

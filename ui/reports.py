@@ -8,6 +8,7 @@ import flet as ft
 
 import db
 import xlsx_writer
+from .common import _date_text
 
 
 class ReportsMixin:
@@ -18,7 +19,9 @@ class ReportsMixin:
         stats = db.month_stats(month)
         alerts = db.hour_alerts()
         counts = db.month_lesson_counts(month)
+        teachers = db.teacher_report(month)
         points = [b for b in db.points_balances() if b["points"]]
+        redemptions = db.list_redemptions()
 
         alert_rows = []
         for a in alerts:
@@ -58,6 +61,46 @@ class ReportsMixin:
             )
             for c in counts
         ] or [ft.Text("这个月还没有点名记录。", size=12, color=ft.Colors.GREY_600)]
+
+        teacher_rows = []
+        for t in teachers:
+            bits = [
+                f"归属实收 {db.num_text(t['income'])} 元",
+                f"上课 {t['lessons']} 节 · {db.num_text(t['hours'])} 课时",
+                f"在读学生 {t['students']} 人",
+            ]
+            if t["trials_open"]:
+                bits.append(f"跟进中试听 {t['trials_open']} 人")
+            if t["phone"]:
+                bits.append(t["phone"])
+            teacher_rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Text(t["name"] or "—", size=14, weight=ft.FontWeight.W_600),
+                            ft.Text(
+                                " · ".join(bits),
+                                size=12,
+                                color=ft.Colors.GREY_700,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=10,
+                    border_radius=10,
+                    bgcolor=ft.Colors.GREY_50,
+                )
+            )
+        if not teacher_rows:
+            teacher_rows = [
+                ft.Text(
+                    "还没有上课老师。到「设置 → 老师账号」里加老师，并勾上「也是上课老师」。",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                )
+            ]
 
         point_rows = [
             ft.Row(
@@ -123,6 +166,16 @@ class ReportsMixin:
                             ft.Row(
                                 [
                                     self._metric("收入", f"{db.num_text(stats['income'])} 元"),
+                                    *(
+                                        [
+                                            self._metric(
+                                                "用券抵扣",
+                                                f"{db.num_text(stats['voucher_used'])} 元",
+                                            )
+                                        ]
+                                        if stats.get("voucher_used")
+                                        else []
+                                    ),
                                     self._metric("缴费", f"{stats['payments']} 笔"),
                                     self._metric("上课", f"{stats['lessons']} 节"),
                                     self._metric("点名", f"{stats['attendance']} 人次"),
@@ -136,13 +189,94 @@ class ReportsMixin:
                     )
                 ),
                 self._section("这个月谁上得多", ft.Column(count_rows, spacing=6)),
+                self._section(
+                    f"按老师（{month[:4]} 年 {int(month[5:])} 月）",
+                    ft.Column(
+                        [
+                            ft.Text(
+                                "「归属实收」是算给这个老师的学生交的钱（按缴费行归属）；"
+                                "「上课」是按实际上课老师算的（谁上的课给谁）。",
+                                size=12,
+                                color=ft.Colors.GREY_600,
+                            ),
+                            *teacher_rows,
+                        ],
+                        spacing=10,
+                    ),
+                ),
                 self._section("积分榜", ft.Column(point_rows, spacing=6)),
+                self._section(
+                    f"兑换记录（{len(redemptions)} 笔）",
+                    ft.Column(self._redemption_rows(redemptions), spacing=10),
+                ),
                 ft.Container(height=8),
             ],
             expand=True,
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
         )
+
+    def _redemption_rows(self, redemptions: list[dict]) -> list[ft.Control]:
+        if not redemptions:
+            return [
+                ft.Text(
+                    "还没有兑换记录。孩子上课赚的积分会自动累加，兑换的时候在这记一笔。",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                )
+            ]
+        rows = []
+        for r in redemptions:
+            bits = []
+            if r["note"]:
+                bits.append(r["note"])
+            bits.append(f"扣 {db.num_text(abs(float(r['change'])))} 分")
+            rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text(_date_text(r["happened_on"]), size=12, color=ft.Colors.GREY_600),
+                                    ft.Text(r["student_name"], size=15, weight=ft.FontWeight.W_600),
+                                    ft.Text(" · ".join(bits), size=12, color=ft.Colors.GREY_600),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            *(
+                                [
+                                    ft.IconButton(
+                                        ft.Icons.EDIT,
+                                        tooltip="编辑",
+                                        icon_size=18,
+                                        on_click=lambda e, row=r: self._open_redemption_dialog(row),
+                                    ),
+                                    ft.IconButton(
+                                        ft.Icons.DELETE_OUTLINE,
+                                        tooltip="删除",
+                                        icon_size=18,
+                                        on_click=lambda e, row=r: self._confirm(
+                                            "删除这条兑换",
+                                            f"确定删除「{row['student_name']} 扣 "
+                                            f"{db.num_text(abs(float(row['change'])))} 分」这条吗？"
+                                            "积分会加回去。",
+                                            lambda: db.delete_redemption(row["id"]),
+                                        ),
+                                    ),
+                                ]
+                                if self.is_admin()
+                                else []
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=10,
+                    border_radius=10,
+                    bgcolor=ft.Colors.GREY_50,
+                )
+            )
+        return rows
 
     def _export_excel(self) -> None:
         sheets = db.export_tables()
@@ -156,6 +290,11 @@ class ReportsMixin:
             stored = ""
         total_rows = sum(len(rows) for _name, _head, rows in sheets)
         self._last_export = (pretty, data)
+        # 数据可能被搬到项目外面（服务器上常见），提示里就照实写路径
+        try:
+            where = db.EXPORT_DIR.relative_to(db.APP_DIR)
+        except ValueError:
+            where = db.EXPORT_DIR
         self._show(
             self._dialog(
                 "导出好了",
@@ -169,8 +308,7 @@ class ReportsMixin:
                             color=ft.Colors.GREY_700,
                         ),
                         ft.Text(
-                            "电脑上也存了一份：data/files/exports/"
-                            + (stored or "（没存上）"),
+                            f"电脑上也存了一份：{where}/" + (stored or "（没存上）"),
                             size=11,
                             color=ft.Colors.GREY_600,
                         ),

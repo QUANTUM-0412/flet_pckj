@@ -14,3 +14,13 @@ wheels/
 
 # 本机数据（SQLite 数据库，备份时直接拷这个文件夹）
 data/
+
+# 原始 Excel 里有学员姓名，别往 GitHub 传（真要传用 git add -f）
+上课时间表-*.xlsx
+
+# 打包出来的部署包（里面也带着 data）
+*.tar.gz
+
+# SSH 私钥：仓库里绝不放钥匙
+# （提交上去会被 GitHub push protection 拦下来：push declined due to repository rule violations）
+.ssh/

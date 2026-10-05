@@ -5,7 +5,7 @@ from __future__ import annotations
 import flet as ft
 
 import db
-from .common import DIALOG_WIDTH, _dd, _opts, _tf
+from .common import DIALOG_WIDTH, _dd, _opts, _teacher_opts, _tf
 
 
 class SettingsMixin:
@@ -15,8 +15,10 @@ class SettingsMixin:
         cards: list[ft.Control] = [self._account_card()]
         if self.is_admin():
             cards += [
+                self._poster_card(),
                 self._levels_card(),
                 self._class_types_card(),
+                self._schools_card(),
                 self._hour_types_card(),
                 self._recompute_card(),
                 self._users_card(),
@@ -33,6 +35,46 @@ class SettingsMixin:
             expand=True,
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
+        )
+
+    def _poster_card(self) -> ft.Container:
+        """发给家长的海报上印什么：机构名 + 联系方式。"""
+        brand = ft.TextField(
+            label="机构名（海报上角）",
+            value=db.get_meta("poster_brand"),
+            width=DIALOG_WIDTH,
+            dense=True,
+            hint_text="例如：拾光机器人编程",
+        )
+        contact = ft.TextField(
+            label="联系方式（海报底部，可不填）",
+            value=db.get_meta("poster_contact"),
+            width=DIALOG_WIDTH,
+            dense=True,
+            hint_text="例如：微信/电话 138-0000-0000",
+        )
+
+        def save(e) -> None:
+            db.set_meta("poster_brand", (brand.value or "").strip())
+            db.set_meta("poster_contact", (contact.value or "").strip())
+            self._toast("海报署名存好了")
+
+        return self._section(
+            "海报署名",
+            ft.Column(
+                [
+                    ft.Text(
+                        "给家长的课堂海报（课次详情里每个孩子「做海报」）会印上这两行；"
+                        "不填就只有孩子的名字。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    brand,
+                    contact,
+                    ft.Row([ft.Button("保存", icon=ft.Icons.SAVE, on_click=save)]),
+                ],
+                spacing=10,
+            ),
         )
 
     def _hour_types_card(self) -> ft.Container:
@@ -133,8 +175,15 @@ class SettingsMixin:
 
     def _users_card(self) -> ft.Container:
         rows = []
+        teachers = 0
         for u in db.list_users():
             bits = [db.ROLE_NAMES.get(u["role"], u["role"])]
+            if u["is_teacher"]:
+                teachers += 1
+            else:
+                bits.append("不排课")
+            if u["phone"]:
+                bits.append(u["phone"])
             if not u["active"]:
                 bits.append("已停用")
             bits.append(f"用户名 {u['username']}")
@@ -170,11 +219,7 @@ class SettingsMixin:
                                 ft.Icons.DELETE_OUTLINE,
                                 tooltip="删除",
                                 icon_size=18,
-                                on_click=lambda e, row=u: self._confirm(
-                                    "删除账号",
-                                    f"确定删除「{row['display_name'] or row['username']}」这个账号吗？",
-                                    lambda: db.delete_user(row["id"]),
-                                ),
+                                on_click=lambda e, row=u: self._ask_delete_account(row),
                             ),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -189,12 +234,35 @@ class SettingsMixin:
             ft.Column(
                 [
                     ft.Text(
+                        "勾了「上课老师」的账号，才会出现在报名、缴费、排课的"
+                        "「归属老师／上课老师」下拉里，并参与按老师的收入与课时统计。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    ft.Text(
+                        f"现在有 {teachers} 个上课老师。"
                         "老师能排课、点名、写教案课评、传照片、记积分兑换；"
                         "改课时、改缴费、删记录、改学员档案只有管理员能做。",
                         size=12,
                         color=ft.Colors.GREY_600,
                     ),
                     *rows,
+                    ft.Row(
+                        [
+                            ft.TextButton(
+                                "按课程默认老师补全归属",
+                                icon=ft.Icons.RULE,
+                                on_click=lambda e: self._backfill_attribution(),
+                            ),
+                            ft.TextButton(
+                                "给没填的课次补上课老师",
+                                icon=ft.Icons.ASSIGNMENT_IND,
+                                on_click=lambda e: self._backfill_lesson_teachers(),
+                            ),
+                        ],
+                        wrap=True,
+                        alignment=ft.MainAxisAlignment.START,
+                    ),
                 ],
                 spacing=10,
             ),
@@ -203,10 +271,60 @@ class SettingsMixin:
             ),
         )
 
+    def _ask_delete_account(self, row: dict) -> None:
+        """删老师账号：名下有记录的不让删，提示改成停用。"""
+        who = row["display_name"] or row["username"]
+
+        def ok(e):
+            self.page.pop_dialog()
+            try:
+                db.delete_user(row["id"])
+            except ValueError as exc:
+                self.render()
+                self._toast(str(exc))
+                return
+            self.render()
+            self._toast("账号已删除")
+
+        self._show(
+            self._dialog(
+                "删除账号",
+                ft.Text(f"确定删除「{who}」这个账号吗？"),
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("删除", on_click=ok),
+                ],
+            )
+        )
+
+    def _backfill_attribution(self) -> None:
+        """给没指定过归属的老报名／老缴费／老点名，按课程默认老师补上；
+        老报名还能对上课程的，也一起挂到课程上。"""
+        count = db.backfill_teacher_attribution()
+        linked = db.backfill_enrollment_classes()
+        self.render()
+        self._toast(
+            f"补全完成：归属补了 {count} 条"
+            + (f"，报名挂上课程的 {linked} 条" if linked else "")
+            if (count or linked)
+            else "没有要补的：要么都已经指定好，要么还没给课程设默认老师"
+        )
+
+    def _backfill_lesson_teachers(self) -> None:
+        """老课次没填上课老师的：学生都归同一个老师就算他，否则按课程默认老师。"""
+        count = db.backfill_lesson_teachers()
+        self.render()
+        self._toast(
+            f"给 {count} 节老课补上了上课老师（只补了没填的，可以进去单改）"
+            if count
+            else "没有要补的课次：要么都填过了，要么这些课的孩子还没定归属、课程也没默认老师"
+        )
+
     def _open_user_dialog(self, user: dict | None = None) -> None:
         editing = user is not None
         username = _tf("用户名（登录用）", user["username"] if editing else "", width=DIALOG_WIDTH)
         display = _tf("姓名", user["display_name"] if editing else "", width=DIALOG_WIDTH)
+        phone = _tf("电话", user["phone"] if editing else "", width=DIALOG_WIDTH)
         password = _tf(
             "密码",
             "",
@@ -220,6 +338,10 @@ class SettingsMixin:
             value=user["role"] if editing else db.ROLE_TEACHER,
             width=DIALOG_WIDTH,
         )
+        teaching = ft.Switch(
+            label="也是上课老师（可以算归属、排课、算工资）",
+            value=bool(user["is_teacher"]) if editing else True,
+        )
         active = ft.Switch(label="启用这个账号", value=bool(user["active"]) if editing else True)
         if editing:
             username.read_only = True
@@ -232,6 +354,8 @@ class SettingsMixin:
                         password.value or "",
                         display.value or "",
                         role.value or db.ROLE_TEACHER,
+                        phone.value or "",
+                        bool(teaching.value),
                     )
                 except ValueError as exc:
                     self._toast(str(exc))
@@ -240,7 +364,12 @@ class SettingsMixin:
                 return
             try:
                 db.update_user(
-                    user["id"], display.value or "", role.value or db.ROLE_TEACHER, bool(active.value)
+                    user["id"],
+                    display.value or "",
+                    role.value or db.ROLE_TEACHER,
+                    bool(active.value),
+                    phone.value or "",
+                    bool(teaching.value),
                 )
                 if (password.value or "").strip():
                     db.set_user_password(user["id"], password.value)
@@ -250,7 +379,9 @@ class SettingsMixin:
             self._finish("账号已更新")
 
         body = self._form_column(
-            [username, display, password, role, active] if editing else [username, display, password, role]
+            [username, display, phone, password, role, teaching, active]
+            if editing
+            else [username, display, phone, password, role, teaching]
         )
         self._show(
             self._dialog(
@@ -268,6 +399,7 @@ class SettingsMixin:
         rows = []
         for l in levels:
             used = db.count_level_usage(l["id"])
+            used_text = db.level_usage_text(l["id"])
             rows.append(
                 ft.Container(
                     content=ft.Row(
@@ -277,7 +409,16 @@ class SettingsMixin:
                                     ft.Text(db.level_full_name(l), size=14, weight=ft.FontWeight.W_600),
                                     ft.Text(
                                         f"默认 {l['default_minutes']} 分钟"
-                                        + (f" · {used} 个学员在用" if used else ""),
+                                        + (
+                                            f" · 默认老师 {l['default_teacher_name']}"
+                                            if l["default_teacher_name"]
+                                            else " · 还没设默认老师"
+                                        )
+                                        + (
+                                            f" · {used_text}在用（删了会清空这些记录上的等级）"
+                                            if used_text
+                                            else " · 还没人用"
+                                        ),
                                         size=12,
                                         color=ft.Colors.GREY_600,
                                     ),
@@ -295,11 +436,7 @@ class SettingsMixin:
                                 ft.Icons.DELETE_OUTLINE,
                                 tooltip="删除",
                                 icon_size=18,
-                                on_click=lambda e, lv=l: self._confirm(
-                                    "删除等级",
-                                    f"确定删除「{db.level_full_name(lv)}」吗？",
-                                    lambda: db.delete_level(lv["id"]),
-                                ),
+                                on_click=lambda e, lv=l: self._delete_level(lv),
                             ),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -314,6 +451,78 @@ class SettingsMixin:
             "等级与默认时长",
             ft.Column(rows or [ft.Text("还没有等级", size=12, color=ft.Colors.GREY_600)], spacing=10),
             action=action,
+        )
+
+    def _schools_card(self) -> ft.Container:
+        """学校字典：这里加过的学校，填学员档案时旁边下拉就能直接挑。"""
+        rows = []
+        for s in db.school_rows():
+            hint = f"{s['used']} 个孩子在读" if s["used"] else "还没有孩子填这个学校"
+            controls = [
+                ft.Column(
+                    [
+                        ft.Text(s["name"], size=14, weight=ft.FontWeight.W_600),
+                        ft.Text(hint, size=12, color=ft.Colors.GREY_600),
+                    ],
+                    spacing=2,
+                    expand=True,
+                )
+            ]
+            if s["id"] is not None:
+                controls.append(
+                    ft.IconButton(
+                        ft.Icons.DELETE_OUTLINE,
+                        tooltip="从下拉里去掉",
+                        icon_size=18,
+                        on_click=lambda e, row=s: self._confirm(
+                            "去掉这个学校",
+                            (
+                                f"「{row['name']}」还有 {row['used']} 个孩子在用，"
+                                "要先把那些孩子的档案改成别的学校，它才会真的不见。"
+                                if row["used"]
+                                else f"确定把「{row['name']}」从下拉候选里去掉了？"
+                            ),
+                            lambda: db.delete_school(row["id"]),
+                        ),
+                    )
+                )
+            rows.append(
+                ft.Container(
+                    content=ft.Row(controls, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    padding=10,
+                    border_radius=10,
+                    bgcolor=ft.Colors.GREY_50,
+                )
+            )
+
+        new_name = _tf("新学校名", "", expand=True)
+
+        def add(e):
+            try:
+                db.add_school(new_name.value or "")
+            except ValueError:
+                new_name.error = "请填学校名"
+                new_name.update()
+                return
+            self.render()
+            self._toast("学校加好了")
+
+        return self._section(
+            "学校",
+            ft.Column(
+                [
+                    ft.Column(
+                        rows or [ft.Text("还没有学校", size=12, color=ft.Colors.GREY_600)],
+                        spacing=10,
+                    ),
+                    ft.Row(
+                        [new_name, ft.Button("加进去", icon=ft.Icons.ADD, on_click=add)],
+                        spacing=6,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=12,
+            ),
         )
 
     def _class_types_card(self) -> ft.Container:
@@ -354,6 +563,43 @@ class SettingsMixin:
             )
         return self._section("课型与扣课时规则", ft.Column(rows, spacing=10))
 
+    def _delete_level(self, level) -> None:
+        """删等级。有记录在用的话，说清楚会清空那些记录上的等级，再删。"""
+        used = db.level_usage_text(level["id"])
+        name = db.level_full_name(level)
+
+        def ok(e):
+            self.page.pop_dialog()
+            try:
+                db.delete_level(level["id"], force=True)
+            except ValueError as exc:
+                self.render()
+                self._toast(str(exc))
+                return
+            self.render()
+            self._toast(
+                f"「{name}」删掉了" + ("（那些记录上的等级已清空）" if used else "")
+            )
+
+        message = (
+            f"「{name}」现在有 {used} 在用它。\n\n"
+            "删掉以后：课程、缴费、课次、报名这些记录都还在，"
+            "只是它们上面记的等级会变成空。\n\n"
+            "确定要删吗？"
+            if used
+            else f"确定删除「{name}」吗？"
+        )
+        self._show(
+            self._dialog(
+                "删除等级",
+                ft.Text(message),
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("仍然删除" if used else "删除", on_click=ok),
+                ],
+            )
+        )
+
     def _open_level_dialog(self, level) -> None:
         editing = level is not None
         subject = _tf("科目（如 GPL、STEM）", level["subject"] if editing else "", width=DIALOG_WIDTH)
@@ -363,6 +609,16 @@ class SettingsMixin:
             level["default_minutes"] if editing else 90,
             width=DIALOG_WIDTH,
             keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        teacher = _dd(
+            "默认老师（报名时自动带出）",
+            _teacher_opts("不指定"),
+            value=(
+                str(level["default_teacher_id"])
+                if editing and level["default_teacher_id"]
+                else ""
+            ),
+            width=DIALOG_WIDTH,
         )
 
         def save(e):
@@ -377,12 +633,23 @@ class SettingsMixin:
                 minutes.update()
                 return
             if editing:
-                db.update_level(level["id"], subject.value or "", name.value, mins)
+                db.update_level(
+                    level["id"],
+                    subject.value or "",
+                    name.value,
+                    mins,
+                    int(teacher.value) if (teacher.value or "").strip() else None,
+                )
             else:
-                db.create_level(subject.value or "", name.value, mins)
+                db.create_level(
+                    subject.value or "",
+                    name.value,
+                    mins,
+                    int(teacher.value) if (teacher.value or "").strip() else None,
+                )
             self._finish("等级已保存")
 
-        body = self._form_column([subject, name, minutes])
+        body = self._form_column([subject, name, minutes, teacher])
         self._show(
             self._dialog(
                 "编辑等级" if editing else "新增等级",

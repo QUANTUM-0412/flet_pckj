@@ -17,20 +17,26 @@ from app_ui import ClassHoursApp
 PORT = int(os.environ.get("CLASS_HOURS_PORT", "8550"))
 
 
-def lan_ip() -> str:
-    """猜一下本机在局域网里的地址，方便手机上打开。"""
+def lan_ips() -> list[str]:
+    """列出本机可能能用的局域网地址，手机上挑打得开的那个。"""
+    ips: list[str] = []
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
+            ips.append(s.getsockname()[0])
         finally:
             s.close()
     except OSError:
-        try:
-            return socket.gethostbyname(socket.gethostname())
-        except OSError:
-            return "127.0.0.1"
+        pass
+    try:  # 服务器上常常不止一张网卡，多列几个省得猜
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except OSError:
+        pass
+    return ips or ["127.0.0.1"]
 
 
 def main(page: ft.Page) -> None:
@@ -42,8 +48,10 @@ if __name__ == "__main__":
     db.init_db()
     print("课时记录已经启动。")
     print(f"  这台电脑上打开：http://127.0.0.1:{PORT}")
-    print(f"  手机上打开：    http://{lan_ip()}:{PORT}")
+    for ip in lan_ips():
+        print(f"  手机上打开：    http://{ip}:{PORT}")
     print("（手机要和这台电脑连同一个 WiFi；关掉这个窗口就停止了）")
+    print("（要装在 Ubuntu Server 上常驻，见 docs/UbuntuServer部署.md）")
     ft.run(
         main,
         view=ft.AppView.WEB_BROWSER,

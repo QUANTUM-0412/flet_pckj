@@ -1,0 +1,10 @@
+# 统一换行符：避免在 Windows 上编辑之后，shell 脚本多出 \r 跑不起来
+* text=auto eol=lf
+
+# 这些是二进制文件，别当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ttc binary
+*.xlsx binary
+*.db binary

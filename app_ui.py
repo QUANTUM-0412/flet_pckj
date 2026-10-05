@@ -10,7 +10,6 @@ from datetime import date
 
 import flet as ft
 
-import db
 from ui.auth import AuthMixin
 from ui.shell import ShellMixin
 from ui.widgets import WidgetsMixin
@@ -58,8 +57,16 @@ class ClassHoursApp(
         self.schedule_date = date.today().isoformat()
         self.report_month = date.today().strftime("%Y-%m")
         self.keyword = ""
+        self.filter_name = ""
+        self.filter_phone = ""
+        self.filter_grade = ""
+        self.filter_school = ""
+        self.filter_owner = ""
+        self.lesson_keyword = ""
+        self.lesson_week = ""  # 空着就是本周；否则存那一周的周一（YYYY-MM-DD）
         self.status_filter = ""
         self.trial_filter = ""
+        self.payment_month = ""  # 空着就是本月；否则 YYYY-MM
         self._last_wide: bool | None = None
         self._row_refs: dict[int, dict] = {}
         self._upload_target: tuple[str, int, str] | None = None

@@ -1,0 +1,31 @@
+# 课时记录平台 —— systemd 服务模板
+#
+# 不要直接拿这个文件去用（里面的目录和用户名还是占位符）。
+# 在项目目录里跑： sudo ./scripts/安装服务.sh
+
+[Unit]
+Description=课时记录平台（class hours）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python main.py
+
+# 没有图形界面，别去找浏览器；地址会打在日志里
+Environment=FLET_FORCE_WEB_SERVER=1
+Environment=CLASS_HOURS_PORT=8550
+
+# 数据库和上传的照片默认在 WorkingDirectory/data 里。
+# 想把数据放到项目外面（长期跑推荐这样）：装服务时加 --data-dir，下面这两行由脚本生成。
+# __DATA_DIR_ENV__
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

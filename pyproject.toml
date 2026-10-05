@@ -5,5 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "flet>=1.0.3",
+    # [web] 是跑起来必须的：main.py 用浏览器模式起服务，没带这个 extras
+    # 在干净环境里（比如 Ubuntu Server）会缺 flet-web 起不来
+    "flet[web]>=1.0.3",
+    "pillow>=11",  # 上传的照片自动压小（长边 1600、几百 KB），给家长看还清楚
+]
+
+[dependency-groups]
+dev = [
+    # 只有开发时用 `uv run flet run --web main.py` 才需要，运行时不用
+    "flet[cli]>=1.0.3",
 ]

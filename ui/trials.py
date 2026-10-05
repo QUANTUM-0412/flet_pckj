@@ -7,7 +7,17 @@ from datetime import date
 import flet as ft
 
 import db
-from .common import DIALOG_WIDTH, _chip, _date_text, _dd, _opts, _tf
+from .common import (
+    DIALOG_WIDTH,
+    _chip,
+    _date_text,
+    _dd,
+    _grade_opts,
+    _opts,
+    _school_inputs,
+    _teacher_opts,
+    _tf,
+)
 
 
 class TrialsMixin:
@@ -91,8 +101,10 @@ class TrialsMixin:
             x
             for x in [
                 t["grade"],
+                t["school"],
                 f"家长：{t['parent_name']}" if t["parent_name"] else "",
                 t["phone"],
+                f"跟进：{t['owner_teacher_name']}" if t.get("owner_teacher_name") else "",
                 t["source"],
             ]
             if x
@@ -160,7 +172,15 @@ class TrialsMixin:
     def _open_trial_dialog(self, trial: dict | None = None) -> None:
         editing = trial is not None
         name = _tf("孩子姓名 *", trial["name"] if editing else "", width=DIALOG_WIDTH)
-        grade = _tf("年级", trial["grade"] if editing else "", width=DIALOG_WIDTH)
+        grade = _dd(
+            "年级",
+            _grade_opts(),
+            value=(trial["grade"] if editing else "") or None,
+            width=DIALOG_WIDTH,
+        )
+        school_box, school_field = _school_inputs(
+            trial["school"] if editing else "", DIALOG_WIDTH
+        )
         gender = _dd(
             "性别",
             _opts([(g, g) for g in db.GENDER_OPTIONS]),
@@ -179,6 +199,16 @@ class TrialsMixin:
             "跟进状态",
             _opts([(s, s) for s in db.TRIAL_STATUS]),
             value=trial["status"] if editing else "待试听",
+            width=DIALOG_WIDTH,
+        )
+        owner = _dd(
+            "跟进老师（算谁的客户）",
+            _teacher_opts("不指定"),
+            value=(
+                str(trial["owner_teacher_id"])
+                if editing and trial["owner_teacher_id"]
+                else self._default_teacher_id()
+            ),
             width=DIALOG_WIDTH,
         )
         trial_on = _tf(
@@ -213,12 +243,16 @@ class TrialsMixin:
                 "name": name.value,
                 "gender": gender.value or "",
                 "grade": grade.value or "",
+                "school": (school_field.value or "").strip(),
                 "parent_name": parent.value or "",
                 "phone": phone.value or "",
                 "source": source.value or "",
                 "status": status.value or "待试听",
                 "trial_on": day,
                 "note": note.value or "",
+                "owner_teacher_id": (
+                    int(owner.value) if (owner.value or "").strip() else None
+                ),
             }
             if editing:
                 db.update_trial(trial["id"], data)
@@ -228,7 +262,7 @@ class TrialsMixin:
                 self._finish("记下了，记得跟进")
 
         body = self._form_column(
-            [name, grade, gender, parent, phone, source, status, trial_on, note]
+            [name, grade, school_box, gender, parent, phone, source, status, owner, trial_on, note]
         )
         self._show(
             self._dialog(

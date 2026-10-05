@@ -1,4 +1,7 @@
-"""积分兑换。"""
+"""积分：学员页的积分明细卡片 + 兑换对话框。
+
+（积分榜和兑换记录清单在"报表"页里，这个模块只管跟某个孩子相关的部分。）
+"""
 
 from __future__ import annotations
 
@@ -12,125 +15,6 @@ from .common import DIALOG_WIDTH, _date_text, _dd, _opts, _tf
 
 class PointsMixin:
     """积分兑换（ClassHoursApp 的一部分）。"""
-
-    def _points_view(self) -> ft.Column:
-        balances = [b for b in db.points_balances() if b["points"] or b["status"] == "在读"]
-        redemptions = db.list_redemptions()
-        with_points = len([b for b in balances if b["points"] > 0])
-        return ft.Column(
-            [
-                self._header(
-                    "积分",
-                    f"{with_points} 个孩子手上有积分 · 兑换记录 {len(redemptions)} 笔",
-                    [
-                        ft.Button(
-                            "记一笔兑换",
-                            icon=ft.Icons.REDEEM,
-                            on_click=lambda e: self._open_redemption_dialog(),
-                        )
-                    ],
-                ),
-                self._section(
-                    "现在的积分",
-                    ft.Column(self._balance_rows(balances), spacing=6),
-                ),
-                self._section(
-                    "兑换记录",
-                    ft.Column(self._redemption_rows(redemptions), spacing=10),
-                ),
-                ft.Container(height=8),
-            ],
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=12,
-        )
-
-    def _balance_rows(self, balances: list[dict]) -> list[ft.Control]:
-        if not balances:
-            return [ft.Text("还没有孩子，先去学员页添加。", size=12, color=ft.Colors.GREY_600)]
-        rows = []
-        for b in balances:
-            points = float(b["points"] or 0)
-            if points > 0:
-                color = ft.Colors.GREEN_700
-            elif points < 0:
-                color = ft.Colors.RED_600
-            else:
-                color = ft.Colors.GREY_500
-            rows.append(
-                ft.Row(
-                    [
-                        ft.Text(b["name"], size=14, weight=ft.FontWeight.W_600),
-                        ft.Text(b["grade"] or "", size=11, color=ft.Colors.GREY_500, expand=True),
-                        ft.Text(f"{db.num_text(points)} 分", size=14, color=color),
-                    ],
-                    spacing=8,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                )
-            )
-        return rows
-
-    def _redemption_rows(self, redemptions: list[dict]) -> list[ft.Control]:
-        if not redemptions:
-            return [
-                ft.Text(
-                    "还没有兑换记录。孩子上课赚的积分会自动累加，兑换的时候在这记一笔。",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                )
-            ]
-        rows = []
-        for r in redemptions:
-            bits = []
-            if r["note"]:
-                bits.append(r["note"])
-            bits.append(f"扣 {db.num_text(abs(float(r['change'])))} 分")
-            rows.append(
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Text(_date_text(r["happened_on"]), size=12, color=ft.Colors.GREY_600),
-                                    ft.Text(r["student_name"], size=15, weight=ft.FontWeight.W_600),
-                                    ft.Text(" · ".join(bits), size=12, color=ft.Colors.GREY_600),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                            *(
-                                [
-                                    ft.IconButton(
-                                        ft.Icons.EDIT,
-                                        tooltip="编辑",
-                                        icon_size=18,
-                                        on_click=lambda e, row=r: self._open_redemption_dialog(row),
-                                    ),
-                                    ft.IconButton(
-                                        ft.Icons.DELETE_OUTLINE,
-                                        tooltip="删除",
-                                        icon_size=18,
-                                        on_click=lambda e, row=r: self._confirm(
-                                            "删除这条兑换",
-                                            f"确定删除「{row['student_name']} 扣 "
-                                            f"{db.num_text(abs(float(row['change'])))} 分」这条吗？"
-                                            "积分会加回去。",
-                                            lambda: db.delete_redemption(row["id"]),
-                                        ),
-                                    ),
-                                ]
-                                if self.is_admin()
-                                else []
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=10,
-                    border_radius=10,
-                    bgcolor=ft.Colors.GREY_50,
-                )
-            )
-        return rows
 
     def _open_redemption_dialog(self, redemption: dict | None = None, student_id: int | None = None) -> None:
         balances = db.points_balances()

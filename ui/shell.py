@@ -14,10 +14,9 @@ class ShellMixin:
     def _nav_items(self):
         return [
             (ft.Icons.PEOPLE_OUTLINE, ft.Icons.PEOPLE, "学员"),
-            (ft.Icons.FACT_CHECK_OUTLINED, ft.Icons.FACT_CHECK, "上课记录"),
-            (ft.Icons.PAYMENTS_OUTLINED, ft.Icons.PAYMENTS, "缴费"),
-            (ft.Icons.STARS_OUTLINED, ft.Icons.STARS, "积分"),
+            (ft.Icons.SCHOOL_OUTLINED, ft.Icons.SCHOOL, "课程"),
             (ft.Icons.PERSON_SEARCH, ft.Icons.PERSON_SEARCH, "试听"),
+            (ft.Icons.PAYMENTS_OUTLINED, ft.Icons.PAYMENTS, "缴费"),
             (ft.Icons.INSIGHTS_OUTLINED, ft.Icons.INSIGHTS, "报表"),
             (ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "设置"),
         ]
@@ -132,34 +131,37 @@ class ShellMixin:
 
     def _body(self) -> ft.Control:
         if self.tab == 0:
+            # 从学员页点进某节课，看课次详情；返回就回到这个学员
+            if self.lesson_id is not None:
+                return self._lesson_detail_view(self.lesson_id)
             return (
                 self._students_view()
                 if self.student_id is None
                 else self._student_detail_view(self.student_id)
             )
         if self.tab == 1:
+            # 课程：课程列表 + 排课表 + 上课记录（待补课、搜课次）
             if self.lesson_id is not None:
                 return self._lesson_detail_view(self.lesson_id)
-            return self._schedule_view() if self.show_schedule else self._lessons_view()
+            return self._schedule_view()
         if self.tab == 2:
-            return self._payments_view()
-        if self.tab == 3:
-            return self._points_view()
-        if self.tab == 4:
             return self._trials_view()
-        if self.tab == 5:
+        if self.tab == 3:
+            return self._payments_view()
+        if self.tab == 4:
             return self._reports_view()
         return self._settings_view()
 
     def open_lesson(self, lesson_id: int | None) -> None:
         self.lesson_id = lesson_id
-        if lesson_id is None:
-            self.show_schedule = False
         self.render()
 
     def open_schedule(self, show: bool = True) -> None:
+        """去「课程」栏目。"""
         self.show_schedule = show
+        self.tab = 1
         self.lesson_id = None
+        self.student_id = None
         self.render()
 
     def open_student(self, student_id: int | None) -> None:

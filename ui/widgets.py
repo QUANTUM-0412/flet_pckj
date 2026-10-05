@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import flet as ft
 
+import db
 from .common import DIALOG_WIDTH
 
 
@@ -56,6 +57,7 @@ class WidgetsMixin:
             title=ft.Text(title),
             content=ft.Container(body, width=DIALOG_WIDTH),
             actions=actions,
+            scrollable=True,  # 内容长的时候（比如手机上的缴费框）能滚动，不会顶出屏幕
         )
 
     def _show(self, dlg) -> None:
@@ -75,6 +77,13 @@ class WidgetsMixin:
         self.page.pop_dialog()
         self.render()
         self._toast(message)
+
+    def _default_teacher_id(self) -> str:
+        """新记录默认的上课老师：当前登录的人如果也是上课老师，就默认是他。"""
+        me = (self.user or {}).get("id")
+        if me and any(int(t["id"]) == int(me) for t in db.list_teachers()):
+            return str(me)
+        return ""
 
     def _form_column(self, controls, scroll: bool = False) -> ft.Column:
         return ft.Column(
