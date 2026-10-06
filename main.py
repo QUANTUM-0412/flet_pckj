@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
+import time
+import webbrowser
 
 import flet as ft
 
@@ -44,6 +47,25 @@ def main(page: ft.Page) -> None:
     ClassHoursApp(page).render()
 
 
+def open_when_ready() -> None:
+    """等服务器起来，用能打开的 127.0.0.1 打开浏览器。
+
+    服务器本身绑在 0.0.0.0（这样手机连同一个 WiFi 也能访问），
+    但 0.0.0.0 不是能浏览的地址 —— 所以这里自己开 127.0.0.1 那个。
+    """
+    url = f"http://127.0.0.1:{PORT}"
+    for _ in range(40):
+        try:
+            with socket.create_connection(("127.0.0.1", PORT), timeout=0.25):
+                break
+        except OSError:
+            time.sleep(0.15)
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass  # 服务器上没有浏览器也没关系，照样能用手机/别的电脑打开
+
+
 if __name__ == "__main__":
     db.init_db()
     print("课时记录已经启动。")
@@ -52,6 +74,9 @@ if __name__ == "__main__":
         print(f"  手机上打开：    http://{ip}:{PORT}")
     print("（手机要和这台电脑连同一个 WiFi；关掉这个窗口就停止了）")
     print("（要装在 Ubuntu Server 上常驻，见 docs/UbuntuServer部署.md）")
+    # 不让 Flet 去开 0.0.0.0（那个地址打不开），浏览器由 open_when_ready 来开
+    os.environ["FLET_FORCE_WEB_SERVER"] = "1"
+    threading.Thread(target=open_when_ready, daemon=True).start()
     ft.run(
         main,
         view=ft.AppView.WEB_BROWSER,

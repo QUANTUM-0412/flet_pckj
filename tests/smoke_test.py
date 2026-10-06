@@ -427,6 +427,11 @@ lesson = lessons[0]
 rows = db.list_attendance(lesson["id"])
 ok(len(rows) == 1 and rows[0]["minutes"] == 90, "点名记录带上了默认时长")
 ok(db.get_lesson(lesson["id"])["comment"] == "今天讲循环", "课评存在课次上")
+ok(db.get_lesson(lesson["id"])["rolled"] == 0, "记一节课默认先挂着「待点名」")
+accounts = {a["name"]: a for a in db.get_accounts(sid)}
+ok(accounts["正课"]["balance"] == 24, "还没点名，课时先不扣")
+ok(db.student_points(sid) == 0, "还没点名，积分也先不加")
+db.roll_call(lesson["id"])
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 22.5, "出勤自动扣了 1.5 课时")
 ok(db.student_points(sid) == 30, "出勤＋纪律＋表现 = 30 分")
@@ -449,6 +454,7 @@ dlg = top_dialog(page)
 find_field(dlg, "时长（分钟）").value = "120"
 find_dropdown(dlg, "课型").value = str(jingsai["id"])
 find_checkbox(dlg, "张晨希").value = True
+find_checkbox(dlg, "现在就点名").value = True  # 当场算数的特殊路子
 click(dlg, "保存")
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(
@@ -1203,7 +1209,7 @@ for l in db.list_lessons():
     db.delete_lesson(l["id"])
 db.delete_student(bystander)
 
-print("17b. 学期课：一次排一学期，上完再点名，缺课就顺延")
+print("17b. 学期课：一次排一学期，上完再点名")
 sem_kid = db.create_student({"name": "学期娃", "grade": "二年级"})
 db.create_enrollment(sem_kid, gpl3["id"], zhengke["id"], 90)
 sem_hour_id = next(a["hour_type_id"] for a in db.get_accounts(sem_kid) if a["name"] == "正课")
@@ -1244,17 +1250,15 @@ ok(db.student_points(sem_kid) == 30, "点完名才加积分")
 again = db.generate_template_lessons(sem_tid)
 ok(not again["made"] and len(again["skipped"]) == 9, "再排一次不会重复建课")
 
-moved = db.postpone_template(sem_tid, 7)
-ok(moved == 8, "顺延只动还没点名的那 8 节")
-sem_t = db.get_template(sem_tid)
-ok(sem_t["start_date"] == "2026-09-01", "已经上过课，开课日保持不动")
-ok(sem_t["end_date"] == "2026-10-31", "结课日不动（顺延只挪课）")
 after = db.template_lessons(sem_tid)
 ok(after[0]["lesson_date"] == "2026-09-05" and after[0]["rolled"] == 1, "点过名那节还在原地")
-ok(after[1]["lesson_date"] == "2026-09-19", "没点名的第二节挪到了 9/19")
+ok(
+    after[1]["lesson_date"] == "2026-09-12" and after[1]["rolled"] == 0,
+    "没点名的第二节还挂着「待点名」",
+)
 
 app.open_schedule(True)
-app.schedule_date = "2026-09-19"
+app.schedule_date = "2026-09-12"
 app.render()
 ok(find_text(page.controls[0], "这一周的课"), "排课表里有周视图")
 ok(find_text(page.controls[0], "周六"), "周视图里有周六这一列")
@@ -2779,14 +2783,14 @@ ok(
     "清空筛选以后都回来了",
 )
 
-print("45. 「顺延一周」放在「这天的课」里")
+print("45. 「顺延一周」已经去掉")
 post_cls = db.create_template(
     0,
     "08:00",
     90,
     zhengke["id"],
     gpl3["id"],
-    name="2026-2-顺延测试班",
+    name="2026-2-排课测试班",
     year="2026",
     term="2",
     seq=98,
@@ -2803,25 +2807,6 @@ app.lesson_id = None
 app.schedule_date = "2026-10-05"
 app.render()
 
-def _section_box(root, title_prefix):
-    """页面上「某某（…）」那一块的外层容器。"""
-    for control in walk(root):
-        if not isinstance(control, ft.Container):
-            continue
-        column = control.content
-        if not isinstance(column, ft.Column) or not column.controls:
-            continue
-        head = column.controls[0]
-        if not isinstance(head, ft.Row):
-            continue
-        for item in head.controls:
-            if isinstance(item, ft.Text) and str(item.value or "").startswith(
-                title_prefix
-            ):
-                return control
-    return None
-
-
 def _has_button(root, label: str) -> bool:
     return any(
         isinstance(c, (ft.Button, ft.TextButton)) and c.content == label
@@ -2829,23 +2814,8 @@ def _has_button(root, label: str) -> bool:
     )
 
 
-day_box = _section_box(page.controls[0], "这天的课")
-course_box = _section_box(page.controls[0], "课程（")
-ok(day_box is not None and _has_button(day_box, "顺延一周"), "「这天的课」里有「顺延一周」")
-ok(
-    course_box is not None and not _has_button(course_box, "顺延一周"),
-    "课程列表里不再放「顺延一周」",
-)
-
-app._postpone_template(db.get_template(post_cls))
-dlg = top_dialog(page)
-click(dlg, "顺延")
-post_dates = sorted(l["lesson_date"] for l in db.template_lessons(post_cls))
-ok("2026-10-05" not in post_dates and "2026-10-12" in post_dates, "顺延后课整体往后挪一周")
-ok(
-    db.get_template(post_cls)["end_date"] == "2026-10-31",
-    "结课日不跟着挪",
-)
+ok(not _has_button(page.controls[0], "顺延一周"), "页面上没有「顺延一周」了")
+ok(not hasattr(db, "postpone_template"), "后台也没有顺延功能了")
 for lesson in db.template_lessons(post_cls):
     db.delete_lesson(lesson["id"])
 db.delete_template(post_cls)

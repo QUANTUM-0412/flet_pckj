@@ -77,6 +77,10 @@ class ClassHoursApp(
         self.launcher = ft.UrlLauncher()
         page.services.append(self.picker)
         page.services.append(self.launcher)
+        # 记住登录：把"上次登录的账号"存在浏览器本地，刷新／重启不用再输密码
+        self.prefs = ft.SharedPreferences()
+        page.services.append(self.prefs)
+        self._restore_started = False
 
         page.title = "课时记录"
         page.theme_mode = ft.ThemeMode.LIGHT

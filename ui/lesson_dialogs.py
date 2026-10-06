@@ -91,6 +91,12 @@ class LessonDialogsMixin:
             ),
             width=DIALOG_WIDTH,
         )
+        # 新记一节课：默认只排上、先不点名，等上完课点「点名」才算课时。
+        # 只有当场就要算数的（比如补录今天就上完的课），才勾「现在就点名」。
+        immediate = None if editing else ft.Checkbox(
+            label="现在就点名（立即扣课时、加积分）",
+            value=False,
+        )
         comment = _tf(
             "课评（一节课一份，全班共用）",
             lesson["comment"] if editing else "",
@@ -126,8 +132,8 @@ class LessonDialogsMixin:
                 )
             show_all = ft.Checkbox(label="也显示别的级别的孩子", value=False)
             holder = ft.Container(
-                content=ft.Column([], spacing=0, tight=True),
-                height=150 if (self.page.height or 900) < 820 else 220,
+                content=ft.Column([], spacing=0, tight=True, scroll=ft.ScrollMode.AUTO),
+                height=200 if (self.page.height or 900) < 820 else 300,
                 border_radius=10,
                 bgcolor=ft.Colors.GREY_50,
                 padding=8,
@@ -152,7 +158,7 @@ class LessonDialogsMixin:
                         color=ft.Colors.GREY_600,
                     )
                 ]
-            holder.content = ft.Column(rows, spacing=0, tight=True)
+            holder.content = ft.Column(rows, spacing=0, tight=True, scroll=ft.ScrollMode.AUTO)
             if update:
                 holder.update()
 
@@ -254,6 +260,7 @@ class LessonDialogsMixin:
                 *args,
                 teacher_id=int(teacher_dd.value) if (teacher_dd.value or "").strip() else None,
                 template_id=int(class_dd.value) if (class_dd.value or "").strip() else None,
+                rolled=1 if immediate is not None and immediate.value else 0,
             )
             count = 0
             for sid, cb, _mine in picked:
@@ -261,7 +268,12 @@ class LessonDialogsMixin:
                     db.add_attendance(lesson_id, sid)
                     count += 1
             self.lesson_id = lesson_id
-            self._finish(f"课次已建好，点名 {count} 人")
+            if immediate is not None and immediate.value:
+                self._finish(f"课次已建好，点名 {count} 人")
+            else:
+                self._finish(
+                    f"课次已排好（{count} 人）：上完课进去点「点名」才算课时"
+                )
 
         body_controls = [day_box, start, type_dd, level_dd, minutes, teacher_dd, comment]
         if not editing:
@@ -278,6 +290,7 @@ class LessonDialogsMixin:
                 ),
                 minutes,
                 teacher_dd,
+                immediate,
                 ft.Text(
                     "勾上这节课来的孩子（选定等级后只列这个级别的）：",
                     size=12,
@@ -346,8 +359,8 @@ class LessonDialogsMixin:
         )
         show_all = ft.Checkbox(label="也显示别的级别的孩子", value=False)
         holder = ft.Container(
-            content=ft.Column([], spacing=0, tight=True),
-            height=240,
+            content=ft.Column([], spacing=0, tight=True, scroll=ft.ScrollMode.AUTO),
+            height=300,
             border_radius=10,
             bgcolor=ft.Colors.GREY_50,
             padding=8,
@@ -371,7 +384,7 @@ class LessonDialogsMixin:
                         color=ft.Colors.GREY_600,
                     )
                 ]
-            holder.content = ft.Column(rows, spacing=0, tight=True)
+            holder.content = ft.Column(rows, spacing=0, tight=True, scroll=ft.ScrollMode.AUTO)
             if update:
                 holder.update()
 

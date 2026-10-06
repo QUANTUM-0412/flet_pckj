@@ -2102,13 +2102,19 @@ def create_lesson(
     kind: str = "正常",
     teacher_id: int | None = None,
     template_id: int | None = None,
+    rolled: int = 1,
 ) -> int:
+    """新建一节课。
+
+    ``rolled=1``（默认）表示这节课当场就算数（扣课时、加积分）；
+    传 ``rolled=0`` 就是**先排上、还没点名**：名单在，等上完课点「点名」才算数。
+    """
     with _connect() as con:
         cur = con.execute(
             """INSERT INTO lessons
                    (lesson_date, start_time, minutes, class_type_id, level_id,
-                    comment, plan, note, kind, teacher_id, template_id, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    comment, plan, note, kind, teacher_id, template_id, rolled, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 lesson_date,
                 start_time,
@@ -2121,6 +2127,7 @@ def create_lesson(
                 kind,
                 int(teacher_id) if teacher_id else None,
                 int(template_id) if template_id else None,
+                0 if rolled is not None and int(rolled) == 0 else 1,
                 _today(),
             ),
         )
@@ -3403,36 +3410,6 @@ def generate_template_lessons(template_id: int) -> dict:
     return {"made": made, "skipped": skipped, "dates": dates}
 
 
-def postpone_template(template_id: int, days: int = 7) -> int:
-    """整体顺延：还没点名的课次往后挪几天（开班日、结课日都不动）。
-
-    已经点过名的课不动 —— 上过的课不能改日期。
-    """
-    template = get_template(template_id)
-    if template is None:
-        raise ValueError("这张课表不存在")
-    days = int(days)
-    if days <= 0:
-        raise ValueError("顺延天数要大于 0")
-    moved = 0
-    with _connect() as con:
-        rows = con.execute(
-            "SELECT id, lesson_date FROM lessons WHERE template_id = ? AND rolled = 0",
-            (template_id,),
-        ).fetchall()
-        for row in rows:
-            try:
-                day = date.fromisoformat(row["lesson_date"])
-            except ValueError:
-                continue
-            con.execute(
-                "UPDATE lessons SET lesson_date = ? WHERE id = ?",
-                ((day + timedelta(days=days)).isoformat(), row["id"]),
-            )
-            moved += 1
-    return moved
-
-
 def roll_call(lesson_id: int) -> None:
     """这节课点过名了：从现在起才真的扣课时、加积分。"""
     with _connect() as con:
@@ -3441,6 +3418,21 @@ def roll_call(lesson_id: int) -> None:
             return
         con.execute("UPDATE lessons SET rolled = 1 WHERE id = ?", (lesson_id,))
     recompute_lesson(lesson_id)
+
+
+def unroll_lesson(lesson_id: int) -> None:
+    """撤销点名：把课改回「待点名」，这节课扣的课时、加的积分都退回来。
+
+    名单、课评、教案、照片都不动，以后还能再点一次名。
+    """
+    with _connect() as con:
+        row = con.execute("SELECT rolled FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
+        if row is None or not row["rolled"]:
+            return
+        con.execute("UPDATE lessons SET rolled = 0 WHERE id = ?", (lesson_id,))
+    recompute_lesson(lesson_id)  # rolled=0：先清掉这节课的积分
+    for a in list_attendance(lesson_id):
+        recompute_student(int(a["student_id"]))  # 课时也按"没上这节课"重算
 
 
 def unrolled_lessons(limit: int = 200) -> list[dict]:

@@ -49,7 +49,14 @@ class LessonDetailMixin:
                         )
                     ]
                     if not lesson.get("rolled", 1)
-                    else []
+                    else [
+                        ft.TextButton(
+                            "撤销点名",
+                            icon=ft.Icons.UNDO,
+                            tooltip="改回「待点名」：这节课扣的课时、加的积分都退回",
+                            on_click=lambda e: self._ask_unroll_call(lesson),
+                        )
+                    ]
                 ),
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -236,6 +243,26 @@ class LessonDetailMixin:
             lambda: db.roll_call(lesson["id"]),
             ok_text="点名",
             done_text="点完名了，课时和积分算上了",
+        )
+
+    def _ask_unroll_call(self, lesson: dict) -> None:
+        """撤销点名：先把要退回的课时、积分说清楚，确认了才改。"""
+        rows = db.list_attendance(lesson["id"])
+        hours = 0.0
+        points = 0.0
+        for a in rows:
+            h, p = _attendance_calc(a, lesson)
+            hours += h
+            points += p
+        self._confirm(
+            "撤销点名",
+            f"这节课现在是「已点名」：{len(rows)} 人，已扣 {db.num_text(hours)} 课时、"
+            f"已加 {db.num_text(points)} 分。\n"
+            "撤销后变回「待点名」：这笔课时和积分都退回，名单、课评、照片都还在，"
+            "以后可以再点一次名。确定撤销吗？",
+            lambda: db.unroll_lesson(lesson["id"]),
+            ok_text="确认撤销",
+            done_text="已改回待点名，课时和积分退回来了",
         )
 
 

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import flet as ft
 
 import db
 from .common import DIALOG_WIDTH
+
+# 「记住登录」存在浏览器本地存储里的键：值是上次登录账号的 id
+REMEMBER_KEY = "class_hours_user_id"
 
 
 class AuthMixin:
@@ -34,6 +39,7 @@ class AuthMixin:
                 "display_name": user["display_name"],
                 "role": user["role"],
             }
+            self._remember_login(user)
             self.render()
             self._toast(f"欢迎，{self._whoami()}")
 
@@ -64,7 +70,65 @@ class AuthMixin:
             alignment=ft.Alignment.CENTER,
         )
 
+    async def _prefs_call(self, method: str, *args, attempts: int = 15, timeout: float = 1.0):
+        """调用浏览器本地存储；页面刚打开时它还没挂上来，所以等一会儿再试几次。"""
+        for _ in range(attempts):
+            try:
+                return await asyncio.wait_for(
+                    getattr(self.prefs, method)(*args), timeout
+                )
+            except asyncio.TimeoutError:
+                await asyncio.sleep(0.4)
+            except Exception:
+                return None
+        return None
+
+    def _remember_login(self, user: dict) -> None:
+        """把这个账号记在浏览器里，下次打开／重启自动登录。"""
+        async def save():
+            await self._prefs_call("set", REMEMBER_KEY, int(user["id"]))
+
+        self.page.run_task(save)
+
+    def _forget_login(self) -> None:
+        """退出登录时，把记着的账号也清掉。"""
+        async def clear():
+            await self._prefs_call("remove", REMEMBER_KEY)
+
+        self.page.run_task(clear)
+
+    def _start_restore_login(self) -> None:
+        """开一次：浏览器里要是记着上次登录的账号，就自动进去。"""
+        if self._restore_started:
+            return
+        self._restore_started = True
+
+        async def restore():
+            saved = await self._prefs_call("get", REMEMBER_KEY)
+            if self.user is not None:
+                return  # 等的时候已经有人自己登录了，就别抢
+            try:
+                user_id = int(saved) if saved not in (None, "") else 0
+            except (TypeError, ValueError):
+                return
+            if not user_id:
+                return
+            record = db.get_user(user_id)
+            if record is None or not record.get("active"):
+                self._forget_login()
+                return
+            self.user = {
+                "id": record["id"],
+                "username": record["username"],
+                "display_name": record["display_name"],
+                "role": record["role"],
+            }
+            self.render()
+
+        self.page.run_task(restore)
+
     def logout(self) -> None:
+        self._forget_login()
         self.user = None
         self.tab = 0
         self.student_id = None

@@ -391,6 +391,8 @@ class ScheduleMixin:
             tags.append(_chip("补课", ft.Colors.BLUE_600))
         elif not lesson.get("template_id"):
             tags.append(_chip("临时", ft.Colors.GREY_500))
+        if not lesson.get("rolled", 1):
+            tags.append(_chip("待点名", ft.Colors.ORANGE_700))
         title = db.lesson_class_label(lesson) or db.lesson_label(lesson)
         return ft.Container(
             content=ft.Row(
@@ -435,9 +437,21 @@ class ScheduleMixin:
                         spacing=2,
                         expand=True,
                     ),
-                    ft.TextButton(
-                        "进去看",
-                        on_click=lambda e, lid=lesson["id"]: self.open_lesson(lid),
+                    *(
+                        [
+                            ft.Button(
+                                "去点名",
+                                icon=ft.Icons.FACT_CHECK,
+                                on_click=lambda e, lid=lesson["id"]: self.open_lesson(lid),
+                            )
+                        ]
+                        if not lesson.get("rolled", 1)
+                        else [
+                            ft.TextButton(
+                                "进去看",
+                                on_click=lambda e, lid=lesson["id"]: self.open_lesson(lid),
+                            )
+                        ]
                     ),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -478,23 +492,10 @@ class ScheduleMixin:
                 on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
             )
         elif found:
-            action = ft.Row(
-                [
-                    ft.Button(
-                        "去点名",
-                        icon=ft.Icons.FACT_CHECK,
-                        on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
-                    ),
-                    ft.TextButton(
-                        "顺延一周",
-                        icon=ft.Icons.KEYBOARD_TAB,
-                        tooltip="这门课还没点名的课，从这周起整体往后挪一周",
-                        on_click=lambda e, t=template: self._postpone_template(t),
-                    ),
-                ],
-                spacing=4,
-                tight=True,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            action = ft.Button(
+                "去点名",
+                icon=ft.Icons.FACT_CHECK,
+                on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
             )
         else:
             action = ft.Row(
@@ -510,12 +511,6 @@ class ScheduleMixin:
                         on_click=lambda e, tid=template["id"]: self._skip_course_day(
                             tid, self.schedule_date
                         ),
-                    ),
-                    ft.TextButton(
-                        "顺延一周",
-                        icon=ft.Icons.KEYBOARD_TAB,
-                        tooltip="这门课还没点名的课，从这周起整体往后挪一周",
-                        on_click=lambda e, t=template: self._postpone_template(t),
                     ),
                 ],
                 spacing=4,
@@ -770,25 +765,6 @@ class ScheduleMixin:
             )
         )
 
-    def _postpone_template(self, template: dict, days: int = 7) -> None:
-        """整体顺延：还没点名的课往后挪（开班日、结课日不动）。"""
-        pending = [l for l in db.template_lessons(template["id"]) if not l["rolled"]]
-        if not pending:
-            self._toast("这门课没有还没点名的课，顺延不动任何东西")
-            return
-        message = (
-            f"把「{db.weekday_text(template['weekday'])} {template['start_time']} "
-            f"{db.lesson_label(template)}」还没点名的 {len(pending)} 节课整体往后挪 "
-            f"{days} 天。\n"
-            "开班日和结课日都不动；已经上过、点过名的课也不动。"
-        )
-
-        def do():
-            moved = db.postpone_template(template["id"], days)
-            self._toast(f"{moved} 节课顺延了 {days} 天（开班日、结课日没动）")
-
-        self._confirm("顺延一周", message, do, ok_text="顺延", done_text="顺延好了")
-
     def _skip_course_day(self, template_id: int, day: str) -> None:
         """某天的课不上了：那天从课表上去掉。"""
         template = db.get_template(template_id)
@@ -930,8 +906,8 @@ class ScheduleMixin:
             )
         show_all = ft.Checkbox(label="也显示别的级别的孩子", value=False)
         holder = ft.Container(
-            content=ft.Column([], spacing=0, tight=True),
-            height=150 if (self.page.height or 900) < 820 else 200,
+            content=ft.Column([], spacing=0, tight=True, scroll=ft.ScrollMode.AUTO),
+            height=200 if (self.page.height or 900) < 820 else 280,
             border_radius=10,
             bgcolor=ft.Colors.GREY_50,
             padding=8,
@@ -954,7 +930,7 @@ class ScheduleMixin:
                         color=ft.Colors.GREY_600,
                     )
                 ]
-            holder.content = ft.Column(rows, spacing=0, tight=True)
+            holder.content = ft.Column(rows, spacing=0, tight=True, scroll=ft.ScrollMode.AUTO)
             if update:
                 holder.update()
 

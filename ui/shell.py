@@ -26,6 +26,7 @@ class ShellMixin:
         if self.user is None:
             self.page.add(self._login_view())
             self.page.update()
+            self._start_restore_login()  # 浏览器里记着账号就直接进去，不用再输密码
             return
         wide = self.is_wide()
         self._last_wide = wide
