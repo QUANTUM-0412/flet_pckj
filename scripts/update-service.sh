@@ -3,8 +3,8 @@
 # 服务器的日常更新就用这个，不用再打包上传。
 #
 # 用法：
-#   ./scripts/更新服务.sh                # 全套
-#   ./scripts/更新服务.sh --no-restart   # 只更新，不碰服务（没装 systemd 服务时用）
+#   ./scripts/update-service.sh                # 全套
+#   ./scripts/update-service.sh --no-restart   # 只更新，不碰服务（没装 systemd 服务时用）
 #
 # 注意：服务器上不要手改代码，改了会挡住 git pull。
 set -eu
@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 if [ ! -d .git ]; then
   echo "这个目录不是 git 仓库（可能是用部署包解出来的）。"
-  echo "想这样更新，先按 docs/UbuntuServer部署.md 里的「用 GitHub 托管代码」改成 git clone。"
+  echo "想这样更新，先按 docs/UbuntuServer-deploy.md 里的「用 GitHub 托管代码」改成 git clone。"
   exit 1
 fi
 
@@ -45,5 +45,5 @@ if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files class-hours
   systemctl --no-pager --lines=3 status class-hours || true
 else
   echo "没装 class-hours 服务，先不用重启。"
-  echo "（sudo ./scripts/安装服务.sh 可以装成开机自启的服务）"
+  echo "（sudo ./scripts/install-service.sh 可以装成开机自启的服务）"
 fi

@@ -73,7 +73,7 @@ if __name__ == "__main__":
     for ip in lan_ips():
         print(f"  手机上打开：    http://{ip}:{PORT}")
     print("（手机要和这台电脑连同一个 WiFi；关掉这个窗口就停止了）")
-    print("（要装在 Ubuntu Server 上常驻，见 docs/UbuntuServer部署.md）")
+    print("（要装在 Ubuntu Server 上常驻，见 docs/UbuntuServer-deploy.md）")
     # 不让 Flet 去开 0.0.0.0（那个地址打不开），浏览器由 open_when_ready 来开
     os.environ["FLET_FORCE_WEB_SERVER"] = "1"
     threading.Thread(target=open_when_ready, daemon=True).start()

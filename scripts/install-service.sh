@@ -2,9 +2,9 @@
 # 把课时记录装成开机自启、关掉终端也不停的 systemd 服务（Ubuntu Server 上用）。
 #
 # 用法：
-#   sudo ./scripts/安装服务.sh                                  # 数据就放项目里的 data/
-#   sudo ./scripts/安装服务.sh --data-dir /var/lib/class-hours    # 数据放项目外面（长期跑推荐）
-#   ./scripts/安装服务.sh --dry-run                              # 只打印会生成的服务文件，不安装
+#   sudo ./scripts/install-service.sh                                  # 数据就放项目里的 data/
+#   sudo ./scripts/install-service.sh --data-dir /var/lib/class-hours    # 数据放项目外面（长期跑推荐）
+#   ./scripts/install-service.sh --dry-run                              # 只打印会生成的服务文件，不安装
 #
 # 之后常用命令：
 #   systemctl status class-hours
@@ -66,13 +66,13 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "要用 sudo 跑：sudo ./scripts/安装服务.sh"
-  echo "（只想看看会生成什么： ./scripts/安装服务.sh --dry-run）"
+  echo "要用 sudo 跑：sudo ./scripts/install-service.sh"
+  echo "（只想看看会生成什么： ./scripts/install-service.sh --dry-run）"
   exit 1
 fi
 
 if ! command -v systemctl >/dev/null 2>&1; then
-  echo "这台机器没有 systemd，装不了服务。直接跑 ./启动.sh 就行。"
+  echo "这台机器没有 systemd，装不了服务。直接跑 ./start.sh 就行。"
   exit 1
 fi
 

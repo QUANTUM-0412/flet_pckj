@@ -17,12 +17,14 @@ data/
 
 # 原始 Excel 里有学员姓名，别往 GitHub 传（真要传用 git add -f）
 上课时间表-*.xlsx
+class-hours-*.xlsx
 
 # 打包出来的部署包（里面也带着 data）
 *.tar.gz
 
 # WSL 静默启动留下来的东西
 运行日志.log
+run.log
 .run.pid
 
 # SSH 私钥：仓库里绝不放钥匙

@@ -5,8 +5,8 @@
 # 所以搬过去就是原样，不用再单独搬数据。
 #
 # 用法：
-#   ./scripts/打包部署包.sh                    # 打在项目上一级目录
-#   ./scripts/打包部署包.sh /tmp/别的名字.tar.gz  # 指定输出位置
+#   ./scripts/make-deploy-package.sh                    # 打在项目上一级目录
+#   ./scripts/make-deploy-package.sh /tmp/别的名字.tar.gz  # 指定输出位置
 set -eu
 
 cd "$(dirname "$0")/.." || exit 1
@@ -41,4 +41,4 @@ else
 fi
 echo
 echo "拷到服务器以后："
-echo "  cd ~ && tar -xzf <这个文件> && cd $NAME && uv sync && ./启动.sh"
+echo "  cd ~ && tar -xzf <这个文件> && cd $NAME && uv sync && ./start.sh"

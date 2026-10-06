@@ -6,9 +6,9 @@
 # 「一致的快照」，再用 rsync 拷照片。
 #
 # 用法：
-#   ./scripts/备份数据.sh                          # 备到 <数据目录>/backups，保留最近 7 份
-#   ./scripts/备份数据.sh /mnt/u盘/课时记录          # 备到 U 盘 / 移动硬盘
-#   ./scripts/备份数据.sh /mnt/u盘/课时记录 --keep 30
+#   ./scripts/backup-data.sh                          # 备到 <数据目录>/backups，保留最近 7 份
+#   ./scripts/backup-data.sh /mnt/u盘/课时记录          # 备到 U 盘 / 移动硬盘
+#   ./scripts/backup-data.sh /mnt/u盘/课时记录 --keep 30
 #
 # 数据在哪儿跟 main.py 用同一套环境变量：
 #   CLASS_HOURS_DB     默认 <项目>/data/app.db
@@ -111,4 +111,4 @@ echo "备份好了：$TARGET"
 echo "这份 $(du -sh "$TARGET" | cut -f1)，备份目录现在一共 $(du -sh "$DEST" | cut -f1)"
 echo
 echo "提醒：备份和原始数据在同一块盘上，挡不住硬盘坏。"
-echo "隔段时间拿 U 盘 / 移动硬盘再备一份： ./scripts/备份数据.sh /media/你的U盘名/课时记录"
+echo "隔段时间拿 U 盘 / 移动硬盘再备一份： ./scripts/backup-data.sh /media/你的U盘名/课时记录"

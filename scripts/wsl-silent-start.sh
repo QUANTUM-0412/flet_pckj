@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 把课时记录放到后台静默运行：不占终端、不弹浏览器。
 #
-# Windows 那边用 docs/wsl/静默启动.vbs 调这个脚本，就一点窗口都不会出现。
+# Windows 那边用 docs/wsl/silent-start.vbs 调这个脚本，就一点窗口都不会出现。
 # 已经在跑的话什么都不做，所以可以放心重复执行（开机自动执行也没问题）。
 #
-# 用法： ./scripts/wsl-静默启动.sh
+# 用法： ./scripts/wsl-silent-start.sh
 set -eu
 
 cd "$(dirname "$0")/.." || exit 1
@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.." || exit 1
 PORT=${CLASS_HOURS_PORT:-8550}
 PY=.venv/bin/python
 PIDFILE=$PWD/.run.pid
-LOG=${CLASS_HOURS_LOG:-$PWD/运行日志.log}
+LOG=${CLASS_HOURS_LOG:-$PWD/run.log}
 
 if [ ! -x "$PY" ]; then
   echo "还没装运行环境。先在项目目录里跑： uv sync" >&2

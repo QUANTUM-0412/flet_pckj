@@ -39,7 +39,7 @@ sudo apt install -y imagemagick libheif-examples
 在项目目录里：
 
 ```bash
-./scripts/打包部署包.sh
+./scripts/make-deploy-package.sh
 ```
 
 会在项目的上一级目录生成 `flet_pckj-部署包-日期.tar.gz`。
@@ -84,7 +84,7 @@ cd flet_pckj
 
 - `poster.py`、`keywords.py` 从来没提交过，而 `ui/` 里在引用它们（会报 `ModuleNotFoundError`）
 - `ui/`、`db.py`、`main.py` 等还有一批改了没提交的改动
-- `上课时间表-*.xlsx` 里有学员姓名，**不要**传上去（已经加进 `.gitignore` 了）
+- `class-hours-*.xlsx` 里有学员姓名，**不要**传上去（已经加进 `.gitignore` 了）
 - `data/` 里是全部记录和照片，同样不进 git
 
 在 Mac 上提交：
@@ -115,7 +115,7 @@ git clone git@github.com:你的账号/flet_pckj.git
 cd flet_pckj
 ```
 
-数据从部署包里拿（Mac 上 `./scripts/打包部署包.sh` 之后 scp 过来），**只解 data 这一层**：
+数据从部署包里拿（Mac 上 `./scripts/make-deploy-package.sh` 之后 scp 过来），**只解 data 这一层**：
 
 ```bash
 tar -xzf ~/flet_pckj-部署包-*.tar.gz --strip-components=1 -C ~/flet_pckj flet_pckj/data
@@ -130,7 +130,7 @@ tar -xzf ~/flet_pckj-部署包-*.tar.gz --strip-components=1 -C ~/flet_pckj flet
 
 ```bash
 cd ~/flet_pckj
-./scripts/更新服务.sh
+./scripts/update-service.sh
 ```
 
 它做三件事：`git pull` → `uv sync` → 重启服务（`git status` 能自动帮你发现服务器上被手改的文件）。
@@ -141,7 +141,7 @@ cd ~/flet_pckj
 
 ```bash
 uv sync          # 第一次装依赖，要联网
-./启动.sh
+./start.sh
 ```
 
 看到「课时记录已经启动」和一串地址，就是成了。
@@ -152,7 +152,7 @@ uv sync          # 第一次装依赖，要联网
 ## 五、装成开机自启的服务（推荐）
 
 ```bash
-sudo ./scripts/安装服务.sh
+sudo ./scripts/install-service.sh
 ```
 
 这个脚本会把 `deploy/class-hours.service` 填好路径和用户名，装到
@@ -250,11 +250,11 @@ http://服务器IP:8550
 sudo mkdir -p /var/lib/class-hours
 sudo rsync -a ~/flet_pckj/data/ /var/lib/class-hours/
 sudo chown -R $USER:$USER /var/lib/class-hours
-sudo ./scripts/安装服务.sh --data-dir /var/lib/class-hours
+sudo ./scripts/install-service.sh --data-dir /var/lib/class-hours
 ```
 
 好处：代码怎么折腾都动不到数据；以后数据大了可以整个目录挪到更大的盘；
-备份就是备这一个目录。想看会生成什么，先跑 `./scripts/安装服务.sh --dry-run --data-dir /var/lib/class-hours`。
+备份就是备这一个目录。想看会生成什么，先跑 `./scripts/install-service.sh --dry-run --data-dir /var/lib/class-hours`。
 
 ### 备份
 
@@ -262,9 +262,9 @@ sudo ./scripts/安装服务.sh --data-dir /var/lib/class-hours
 用仓库里带的脚本，它走 SQLite 的备份接口，做出来的一定是一致的：
 
 ```bash
-./scripts/备份数据.sh                                    # 备到 <数据目录>/backups，保留最近 7 份
-./scripts/备份数据.sh /media/你的U盘名/课时记录             # 备到 U 盘 / 移动硬盘
-./scripts/备份数据.sh /mnt/backup/课时记录 --keep 30       # 留 30 份
+./scripts/backup-data.sh                                    # 备到 <数据目录>/backups，保留最近 7 份
+./scripts/backup-data.sh /media/你的U盘名/课时记录             # 备到 U 盘 / 移动硬盘
+./scripts/backup-data.sh /mnt/backup/课时记录 --keep 30       # 留 30 份
 ```
 
 每次备出来的是 `课时记录-年月日_时分秒/`，里面是 `app.db` + `files/`。
@@ -277,7 +277,7 @@ sudo ./scripts/安装服务.sh --data-dir /var/lib/class-hours
 
 ```cron
 # 每天 22:30 备份到 /mnt/backup（换成你自己的盘）
-30 22 * * * /home/你的用户名/flet_pckj/scripts/备份数据.sh /mnt/backup/课时记录 --keep 7 >> /home/你的用户名/backup.log 2>&1
+30 22 * * * /home/你的用户名/flet_pckj/scripts/backup-data.sh /mnt/backup/课时记录 --keep 7 >> /home/你的用户名/backup.log 2>&1
 ```
 
 > 备份和原始数据在同一块盘上，挡不住硬盘坏。隔段时间往移动硬盘、另一台机器
@@ -319,5 +319,5 @@ Mac 上启动：
 
 ```bash
 uv sync
-./启动.command
+./start.command
 ```

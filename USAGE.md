@@ -2,7 +2,7 @@
 
 ## 怎么打开
 
-1. 在店里的电脑上，双击文件夹里的 **启动.command**
+1. 在店里的电脑上，双击文件夹里的 **start.command**
    （第一次双击如果提示"无法打开"，就右键点它 → 打开 → 打开）
 2. 电脑浏览器会自动打开界面
    （用 `127.0.0.1` 打开，别再手动开 `0.0.0.0`，那个地址是打不开的）
@@ -22,7 +22,7 @@
 
 所有数据都在 `data` 这一个文件夹里（`app.db` 是账本，`files` 里是传的照片和附件）。
 隔一段时间把整个 `data` 文件夹拷到 U 盘或移动硬盘上，就是一个完整备份。
-装在服务器上的话，用 `./scripts/备份数据.sh`（可以定时跑），比手动拷更稳妥——
+装在服务器上的话，用 `./scripts/backup-data.sh`（可以定时跑），比手动拷更稳妥——
 程序正在写的时候直接拷 `app.db` 有可能拷到一半。
 
 ## 现在能做什么
@@ -269,12 +269,12 @@
 ## 给开发看的
 
 ```bash
-uv run python main.py   # 启动（Mac 双击 启动.command，Linux 跑 ./启动.sh）
+uv run python main.py   # 启动（Mac 双击 start.command，Linux 跑 ./start.sh）
 .venv/bin/python tests/smoke_test.py   # 自检（不用浏览器）
 ```
 
-装在 Ubuntu Server 上常驻（开机自启）：见 `docs/UbuntuServer部署.md`。
-打包搬到服务器（连数据一起）：`./scripts/打包部署包.sh`。
+装在 Ubuntu Server 上常驻（开机自启）：见 `docs/UbuntuServer-deploy.md`。
+打包搬到服务器（连数据一起）：`./scripts/make-deploy-package.sh`。
 
 ## 账号和权限
 

@@ -36,18 +36,18 @@ uv run flet run --web main.py
 
 ## 在别的电脑上跑
 
-- **Mac**：双击 `启动.command`（或者 `uv run python main.py`）
-- **Ubuntu Server / Linux**：`./启动.sh`，第一次会自己 `uv sync`；
-  做成开机自启的常驻服务：`sudo ./scripts/安装服务.sh`，
-  完整步骤见 [docs/UbuntuServer部署.md](docs/UbuntuServer部署.md)
-- **Windows（WSL）后台静默跑**：`./scripts/wsl-静默启动.sh`，
-  不弹窗口、开机自动起：见 [docs/WSL静默运行.md](docs/WSL静默运行.md)
+- **Mac**：双击 `start.command`（或者 `uv run python main.py`）
+- **Ubuntu Server / Linux**：`./start.sh`，第一次会自己 `uv sync`；
+  做成开机自启的常驻服务：`sudo ./scripts/install-service.sh`，
+  完整步骤见 [docs/UbuntuServer-deploy.md](docs/UbuntuServer-deploy.md)
+- **Windows（WSL）后台静默跑**：`./scripts/wsl-silent-start.sh`，
+  不弹窗口、开机自动起：见 [docs/WSL-silent-run.md](docs/WSL-silent-run.md)
 
 跑起来以后：这台电脑开 `http://localhost:8550`，手机连同一个 WiFi
 用终端里打印的那个地址。
 
 代码托管到 GitHub 的话，服务器上用 `git clone` 拉代码 + 部署包搬一次 `data/`，
-以后更新跑 `./scripts/更新服务.sh` 就行（`data/` 不在 git 里，不会被覆盖）。
+以后更新跑 `./scripts/update-service.sh` 就行（`data/` 不在 git 里，不会被覆盖）。
 
 我需要一个记录课时的平台
 

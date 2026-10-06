@@ -1,7 +1,7 @@
 # 课时记录平台 —— systemd 服务模板
 #
 # 不要直接拿这个文件去用（里面的目录和用户名还是占位符）。
-# 在项目目录里跑： sudo ./scripts/安装服务.sh
+# 在项目目录里跑： sudo ./scripts/install-service.sh
 
 [Unit]
 Description=课时记录平台（class hours）
