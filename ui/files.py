@@ -355,6 +355,16 @@ class FilesMixin:
         date_line = " ".join(
             x for x in [_date_text(lesson["lesson_date"]), lesson.get("start_time") or ""] if x
         )
+        # 同一节课多次做海报结果要一样，不同课次要不一样：拿课次＋孩子当种子
+        seed = "|".join(
+            x
+            for x in (
+                lesson.get("lesson_date") or "",
+                lesson.get("start_time") or "",
+                str(a.get("student_id") or ""),
+            )
+            if x
+        )
         return poster.PosterData(
             student_name=a.get("student_name") or "",
             date_line=date_line,
@@ -374,6 +384,7 @@ class FilesMixin:
             ),
             tags=tuple(tags),
             photos=tuple(raw_photos),
+            seed=seed,
         )
 
     def _make_poster(self, a: dict, lesson: dict, photos: list[dict]) -> Path:

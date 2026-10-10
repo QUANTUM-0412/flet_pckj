@@ -1059,6 +1059,53 @@ if _Image is not None:
     _lesson = db.get_lesson(lesson_file)
     _poster_data = app._poster_data(_att, _lesson, [])
     ok(_poster_data.subject == "GPL", "海报带上了科目（背景按科目配色）")
+
+    # 海报背景跟着科目走：科创／图形化／无人机……不能张张一样
+    _theme_keys = {
+        _s: _poster_mod.theme_for(_s).key
+        for _s in ("STEM", "GPL-竞赛-Zecode", "UAV-社团", "PY", "MCU", "Ev3", "")
+    }
+    ok(_theme_keys["STEM"] == "stem", "科创课的海报走蓝图纸背景")
+    ok(_theme_keys["GPL-竞赛-Zecode"] == "scratch", "图形化编程课的海报走积木背景")
+    ok(_theme_keys["UAV-社团"] == "uav", "无人机课的海报走航线背景")
+    ok(
+        _theme_keys["PY"] == "python" and _theme_keys["MCU"] == "hardware",
+        "Python／单片机各走一套背景",
+    )
+    ok(_theme_keys[""] == "stem", "没填科目的课退到科创背景")
+    ok(len(set(_theme_keys.values())) >= 4, "不同科目至少 4 套背景")
+
+    def _demo_poster(subject: str, seed: str) -> bytes:
+        return _poster_mod.build_poster(
+            _poster_mod.PosterData(
+                student_name="测试同学",
+                date_line="2026-10-17 10:30",
+                class_line="Lvl-03 · 90 分钟",
+                subject=subject,
+                lesson_comment="今天讲数组，复习了循环。",
+                student_comment="很投入。",
+                keywords=("循环",),
+                seed=seed,
+            )
+        )
+
+    _blobs = [
+        _demo_poster(_s, "2026-10-17|10:30|1")
+        for _s in ("STEM", "GPL", "UAV-社团", "PY", "MCU")
+    ]
+    ok(len({hash(_b) for _b in _blobs}) == 5, "五门课的海报背景各不相同")
+    ok(
+        _demo_poster("GPL", "2026-10-17|10:30|1") == _demo_poster("GPL", "2026-10-17|10:30|1"),
+        "同一节课做的海报每次都一样",
+    )
+    ok(
+        _demo_poster("GPL", "2026-10-17|10:30|1") != _demo_poster("GPL", "2026-10-24|10:30|1"),
+        "同一门课换个课次，花纹也会挪一挪",
+    )
+    for _b in _blobs:
+        _img = _Image.open(_io.BytesIO(_b))
+        ok(_img.width == 1080 and _img.height > 500, "换了背景以后海报还是 1080 宽的长图")
+
     _named = app._poster_data(_att, dict(_lesson, teacher_name="高正元"), [])
     ok(_named.teacher_name == "高老师", "海报页脚：高正元 → 高老师，不直呼全名")
     _tags = _poster_data.tags
@@ -1972,12 +2019,27 @@ lesson_a = db.create_lesson_from_template(cls_a, "2026-10-05")
 lesson_b = db.create_lesson_from_template(cls_b, "2026-10-08")
 db.add_attendance(lesson_a, dual_kid)
 db.add_attendance(lesson_b, dual_kid)
+
+
+def _owner_of(lesson_id: int, student_id: int) -> str:
+    """这节课里这个孩子的归属老师。
+
+    别图省事拿 list_attendance(...)[0]：同一天同一时间可能已经有别的课次
+    （第 29 节按「今天」建的课就可能撞上），第一条点名未必是这个孩子。
+    """
+    return next(
+        a["owner_teacher_name"]
+        for a in db.list_attendance(lesson_id)
+        if a["student_id"] == student_id
+    )
+
+
 ok(
-    db.list_attendance(lesson_a)[0]["owner_teacher_name"] == "王老师",
+    _owner_of(lesson_a, dual_kid) == "王老师",
     "周一班那节课，归属是王老师",
 )
 ok(
-    db.list_attendance(lesson_b)[0]["owner_teacher_name"] == "李老师",
+    _owner_of(lesson_b, dual_kid) == "李老师",
     "周四班那节课，归属是李老师",
 )
 

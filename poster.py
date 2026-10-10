@@ -1,8 +1,10 @@
 """把孩子的课堂照片和课评拼成一张「海报」，发给家长看。
 
 只用 Pillow，不依赖网络和浏览器：一张 1080 宽的长图，微信里点开就是整张，
-存下来也清楚。背景是编程／STEM 味道的（电路走线、齿轮、代码符号、蓝图格子），
-但都画得很淡，不抢照片和字的清楚。
+存下来也清楚。背景跟着科目走：科创（STEM）是蓝图格子＋电路齿轮，图形化编程
+（Scratch／GPL）是积木块，无人机（UAV）是航线＋信号，Python 是代码，单片机
+／电子是芯片电路；同一门课不同课次的花纹位置也会挪一挪，不会张张一样。
+花纹都画得很淡，不抢照片和字的清楚。
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import io
 import math
 import random
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,16 +23,11 @@ PADDING = 56
 CARD_RADIUS = 26
 PHOTO_RADIUS = 24
 
-# 主色：STEM 蓝 → 青，活泼但不吵
-BLUE = (27, 111, 209)
-CYAN = (42, 178, 224)
-BLUE_DARK = (18, 80, 143)
-BLUE_SOFT = (234, 242, 254)
+# 通用的墨色和纸色；每门课的主色在下面的 Theme 里定
 INK = (36, 48, 60)
 GREY = (110, 122, 134)
 LINE = (226, 231, 236)
 PAGE = (255, 255, 255)
-GRID = (232, 240, 248)
 
 # 中文字体：Mac 上优先用黑体，Linux/WSL 上退到 Noto 或 Windows 自带的字体；
 # 都没有就报错让调用方提示。
@@ -98,6 +96,8 @@ class PosterData:
     keywords: tuple[str, ...] = ()
     photos: tuple[bytes, ...] = ()
     photo_labels: tuple[str, ...] = field(default=())
+    # 同一节课做出来的海报要一样，不同课次要不一样：这里塞课次信息当随机种子
+    seed: str = ""
 
 
 _font_cache: dict[tuple[bool, int], ImageFont.FreeTypeFont] = {}
@@ -233,11 +233,137 @@ def _decode_photo(data: bytes) -> Image.Image | None:
     return image if image.mode == "RGB" else image.convert("RGB")
 
 
-# ------------------------------------------------------------------ 背景装饰
+# ---------------------------------------------------------------- 背景风格
+#
+# 每门课的海报长得不一样：科创（STEM）走蓝图纸＋齿轮电路，图形化编程
+# （Scratch／GPL）走积木块，无人机（UAV）走航线＋信号，Python 走代码，
+# 单片机／乐高电子走芯片。同一门课的不同课次，花纹位置也跟着课次挪，
+# 家长连着收几张不会觉得是同一张。
+
+GRID_STEP = 46
+
+
+@dataclass(frozen=True)
+class Theme:
+    """一门课的海报风格：配色 + 画什么花纹。"""
+
+    key: str
+    header_top: tuple[int, int, int]
+    header_bottom: tuple[int, int, int]
+    grid: tuple[int, int, int]
+    grid_style: str  # square（蓝图纸）/ dot（点阵）/ map（地图格）
+    accent: tuple[int, int, int]
+    accent_dark: tuple[int, int, int]
+    soft: tuple[int, int, int]
+    motif: str  # circuit / blocks / drone / code / chip
+
+
+THEME_STEM = Theme(
+    key="stem",
+    header_top=(27, 111, 209),
+    header_bottom=(42, 178, 224),
+    grid=(232, 240, 248),
+    grid_style="square",
+    accent=(27, 111, 209),
+    accent_dark=(18, 80, 143),
+    soft=(234, 242, 254),
+    motif="circuit",
+)
+
+THEME_SCRATCH = Theme(
+    key="scratch",
+    header_top=(104, 62, 214),
+    header_bottom=(184, 66, 196),
+    grid=(240, 234, 252),
+    grid_style="dot",
+    accent=(244, 132, 36),
+    accent_dark=(112, 46, 158),
+    soft=(244, 238, 254),
+    motif="blocks",
+)
+
+THEME_UAV = Theme(
+    key="uav",
+    header_top=(14, 72, 110),
+    header_bottom=(24, 158, 190),
+    grid=(228, 242, 247),
+    grid_style="map",
+    accent=(237, 130, 38),
+    accent_dark=(12, 78, 112),
+    soft=(230, 243, 247),
+    motif="drone",
+)
+
+THEME_PY = Theme(
+    key="python",
+    header_top=(40, 70, 150),
+    header_bottom=(48, 160, 140),
+    grid=(234, 243, 244),
+    grid_style="square",
+    accent=(38, 138, 116),
+    accent_dark=(26, 70, 122),
+    soft=(232, 244, 242),
+    motif="code",
+)
+
+THEME_HW = Theme(
+    key="hardware",
+    header_top=(14, 92, 72),
+    header_bottom=(48, 168, 116),
+    grid=(233, 246, 238),
+    grid_style="square",
+    accent=(24, 140, 96),
+    accent_dark=(14, 84, 64),
+    soft=(231, 246, 238),
+    motif="chip",
+)
+
+
+def theme_for(subject: str) -> Theme:
+    """按科目挑风格；认不出来的（空科目等）当科创，最稳妥。"""
+    text = (subject or "").strip()
+    upper = text.upper()
+    if "UAV" in upper or "无人机" in text or "航拍" in text or "DRONE" in upper:
+        return THEME_UAV
+    if "STEM" in upper or "科创" in text or "创客" in text:
+        return THEME_STEM
+    if upper.startswith("PY") or "PYTHON" in upper or "派森" in text:
+        return THEME_PY
+    if "GPL" in upper or "SCRATCH" in upper or "图形化" in text or "积木" in text:
+        return THEME_SCRATCH
+    if (
+        upper.startswith("MCU")
+        or upper.startswith("EV3")
+        or "ARDUINO" in upper
+        or "单片机" in text
+        or "电子" in text
+        or "机器人" in text
+    ):
+        return THEME_HW
+    return THEME_STEM
+
+
+def _seed_of(data: "PosterData", theme: Theme) -> int:
+    """同一节课做出来的海报要一样，不同课次要不一样——所以拿课次信息当种子。"""
+    key = "|".join(
+        bit or ""
+        for bit in (theme.key, data.seed, data.date_line, data.class_line, data.student_name)
+    )
+    return zlib.crc32(key.encode("utf-8"))
+
+
+def _lighten(color, ratio: float):
+    """把颜色往白里调（ratio 越大越接近白）。"""
+    return tuple(round(c + (255 - c) * ratio) for c in color)
+
+
+def _wash(color, strength: float):
+    """把颜色调得很淡，用来画不抢眼的背景花纹。"""
+    return tuple(round(255 - (255 - c) * strength) for c in color)
 
 
 def _gradient(width: int, height: int, top, bottom) -> Image.Image:
-    """竖着的渐变，用来铺顶部蓝条。"""
+    """竖着的渐变，用来铺顶部彩条。"""
     strip = Image.new("RGB", (1, height))
     pixels = strip.load()
     for y in range(height):
@@ -302,6 +428,157 @@ def _draw_circuit(
             draw.ellipse((px - 7, py - 7, px + 7, py + 7), outline=color, width=3)
 
 
+def _draw_block(
+    draw: ImageDraw.ImageDraw, x: float, y: float, w: float, h: float, color, width: int
+) -> None:
+    """一块图形化编程的积木：圆角方块 + 上面的凸起（Scratch 的味道）。"""
+    draw.rounded_rectangle((x, y, x + w, y + h), radius=16, outline=color, width=width)
+    notch = min(28.0, h * 0.5)
+    nx = x + w * 0.30
+    draw.ellipse(
+        (nx, y - notch * 0.42, nx + notch * 1.5, y + notch * 0.42),
+        outline=color,
+        width=width,
+    )
+
+
+def _draw_propeller(
+    draw: ImageDraw.ImageDraw, cx: float, cy: float, radius: float, color, width: int
+) -> None:
+    """一个螺旋桨：桨盘 + 转轴。"""
+    draw.ellipse(
+        (cx - radius, cy - radius * 0.42, cx + radius, cy + radius * 0.42),
+        outline=color,
+        width=width,
+    )
+    draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), fill=color)
+
+
+def _draw_drone(
+    draw: ImageDraw.ImageDraw, cx: float, cy: float, radius: float, color, width: int
+) -> None:
+    """四轴无人机：机身 + 四条机臂 + 四个螺旋桨。"""
+    body = radius * 0.34
+    draw.rounded_rectangle(
+        (cx - body, cy - body * 0.78, cx + body, cy + body * 0.78),
+        radius=max(4, int(body * 0.5)),
+        outline=color,
+        width=width,
+    )
+    for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        ax = cx + sx * radius
+        ay = cy + sy * radius * 0.64
+        draw.line([(cx, cy), (ax, ay)], fill=color, width=width)
+        _draw_propeller(draw, ax, ay, radius * 0.38, color, width)
+    # 机腹下面挂的相机云台
+    draw.ellipse(
+        (cx - body * 0.34, cy + body * 0.6, cx + body * 0.34, cy + body * 1.28),
+        outline=color,
+        width=width,
+    )
+
+
+def _draw_signal(
+    draw: ImageDraw.ImageDraw,
+    cx: float,
+    cy: float,
+    radii: tuple[float, ...],
+    color,
+    width: int,
+    start: int = 196,
+    end: int = 344,
+) -> None:
+    """一圈圈信号弧（遥控／图传的感觉）。"""
+    for radius in radii:
+        draw.arc(
+            (cx - radius, cy - radius, cx + radius, cy + radius),
+            start=start,
+            end=end,
+            fill=color,
+            width=width,
+        )
+
+
+def _draw_radar(
+    draw: ImageDraw.ImageDraw, cx: float, cy: float, radii: tuple[float, ...], color, width: int
+) -> None:
+    """雷达圈：几道同心圆 + 一条扫描线。"""
+    for radius in radii:
+        draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=color, width=width)
+    draw.line([(cx, cy), (cx + radii[-1], cy)], fill=color, width=width)
+
+
+def _draw_waypoints(
+    draw: ImageDraw.ImageDraw,
+    points: list[tuple[float, float]],
+    color,
+    width: int,
+    dash: int = 20,
+    gap: int = 14,
+    dot: int = 6,
+) -> None:
+    """虚线航线 + 拐点小圆圈，像地图上的飞行路线。"""
+    for (x1, y1), (x2, y2) in zip(points, points[1:]):
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < 1:
+            continue
+        ux, uy = (x2 - x1) / length, (y2 - y1) / length
+        pos = 0.0
+        while pos < length:
+            end = min(pos + dash, length)
+            draw.line(
+                [(x1 + ux * pos, y1 + uy * pos), (x1 + ux * end, y1 + uy * end)],
+                fill=color,
+                width=width,
+            )
+            pos += dash + gap
+    for x, y in points:
+        draw.ellipse((x - dot, y - dot, x + dot, y + dot), outline=color, width=width)
+
+
+def _draw_chip(
+    draw: ImageDraw.ImageDraw, x: float, y: float, w: float, h: float, color, width: int
+) -> None:
+    """芯片：方块身体 + 里面一小块 + 四边引脚。"""
+    draw.rounded_rectangle((x, y, x + w, y + h), radius=12, outline=color, width=width)
+    draw.rounded_rectangle(
+        (x + w * 0.30, y + h * 0.30, x + w * 0.70, y + h * 0.70),
+        radius=6,
+        outline=color,
+        width=width,
+    )
+    cols = max(3, int(w // 44))
+    for i in range(cols):
+        px = x + (i + 0.5) * w / cols
+        draw.line([(px, y - 12), (px, y)], fill=color, width=width)
+        draw.line([(px, y + h), (px, y + h + 12)], fill=color, width=width)
+    rows = max(2, int(h // 44))
+    for i in range(rows):
+        py = y + (i + 0.5) * h / rows
+        draw.line([(x - 12, py), (x, py)], fill=color, width=width)
+        draw.line([(x + w, py), (x + w + 12, py)], fill=color, width=width)
+
+
+def _draw_code_lines(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    y: float,
+    w: float,
+    rows: int,
+    color,
+    rng,
+    line: int = 40,
+) -> None:
+    """几行长短不一的代码条，像写得满满一屏。"""
+    for i in range(rows):
+        indent = rng.choice([0, 0, 26, 26, 52])
+        length = (w - indent) * rng.uniform(0.34, 1.0)
+        yy = y + i * line
+        draw.rounded_rectangle(
+            (x + indent, yy, x + indent + max(36.0, length), yy + 11), radius=5, fill=color
+        )
+
+
 def _rotated_text(text: str, font, color) -> Image.Image:
     """把一小段字画成一张透明小图，当装饰用。"""
     probe = Image.new("RGBA", (10, 10))
@@ -320,50 +597,173 @@ def _alpha_paste(
     base.alpha_composite(overlay, xy)
 
 
-def _decorate_header(layer: Image.Image) -> None:
-    """顶部的电路走线、齿轮和代码符号（画得淡，不抢字）。"""
-    width, height = layer.size
-    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+_CODE_GLYPHS = ("</>", "{ }", "0101", "[ ]", "= =", "#!", "::", "1 0 1")
+
+
+def _header_circuit(overlay, width: int, height: int, rng, white) -> None:
+    """科创：电路走线 + 齿轮 + 代码符号。"""
     draw = ImageDraw.Draw(overlay)
-    rng = random.Random(20261004)
     # 走线走右边这片（左边留给机构名和孩子的名字），齿轮贴着右下角露一角
     _draw_circuit(
-        draw, width, int(height * 0.72), (255, 255, 255, 74), rng, x_min=int(width * 0.42)
+        draw, width, int(height * 0.72), white + (74,), rng, x_min=int(width * 0.42)
     )
-    _draw_gear(draw, width - 60, height - 24, 128, (255, 255, 255, 52), 5)
-    _draw_gear(draw, width - 262, height - 4, 66, (255, 255, 255, 40), 4)
+    _draw_gear(draw, width - 60, height - 24, 128, white + (52,), 5)
+    _draw_gear(draw, width - 262, height - 4, 66, white + (40,), 4)
     code_font = _font(True, 48)
-    for text, xy, alpha in (
-        ("</>", (width - 196, 26), 84),
-        ("{ }", (width - 356, 96), 56),
-        ("0101", (width - 300, height - 128), 38),
-    ):
-        _alpha_paste(
-            overlay, _rotated_text(text, code_font, (255, 255, 255, 255)), xy, alpha
-        )
+    spots = ((width - 196, 26), (width - 356, 96), (width - 300, height - 128))
+    for text, xy, alpha in zip(rng.sample(_CODE_GLYPHS, len(spots)), spots, (84, 56, 38)):
+        _alpha_paste(overlay, _rotated_text(text, code_font, white + (255,)), xy, alpha)
+
+
+def _header_blocks(overlay, width: int, height: int, rng, white) -> None:
+    """图形化编程：堆起来的积木 + 事件／循环块。"""
+    draw = ImageDraw.Draw(overlay)
+    for i in range(3):
+        w = rng.choice([148, 178, 206, 236])
+        y = int(height * (0.14 + 0.28 * i)) + rng.randint(-8, 10)
+        # 最上面那块往左让一让，别压到右上角的科目小牌子
+        limit = 268 if y < 104 else 44
+        x = min(width - limit - w, width - rng.randint(320, 470))
+        _draw_block(draw, x, y, w, 52, white + (76 - i * 12,), 5)
+    # 事件积木：一块带小旗的扁积木
+    fx = width - rng.randint(168, 214)
+    fy = int(height * rng.uniform(0.80, 0.90)) - 52
+    draw.rounded_rectangle((fx, fy, fx + 132, fy + 50), radius=16, outline=white + (66,), width=5)
+    draw.polygon(
+        [(fx + 26, fy + 14), (fx + 26, fy + 36), (fx + 52, fy + 25)], fill=white + (72,)
+    )
+    # 循环箭头
+    draw.arc((fx + 62, fy + 10, fx + 118, fy + 44), start=40, end=330, fill=white + (72,), width=5)
+
+
+def _header_drone(overlay, width: int, height: int, rng, white) -> None:
+    """无人机：四轴机 + 虚线航线 + 信号弧。"""
+    draw = ImageDraw.Draw(overlay)
+    _draw_drone(draw, width - rng.randint(140, 196), height * rng.uniform(0.40, 0.52), 104, white + (88,), 4)
+    _draw_drone(draw, width - rng.randint(300, 380), height * rng.uniform(0.84, 0.94), 46, white + (54,), 3)
+    route = [
+        (width, int(height * 0.12)),
+        (width - rng.randint(130, 200), int(height * 0.24)),
+        (width - 34, int(height * 0.58)),
+        (width - rng.randint(232, 300), int(height * 0.88)),
+    ]
+    _draw_waypoints(draw, route, white + (56,), 3)
+    _draw_signal(draw, width - 76, height - 18, (40, 66, 92), white + (46,), 3)
+
+
+def _header_code(overlay, width: int, height: int, rng, white) -> None:
+    """Python：一屏代码条 + 几个代码符号。"""
+    draw = ImageDraw.Draw(overlay)
+    _draw_code_lines(
+        draw,
+        width - rng.randint(300, 356),
+        int(height * rng.uniform(0.10, 0.18)),
+        280,
+        rng.randint(4, 6),
+        white + (48,),
+        rng,
+        line=38,
+    )
+    code_font = _font(True, 46)
+    spots = (("def", (width - 148, 20), 82), (">>>", (width - 300, int(height * 0.52)), 46))
+    for text, xy, alpha in spots:
+        _alpha_paste(overlay, _rotated_text(text, code_font, white + (255,)), xy, alpha)
+    _alpha_paste(
+        overlay,
+        _rotated_text("[ ]", code_font, white + (255,)),
+        (width - 224, height - 92),
+        58,
+    )
+
+
+def _header_chip(overlay, width: int, height: int, rng, white) -> None:
+    """单片机／电子：芯片 + 走线 + 二进制。"""
+    draw = ImageDraw.Draw(overlay)
+    _draw_chip(
+        draw,
+        width - rng.randint(232, 288),
+        int(height * rng.uniform(0.24, 0.38)),
+        168,
+        118,
+        white + (74,),
+        4,
+    )
+    _draw_circuit(draw, width, int(height * 0.92), white + (46,), rng, x_min=int(width * 0.52))
+    code_font = _font(True, 44)
+    for text, xy, alpha in (("0101", (width - 122, 24), 68), ("{}", (width - 344, height - 118), 48)):
+        _alpha_paste(overlay, _rotated_text(text, code_font, white + (255,)), xy, alpha)
+
+
+_HEADER_DECOR = {
+    "circuit": _header_circuit,
+    "blocks": _header_blocks,
+    "drone": _header_drone,
+    "code": _header_code,
+    "chip": _header_chip,
+}
+
+
+def _decorate_header(layer: Image.Image, theme: Theme, rng) -> None:
+    """顶部花纹：按科目画不同的东西（画得淡，不抢字）。"""
+    width, height = layer.size
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    _HEADER_DECOR.get(theme.motif, _header_circuit)(overlay, width, height, rng, (255, 255, 255))
     layer.alpha_composite(overlay)
 
 
-def _paint_page(canvas: Image.Image) -> None:
-    """整页的底色：极淡的蓝图格子 + 右下角的小装饰。"""
+def _paint_page(canvas: Image.Image, theme: Theme, rng) -> None:
+    """整页的底色：按风格铺极淡的花纹，再在角上点几笔（都画在内容下面）。"""
     draw = ImageDraw.Draw(canvas)
     width, height = canvas.size
-    step = 46
-    for x in range(0, width, step):
-        draw.line([(x, 0), (x, height)], fill=GRID, width=1)
-    for y in range(0, height, step):
-        draw.line([(0, y), (width, y)], fill=GRID, width=1)
+    step = GRID_STEP
+    if theme.grid_style == "dot":
+        phase = rng.randrange(step)
+        for x in range(phase, width, step):
+            for y in range(phase, height, step):
+                draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=theme.grid)
+    else:
+        offset = rng.randrange(step)
+        for x in range(offset, width, step):
+            draw.line([(x, 0), (x, height)], fill=theme.grid, width=1)
+        for y in range(offset, height, step):
+            draw.line([(0, y), (width, y)], fill=theme.grid, width=1)
 
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     odraw = ImageDraw.Draw(overlay)
-    _draw_gear(odraw, width - 70, height - 150, 92, (198, 220, 241, 150), 4)
-    _draw_gear(odraw, width - 150, height - 40, 54, (206, 227, 245, 130), 3)
-    code_font = _font(True, 46)
-    for text, xy, alpha in (
-        ("{}", (54, height - 210), 60),
-        ("1 0 1", (60, height - 140), 52),
-    ):
-        _alpha_paste(overlay, _rotated_text(text, code_font, (163, 193, 222, 255)), xy, alpha)
+    ink = _wash(theme.accent, 0.34)
+    faint = _wash(theme.accent, 0.22)
+    # 花纹都摆在右下这一片：左边要留给彩色小标签和页脚，不压字
+    if theme.motif == "blocks":
+        for i, w in enumerate(rng.sample([110, 150, 190], 3)):
+            _draw_block(
+                odraw,
+                width - 60 - w - rng.choice([0, 30]),
+                height - 246 + i * 66,
+                w,
+                48,
+                faint + (255,),
+                4,
+            )
+    elif theme.motif == "drone":
+        _draw_radar(odraw, width - 86, height - 120, (92, 62, 34), faint + (255,), 3)
+        _draw_waypoints(
+            odraw,
+            [
+                (width - 40, height - 40),
+                (width - 152, height - 168),
+                (width - 72, height - 292),
+            ],
+            ink + (255,),
+            3,
+        )
+        _draw_drone(odraw, width - 122, height - 344, 54, faint + (255,), 3)
+    elif theme.motif == "code":
+        _draw_code_lines(odraw, width - 340, height - 240, 280, 4, faint + (255,), rng, line=42)
+    elif theme.motif == "chip":
+        _draw_chip(odraw, width - 250, height - 240, 150, 108, faint + (255,), 3)
+    else:
+        _draw_gear(odraw, width - 70, height - 150, 92, ink + (255,), 4)
+        _draw_gear(odraw, width - 150, height - 40, 54, faint + (255,), 3)
     canvas.alpha_composite(overlay)
 
 
@@ -387,7 +787,7 @@ def _photo_layout(count: int) -> tuple[int, int, list[tuple[int, int, int, int]]
     return box, box, boxes
 
 
-def _tag_colors(tag: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+def _tag_colors(tag: str, theme: Theme) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """小标签按内容配色，比一水儿蓝的活泼些。"""
     if tag.startswith("出勤"):
         return (228, 246, 235), (24, 122, 74)
@@ -407,16 +807,20 @@ def _tag_colors(tag: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         return (228, 246, 235), (24, 122, 74)
     if tag.startswith("时长"):
         return (241, 243, 245), (74, 85, 97)
-    return BLUE_SOFT, BLUE_DARK
+    return theme.soft, theme.accent_dark
 
 
 def build_poster(data: PosterData) -> bytes:
     """拼出海报图片，返回 JPEG 字节。"""
     margin = PADDING
     inner = WIDTH - margin * 2
-    height_guess = 2800
-    canvas = Image.new("RGBA", (WIDTH, height_guess), PAGE + (255,))
-    _paint_page(canvas)
+    theme = theme_for(data.subject)
+    # 同一节课的可复现，不同课次的花纹位置会变（种子含日期／班次／学号）
+    rng = random.Random(_seed_of(data, theme))
+    height_guess = 3200
+    # 先把内容画在一张透明图上，等算完总高再铺背景——这样背景花纹不会被裁掉，
+    # 也不会盖在照片和字上面。
+    canvas = Image.new("RGBA", (WIDTH, height_guess), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
     # —— 顶部蓝条：机构署名 + 孩子名字 + 日期/班次
@@ -433,8 +837,8 @@ def build_poster(data: PosterData) -> bytes:
     header_height += int(meta_font.size * 1.52) * len(meta_lines)
     header_height += 44
 
-    header = _gradient(WIDTH, header_height, BLUE, CYAN).convert("RGBA")
-    _decorate_header(header)
+    header = _gradient(WIDTH, header_height, theme.header_top, theme.header_bottom).convert("RGBA")
+    _decorate_header(header, theme, rng)
     mask = Image.new("L", (WIDTH, header_height), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
         (0, 0, WIDTH - 1, header_height - 1), radius=44, fill=255
@@ -444,7 +848,10 @@ def build_poster(data: PosterData) -> bytes:
 
     text_y = header_top + header_pad
     draw.text(
-        (margin, text_y), data.brand or "课堂分享", font=brand_font, fill=(212, 233, 252)
+        (margin, text_y),
+        data.brand or "课堂分享",
+        font=brand_font,
+        fill=_lighten(theme.header_bottom, 0.74),
     )
     text_y += 50
     draw.text(
@@ -466,8 +873,9 @@ def build_poster(data: PosterData) -> bytes:
         badge_w = int(draw.textlength(subject, font=badge_font)) + 48
         badge = Image.new("RGBA", (badge_w, 62), (255, 255, 255, 0))
         bdraw = ImageDraw.Draw(badge)
-        bdraw.rounded_rectangle((0, 0, badge_w - 1, 61), radius=31, fill=(255, 255, 255, 205))
-        bdraw.text((24, 11), subject, font=badge_font, fill=BLUE_DARK + (255,))
+        # 白底要够实：花纹（齿轮、无人机的桨）从底下透出来会显得脏
+        bdraw.rounded_rectangle((0, 0, badge_w - 1, 61), radius=31, fill=(255, 255, 255, 242))
+        bdraw.text((24, 11), subject, font=badge_font, fill=theme.accent_dark + (255,))
         canvas.alpha_composite(badge, (WIDTH - margin - badge_w, header_top + header_pad - 8))
 
     y = header_top + header_height + 40
@@ -504,9 +912,9 @@ def build_poster(data: PosterData) -> bytes:
         )
         # 标题左边一小段彩色竖条，看着有精神
         draw.rounded_rectangle(
-            (margin + 24, y + 26, margin + 32, y + 62), radius=4, fill=BLUE
+            (margin + 24, y + 26, margin + 32, y + 62), radius=4, fill=theme.accent
         )
-        draw.text((margin + 48, y + 22), title, font=title_font, fill=BLUE_DARK)
+        draw.text((margin + 48, y + 22), title, font=title_font, fill=theme.accent_dark)
         _draw_paragraph(draw, body, body_font, INK, margin + 28, y + 88, inner - 56)
         y += card_height + 24
 
@@ -516,11 +924,11 @@ def build_poster(data: PosterData) -> bytes:
     # —— 小标签：本次积分、本月出勤、下次课，加上从课评里认出的知识点
     chips: list[tuple[str, tuple[int, int, int], tuple[int, int, int], tuple[int, int, int] | None]] = []
     for tag in data.tags:
-        fill, ink = _tag_colors(tag)
+        fill, ink = _tag_colors(tag, theme)
         chips.append((tag, fill, ink, None))
     for word in data.keywords:
         # 知识点用白底描边的样式，跟「本次积分」这些状态标签区分开
-        chips.append((word, PAGE, BLUE_DARK, (168, 203, 238)))
+        chips.append((word, PAGE, theme.accent_dark, _lighten(theme.accent, 0.62)))
     if chips:
         tag_font = _font(False, 32)
         cx, cy = margin, y + 6
@@ -555,7 +963,11 @@ def build_poster(data: PosterData) -> bytes:
         draw.text((margin, y + 6), " · ".join(footer_bits), font=footer_font, fill=GREY)
         y += 50
 
-    result = canvas.crop((0, 0, WIDTH, min(height_guess, y + margin))).convert("RGB")
+    used = max(600, min(height_guess, y + margin))
+    page = Image.new("RGBA", (WIDTH, used), PAGE + (255,))
+    _paint_page(page, theme, rng)
+    page.alpha_composite(canvas.crop((0, 0, WIDTH, used)))
+    result = page.convert("RGB")
     out = io.BytesIO()
     result.save(out, "JPEG", quality=92, optimize=True, progressive=True)
     return out.getvalue()
