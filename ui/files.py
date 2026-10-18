@@ -674,7 +674,88 @@ class FilesMixin:
         # 每个孩子的海报都能用上，不用挨个重复上传。
         photos = db.list_files("attendance", attendance_id, "照片")
         photos += db.list_files("lesson", lesson_id, "照片")
+        if len(photos) > 1:
+            self._choose_poster_photos(a, lesson, photos)
+            return
         self._open_poster(a, lesson, photos)
+
+    def _choose_poster_photos(self, a: dict, lesson: dict, photos: list[dict]) -> None:
+        """照片不止一张时，先让老师挑这次海报用哪几张。"""
+        picked: list[tuple[ft.Checkbox, dict]] = []
+        cards = []
+        for index, row in enumerate(photos):
+            tag = "课堂" if row.get("owner_type") == "lesson" else "孩子"
+            box = ft.Checkbox(label=tag, value=index < 4)
+            picked.append((box, row))
+            cards.append(
+                ft.Column(
+                    [
+                        ft.Image(
+                            src=db.file_url(row),
+                            width=128,
+                            height=128,
+                            fit=ft.BoxFit.COVER,
+                            border_radius=8,
+                            tooltip=row["filename"],
+                        ),
+                        ft.Text(
+                            row["filename"] or "照片",
+                            size=10,
+                            color=ft.Colors.GREY_600,
+                            width=128,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                        box,
+                    ],
+                    spacing=3,
+                    width=140,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+
+        def make_poster(e) -> None:
+            selected = [row for box, row in picked if box.value]
+            if len(selected) > 4:
+                self._toast("海报最多放 4 张照片，取消勾选几张再试")
+                return
+            self.page.pop_dialog()
+            self._open_poster(a, lesson, selected)
+
+        width = min(720, (self.page.width or 900) - 80)
+        rows = max(1, (len(cards) + 3) // 4)
+        height = min(560, (self.page.height or 800) - 220, 130 + rows * 190)
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("选照片做海报"),
+            content=ft.Container(
+                ft.Column(
+                    [
+                        ft.Text(
+                            "最多选 4 张；一张都不选也可以，海报会只用课评。",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Row(
+                            cards,
+                            spacing=12,
+                            run_spacing=12,
+                            wrap=True,
+                            alignment=ft.MainAxisAlignment.START,
+                        ),
+                    ],
+                    spacing=10,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=width,
+                height=height,
+            ),
+            actions=[
+                ft.TextButton("取消", on_click=self._close),
+                ft.Button("做海报", icon=ft.Icons.AUTO_AWESOME, on_click=make_poster),
+            ],
+        )
+        self._show(dlg)
 
     async def _open_url(self, url: str) -> None:
         await self.launcher.launch_url(url, web_only_window_name="_blank")

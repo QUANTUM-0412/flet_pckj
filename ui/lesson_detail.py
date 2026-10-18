@@ -221,9 +221,33 @@ class LessonDetailMixin:
         comment = (lesson.get("comment") or "").strip()
         plan = (lesson.get("plan") or "").strip()
         class_photos = db.list_files("lesson", lesson["id"], "照片")
+
+        comment_field = ft.TextField(
+            value=comment,
+            multiline=True,
+            min_lines=2,
+            max_lines=8,
+            dense=True,
+            text_size=13,
+            hint_text="写这节课的课评…（离开输入框自动保存）",
+            on_blur=lambda e: self._save_lesson_comment(lesson["id"], e.control.value),
+            on_submit=lambda e: self._save_lesson_comment(lesson["id"], e.control.value),
+        )
+
+        plan_editor = ft.TextField(
+            value=plan,
+            multiline=True,
+            min_lines=6,
+            max_lines=20,
+            dense=True,
+            text_size=13,
+            hint_text="直接写 Markdown…",
+            visible=False,
+        )
         plan_view = (
             ft.Markdown(
                 plan,
+                visible=bool(plan),
                 selectable=True,
                 extension_set=ft.MarkdownExtensionSet.GITHUB_FLAVORED,
                 soft_line_break=True,
@@ -235,19 +259,76 @@ class LessonDetailMixin:
                     color=ft.Colors.RED_400,
                 ),
             )
-            if plan
-            else ft.Text("还没写教案", size=13, color=ft.Colors.GREY_500)
+        )
+        plan_empty = ft.Text(
+            "还没写教案",
+            size=13,
+            color=ft.Colors.GREY_500,
+            visible=not plan,
+        )
+
+        def show_plan_editor(e) -> None:
+            fresh = db.get_lesson(lesson["id"])
+            plan_editor.value = (fresh or {}).get("plan") or ""
+            plan_editor.visible = True
+            plan_actions.visible = True
+            edit_plan_button.visible = False
+            plan_upload_button.visible = False
+            plan_view.visible = False
+            plan_empty.visible = False
+            for control in (
+                plan_editor,
+                plan_actions,
+                edit_plan_button,
+                plan_upload_button,
+                plan_view,
+                plan_empty,
+            ):
+                control.update()
+
+        def close_plan_editor() -> None:
+            text = (plan_editor.value or "").strip()
+            plan_view.value = text
+            plan_view.visible = bool(text)
+            plan_empty.visible = not bool(text)
+            plan_editor.visible = False
+            plan_actions.visible = False
+            edit_plan_button.visible = True
+            plan_upload_button.visible = True
+            for control in (
+                plan_editor,
+                plan_actions,
+                edit_plan_button,
+                plan_upload_button,
+                plan_view,
+                plan_empty,
+            ):
+                control.update()
+
+        def save_plan(e) -> None:
+            self._save_lesson_plan(lesson["id"], plan_editor.value or "")
+            close_plan_editor()
+
+        edit_plan_button = ft.TextButton(
+            "编辑教案",
+            icon=ft.Icons.EDIT,
+            on_click=show_plan_editor,
+        )
+        plan_upload_button = self._plan_upload_button(lesson["id"])
+        plan_actions = ft.Row(
+            [
+                ft.Button("保存教案", icon=ft.Icons.SAVE, on_click=save_plan),
+                ft.TextButton("取消", on_click=lambda e: close_plan_editor()),
+            ],
+            spacing=8,
+            visible=False,
         )
         return self._section(
             "课堂内容",
             ft.Column(
                 [
                     ft.Text("课评", size=12, color=ft.Colors.GREY_600),
-                    ft.Text(
-                        comment or "还没写课评",
-                        size=13,
-                        color=ft.Colors.GREY_700 if comment else ft.Colors.GREY_500,
-                    ),
+                    comment_field,
                     ft.Row(
                         [
                             ft.Text(
@@ -256,12 +337,16 @@ class LessonDetailMixin:
                                 color=ft.Colors.GREY_600,
                                 expand=True,
                             ),
-                            self._plan_upload_button(lesson["id"]),
+                            edit_plan_button,
+                            plan_upload_button,
                         ],
                         spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     plan_view,
+                    plan_empty,
+                    plan_editor,
+                    plan_actions,
                     ft.Text(
                         "上传 .md 时，把里面引用的本地图片一起选中；"
                         "图片会自动传上来，链接也会自动改好。",
@@ -287,8 +372,26 @@ class LessonDetailMixin:
                     ),
                 ],
                 spacing=8,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             ),
         )
+
+    def _save_lesson_comment(self, lesson_id: int, value: str) -> None:
+        text = (value or "").strip()
+        current = db.get_lesson(lesson_id)
+        if current is None or (current["comment"] or "").strip() == text:
+            return
+        db.set_lesson_comment(lesson_id, text)
+        self._toast("课评已保存")
+
+    def _save_lesson_plan(self, lesson_id: int, value: str) -> None:
+        text = (value or "").strip()
+        current = db.get_lesson(lesson_id)
+        if current is None or (current["plan"] or "").strip() == text:
+            return
+        db.set_lesson_plan(lesson_id, text)
+        db.cleanup_plan_images(lesson_id, text)
+        self._toast("教案已保存")
 
     def _ask_roll_call(self, lesson: dict) -> None:
         """这节课真上完了：点名之后才开始扣课时、加积分。"""

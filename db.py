@@ -2180,6 +2180,15 @@ def set_lesson_plan(lesson_id: int, plan: str) -> None:
         )
 
 
+def set_lesson_comment(lesson_id: int, comment: str) -> None:
+    """只改课评内容（课堂内容卡片里直接写）。"""
+    with _connect() as con:
+        con.execute(
+            "UPDATE lessons SET comment = ? WHERE id = ?",
+            (comment or "", lesson_id),
+        )
+
+
 def cleanup_plan_images(lesson_id: int, plan: str) -> int:
     """删掉教案里已经不再引用的图片，返回删了几张。
 

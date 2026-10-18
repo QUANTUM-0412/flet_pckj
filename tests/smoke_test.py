@@ -119,6 +119,8 @@ def find_text(control, needle: str) -> bool:
             return True
         if isinstance(c, ft.Markdown) and needle in str(c.value or ""):
             return True
+        if isinstance(c, ft.TextField) and needle in str(c.value or ""):
+            return True
     return False
 
 
@@ -1080,7 +1082,46 @@ if _Image is not None:
     )
     app.open_lesson(lesson_file)
     ok(find_button(page.controls[0], "做海报") is not None, "每个孩子的点名里有「做海报」按钮")
+    _comment_field = next(
+        (
+            c
+            for c in walk(page.controls[0])
+            if isinstance(c, ft.TextField) and "课评" in str(c.hint_text or "")
+        ),
+        None,
+    )
+    ok(_comment_field is not None, "课评可以直接在课堂内容里写")
+    _comment_field.value = "直接写的课评，复习了循环"
+    _comment_field.on_blur(type("Event", (), {"control": _comment_field})())
+    ok(
+        db.get_lesson(lesson_file)["comment"] == "直接写的课评，复习了循环",
+        "离开课评输入框就自动保存",
+    )
+    click(page.controls[0], "编辑教案")
+    _plan_editor = next(
+        (
+            c
+            for c in walk(page.controls[0])
+            if isinstance(c, ft.TextField) and "Markdown" in str(c.hint_text or "")
+        ),
+        None,
+    )
+    ok(_plan_editor is not None, "教案能在课堂内容里直接编辑")
+    _plan_editor.value = "# 直接改的教案\n\n不用再进编辑课次。"
+    click(page.controls[0], "保存教案")
+    ok(
+        db.get_lesson(lesson_file)["plan"] == "# 直接改的教案\n\n不用再进编辑课次。",
+        "教案在课堂内容里保存成功",
+    )
     app._open_poster_for(att_photo, lesson_file)
+    _choose = top_dialog(page)
+    ok(find_text(_choose, "选照片做海报"), "多张照片时先弹出选照片")
+    _boxes = [c for c in walk(_choose) if isinstance(c, ft.Checkbox)]
+    ok(len(_boxes) == 3, "三张照片都能选")
+    for b in _boxes:
+        b.value = False
+    _boxes[0].value = True
+    click(_choose, "做海报")
     _dlg = top_dialog(page)
     _poster_img = next(
         (c for c in walk(_dlg) if isinstance(c, ft.Image) and str(c.src).startswith("/posters/")),
