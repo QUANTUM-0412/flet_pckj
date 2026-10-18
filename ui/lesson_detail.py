@@ -198,6 +198,26 @@ class LessonDetailMixin:
 
         rows = db.list_attendance(lesson_id)
         photos = db.files_by_owner("attendance", [r["id"] for r in rows], "照片")
+        class_photos = db.list_files("lesson", lesson_id, "照片")
+        class_photo_card = self._section(
+            f"全班照片（{len(class_photos)} 张）",
+            ft.Column(
+                [
+                    self._photo_strip(
+                        lesson_id,
+                        class_photos,
+                        owner_type="lesson",
+                        add_label="加全班照片",
+                    ),
+                    ft.Text(
+                        "全班合影传一次就够了；给每个孩子做海报时也会一起用上。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                ],
+                spacing=6,
+            ),
+        )
         items = [self._attendance_row(a, lesson, photos.get(a["id"], [])) for a in rows]
         if not items:
             items = [
@@ -218,6 +238,7 @@ class LessonDetailMixin:
                 header,
                 *([makeup_card] if makeup_card else []),
                 info,
+                class_photo_card,
                 self._lesson_files_card(lesson),
                 roll,
                 ft.Container(height=8),

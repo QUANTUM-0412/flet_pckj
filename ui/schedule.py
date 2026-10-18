@@ -646,10 +646,10 @@ class ScheduleMixin:
                                 tooltip="删除",
                                 icon_size=18,
                                 on_click=lambda e, t=template: self._confirm(
-                                    "删除这条课表",
+                                    "删除这个班级",
                                     f"确定删除「每{WEEKDAYS[int(t['weekday'])]} "
                                     f"{t['start_time']} {db.lesson_label(t)}」吗？"
-                                    "以前上过的课不受影响。",
+                                    "学员报名和已经排出来的课都会保留，只是不再挂在这个班下面。",
                                     lambda: db.delete_template(t["id"]),
                                 ),
                             )

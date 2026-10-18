@@ -986,6 +986,18 @@ ok(photo_path.exists() and photo_path.stat().st_size == 1234, "照片真的写�
 ok(db.file_url(photos[0]).endswith(photos[0]["stored_name"]), "图片地址拼得对")
 ok(db.human_size(1234) == "1 KB", "文件大小显示成人话")
 
+# 全班合影挂在课次上：传一次，所有孩子都能用
+app._set_upload_target("lesson", lesson_file, "照片")
+app._on_files_picked(FakeEvent([FakeFile("全班合影.jpg", b"c" * 777)]))
+class_photos = db.list_files("lesson", lesson_file, "照片")
+ok(
+    len(class_photos) == 1 and class_photos[0]["filename"] == "全班合影.jpg",
+    "全班照片挂在课次上",
+)
+app.open_lesson(lesson_file)
+ok(find_text(page.controls[0], "全班照片（1 张）"), "课次详情里有全班照片区")
+ok(find_button(page.controls[0], "加全班照片") is not None, "能直接上传全班照片")
+
 # 手机原图自动压小：长边 1600、几百 KB，给家长看还看得清
 try:
     from PIL import Image as _Image
@@ -1316,6 +1328,17 @@ ok(app.lesson_id == after[1]["id"], "点「去点名」能进那节课")
 app.open_schedule(False)
 
 db.delete_template(sem_tid)
+sem_enrollments = db.list_enrollments(sem_kid)
+ok(
+    len(sem_enrollments) == 1 and sem_enrollments[0]["class_id"] is None,
+    "删班级后报名还在，只是不再挂在这个班下面",
+)
+remaining_lessons = db.list_lessons()
+ok(
+    len(remaining_lessons) == 9
+    and all(l["template_id"] is None for l in remaining_lessons),
+    "删班级后已排的课还在，班名链接自动解除（老库也不会再报外键）",
+)
 for l in db.list_lessons():
     db.delete_lesson(l["id"])
 db.delete_student(sem_kid)

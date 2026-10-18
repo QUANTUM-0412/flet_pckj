@@ -3149,7 +3149,21 @@ def update_template(
 
 
 def delete_template(template_id: int) -> None:
+    """删一个班／固定课表。
+
+    老版本的 enrollments.class_id 和 lessons.template_id 是后来补上的列，
+    没有 ON DELETE SET NULL；外键开着时直接删班会被拦住。这里先把引用解开：
+    报名和已经排出来的课都留着，只是不再挂在这个班下面。
+    """
     with _connect() as con:
+        con.execute(
+            "UPDATE enrollments SET class_id = NULL WHERE class_id = ?",
+            (template_id,),
+        )
+        con.execute(
+            "UPDATE lessons SET template_id = NULL WHERE template_id = ?",
+            (template_id,),
+        )
         con.execute("DELETE FROM schedule_templates WHERE id = ?", (template_id,))
 
 

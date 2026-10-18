@@ -267,7 +267,13 @@ class FilesMixin:
         self.render()
         self._toast("已删除")
 
-    def _photo_strip(self, owner_id: int, photos: list[dict]) -> ft.Row:
+    def _photo_strip(
+        self,
+        owner_id: int,
+        photos: list[dict],
+        owner_type: str = "attendance",
+        add_label: str = "加照片",
+    ) -> ft.Row:
         thumbs = []
         for photo in photos:
             thumbs.append(
@@ -287,8 +293,8 @@ class FilesMixin:
             )
         thumbs.append(
             self._upload_button(
-                "加照片",
-                "attendance",
+                add_label,
+                owner_type,
                 owner_id,
                 "照片",
                 images_only=True,
@@ -455,7 +461,10 @@ class FilesMixin:
         if a is None or lesson is None:
             self._toast("这条点名记录找不到了")
             return
+        # 孩子自己的照片放前面，全班合影补在后面。一张全班照传一次，
+        # 每个孩子的海报都能用上，不用挨个重复上传。
         photos = db.list_files("attendance", attendance_id, "照片")
+        photos += db.list_files("lesson", lesson_id, "照片")
         self._open_poster(a, lesson, photos)
 
     async def _open_url(self, url: str) -> None:
