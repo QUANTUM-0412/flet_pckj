@@ -613,21 +613,26 @@ class ScheduleMixin:
                                 tight=True,
                             ),
                             ft.Text(" · ".join(bits), size=12, color=ft.Colors.GREY_600),
-                            *(
+                            ft.Row(
                                 [
-                                    ft.Row(
+                                    ft.TextButton(
+                                        "做海报",
+                                        icon=ft.Icons.AUTO_AWESOME,
+                                        on_click=lambda e, t=template: self._make_class_poster_for_template(t),
+                                    ),
+                                    *(
                                         [
                                             ft.TextButton(
                                                 "排整学期",
                                                 icon=ft.Icons.CALENDAR_MONTH,
                                                 on_click=lambda e, t=template: self._generate_semester(t),
-                                            ),
-                                        ],
-                                        spacing=0,
-                                    )
-                                ]
-                                if self.is_admin()
-                                else []
+                                            )
+                                        ]
+                                        if self.is_admin()
+                                        else []
+                                    ),
+                                ],
+                                spacing=0,
                             ),
                         ],
                         spacing=2,

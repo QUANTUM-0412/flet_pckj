@@ -364,6 +364,7 @@ class LessonDetailMixin:
                         class_photos,
                         owner_type="lesson",
                         add_label="加课堂照片",
+                        action=self._class_poster_button(lesson),
                     ),
                     ft.Text(
                         "全班合影传一次就够了；给每个孩子做海报时也会一起用上。",

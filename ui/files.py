@@ -292,7 +292,9 @@ class FilesMixin:
             suffix = Path(name).suffix.lower()[:10]
             if kind == "照片":
                 data, suffix = _shrink_photo(data, suffix)
-            stored = _stored_name(name)
+            owner_tag = "a" if owner_type == "attendance" else "l"
+            prefix = f"{'photo' if kind == '照片' else 'file'}_{owner_tag}{owner_id}"
+            stored = _stored_name(name, prefix=prefix)
             if suffix:
                 stored = f"{Path(stored).stem}{suffix}"
             try:
@@ -314,7 +316,7 @@ class FilesMixin:
         )
 
     def _prepare_markdown_upload(
-        self, files: list
+        self, files: list, prefix: str = "planimg"
     ) -> tuple[str, list[dict], list[str]] | None:
         """读 Markdown，把本地图片换成本系统的地址。
 
@@ -359,7 +361,7 @@ class FilesMixin:
             if entry is None:
                 filename = getattr(source, "name", "") or name
                 entry = {
-                    "stored_name": _stored_name(filename),
+                    "stored_name": _stored_name(filename, prefix=prefix),
                     "filename": filename,
                     "data": bytes(source.bytes),
                 }
@@ -415,7 +417,9 @@ class FilesMixin:
         """课次详情里的「上传 Markdown」：连同本地图片一起导入。"""
 
         def picked(files: list) -> None:
-            result = self._prepare_markdown_upload(files)
+            result = self._prepare_markdown_upload(
+                files, prefix=f"planimg_l{lesson_id}"
+            )
             if result is None:
                 return
             text, pending, missing = result
@@ -482,6 +486,7 @@ class FilesMixin:
         photos: list[dict],
         owner_type: str = "attendance",
         add_label: str = "加照片",
+        action=None,
     ) -> ft.Row:
         thumbs = []
         for photo in photos:
@@ -510,6 +515,8 @@ class FilesMixin:
                 icon=ft.Icons.ADD_A_PHOTO,
             )
         )
+        if action is not None:
+            thumbs.append(action)
         return ft.Row(thumbs, spacing=8, wrap=True, run_spacing=8)
 
     # ------------------------------------------------------------------ 海报
@@ -581,7 +588,8 @@ class FilesMixin:
             if x
         )
         return poster.PosterData(
-            student_name=a.get("student_name") or "",
+            # 海报画面不出现孩子名字；课评和标签已经够家长看了。
+            student_name="",
             date_line=date_line,
             class_line=" · ".join(x for x in class_bits if x),
             subject=lesson.get("subject") or "",
@@ -606,9 +614,12 @@ class FilesMixin:
         """做一张这个孩子的课堂海报，存到 data/files/posters 下面。"""
         data = self._poster_data(a, lesson, photos)
         blob = poster.build_poster(data)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = re.sub(r"[^\w\u4e00-\u9fff-]+", "", data.student_name) or "课堂"
-        path = self._poster_dir() / f"{safe_name}_{lesson['lesson_date']}_{stamp}.jpg"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        path = (
+            self._poster_dir()
+            / f"poster_s{int(a.get('student_id') or 0)}_l{int(lesson.get('id') or 0)}"
+            f"_{lesson['lesson_date']}_{stamp}.jpg"
+        )
         path.write_bytes(blob)
         return path
 
@@ -621,10 +632,13 @@ class FilesMixin:
         except OSError:
             self._toast("海报存不下来，检查一下 data 文件夹的权限")
             return
+        self._show_poster_dialog(path, "课堂海报")
+
+    def _show_poster_dialog(self, path: Path, title: str) -> None:
         width = min(560, (self.page.width or 900) - 80)
         dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Text(f"{a.get('student_name') or ''} 的课堂海报"),
+            title=ft.Text(title),
             scrollable=True,  # 海报是长图，手机上要能滑着看完
             content=ft.Container(
                 ft.Column(
@@ -675,11 +689,141 @@ class FilesMixin:
         photos = db.list_files("attendance", attendance_id, "照片")
         photos += db.list_files("lesson", lesson_id, "照片")
         if len(photos) > 1:
-            self._choose_poster_photos(a, lesson, photos)
+            self._choose_poster_photos(
+                photos,
+                lambda chosen: self._open_poster(a, lesson, chosen),
+            )
             return
         self._open_poster(a, lesson, photos)
 
-    def _choose_poster_photos(self, a: dict, lesson: dict, photos: list[dict]) -> None:
+    def _class_poster_data(
+        self, template: dict, lesson: dict, photos: list[dict]
+    ) -> poster.PosterData:
+        """班级海报：整班共用课评和课堂照片，不带某个孩子的点评."""
+        raw_photos = []
+        for row in photos[:4]:
+            try:
+                raw_photos.append((db.UPLOAD_DIR / row["stored_name"]).read_bytes())
+            except OSError:
+                continue
+
+        class_name = db.class_label(template)
+        if re.search(r"-Cls-\d+$", class_name or ""):
+            class_name = ""
+        class_bits = [
+            class_name,
+            db.lesson_label(lesson),
+            f"{db.num_text(lesson.get('minutes') or 0)} 分钟",
+        ]
+        date_line = " ".join(
+            x
+            for x in [_date_text(lesson["lesson_date"]), lesson.get("start_time") or ""]
+            if x
+        )
+        seed = "|".join(
+            x
+            for x in (
+                "class",
+                str(template.get("id") or ""),
+                lesson.get("lesson_date") or "",
+                lesson.get("start_time") or "",
+            )
+            if x
+        )
+        return poster.PosterData(
+            student_name="班级课堂分享",
+            date_line=date_line,
+            class_line=" · ".join(x for x in class_bits if x),
+            subject=lesson.get("subject") or template.get("subject") or "",
+            brand=db.get_meta("poster_brand"),
+            contact=db.get_meta("poster_contact"),
+            lesson_comment=lesson.get("comment") or "",
+            student_comment="",
+            teacher_name=poster.teacher_label(
+                lesson.get("teacher_name") or template.get("teacher_name") or ""
+            ),
+            keywords=tuple(keywords.extract_keywords(lesson.get("comment") or "")),
+            photos=tuple(raw_photos),
+            seed=seed,
+        )
+
+    def _make_class_poster(
+        self, template: dict, lesson: dict, photos: list[dict]
+    ) -> Path:
+        data = self._class_poster_data(template, lesson, photos)
+        blob = poster.build_poster(data)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        path = (
+            self._poster_dir()
+            / f"poster_c{int(template['id'])}_{lesson['lesson_date']}_{stamp}.jpg"
+        )
+        path.write_bytes(blob)
+        return path
+
+    def _open_class_poster(
+        self, template: dict, lesson: dict, photos: list[dict]
+    ) -> None:
+        try:
+            path = self._make_class_poster(template, lesson, photos)
+        except poster.PosterError as err:
+            self._toast(str(err))
+            return
+        except OSError:
+            self._toast("海报存不下来，检查一下 data 文件夹的权限")
+            return
+        self._show_poster_dialog(path, "班级课堂海报")
+
+    def _make_class_poster_for_template(self, template: dict) -> None:
+        """课程列表里的「做海报」：优先生成当前日期的课次，没有就用最近一节."""
+        lesson = db.find_lesson_for_template(template, self.schedule_date)
+        if lesson is None:
+            lesson = db.latest_lesson_for_template(int(template["id"]))
+        if lesson is None:
+            self._toast("这个班还没有课次，先排一节课再来做海报")
+            return
+        self._make_class_poster_for_lesson(lesson, template)
+
+    def _class_poster_button(self, lesson: dict) -> ft.Button:
+        """课堂内容里的班级海报按钮：照片旁边就能点。"""
+        return ft.Button(
+            "做海报",
+            icon=ft.Icons.AUTO_AWESOME,
+            tooltip="用这节课的课评和课堂照片做一张班级海报",
+            on_click=lambda e: self._make_class_poster_for_lesson(lesson),
+        )
+
+    def _make_class_poster_for_lesson(
+        self, lesson: dict, template: dict | None = None
+    ) -> None:
+        fresh = db.get_lesson(int(lesson["id"]))
+        if fresh is not None:
+            lesson = fresh
+        photos = db.list_files("lesson", int(lesson["id"]), "照片")
+        if not (lesson.get("comment") or "").strip() and not photos:
+            self._toast("这节课还没有课评和课堂照片，先写一点再做海报")
+            return
+        if template is None:
+            template = (
+                db.get_template(int(lesson["template_id"]))
+                if lesson.get("template_id")
+                else None
+            )
+        if template is None:
+            template = {
+                "id": 0,
+                "name": "",
+                "subject": lesson.get("subject") or "",
+                "teacher_name": lesson.get("teacher_name") or "",
+            }
+        if len(photos) > 1:
+            self._choose_poster_photos(
+                photos,
+                lambda chosen: self._open_class_poster(template, lesson, chosen),
+            )
+            return
+        self._open_class_poster(template, lesson, photos)
+
+    def _choose_poster_photos(self, photos: list[dict], on_confirm) -> None:
         """照片不止一张时，先让老师挑这次海报用哪几张。"""
         picked: list[tuple[ft.Checkbox, dict]] = []
         cards = []
@@ -720,7 +864,7 @@ class FilesMixin:
                 self._toast("海报最多放 4 张照片，取消勾选几张再试")
                 return
             self.page.pop_dialog()
-            self._open_poster(a, lesson, selected)
+            on_confirm(selected)
 
         width = min(720, (self.page.width or 900) - 80)
         rows = max(1, (len(cards) + 3) // 4)

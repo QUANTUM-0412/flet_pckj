@@ -97,56 +97,6 @@ class LessonDialogsMixin:
             label="现在就点名（立即扣课时、加积分）",
             value=False,
         )
-        comment = _tf(
-            "课评（一节课一份，全班共用）",
-            lesson["comment"] if editing else "",
-            width=DIALOG_WIDTH,
-            multiline=True,
-            min_lines=2,
-            max_lines=4,
-        )
-        plan = _tf(
-            "教案（备课用）",
-            lesson["plan"] if editing else "",
-            width=DIALOG_WIDTH,
-            multiline=True,
-            min_lines=4,
-            max_lines=10,
-        )
-        pending_plan_images: list[dict] = []
-
-        def import_markdown(e) -> None:
-            def picked(files: list) -> None:
-                result = self._prepare_markdown_upload(files)
-                if result is None:
-                    return
-                text, pending, missing = result
-                pending_plan_images[:] = pending
-                plan.value = text
-                plan.update()
-                if missing:
-                    self._toast(
-                        f"还缺 {len(missing)} 张图片："
-                        + "、".join(missing[:4])
-                        + ("…" if len(missing) > 4 else "")
-                        + "；重新导入时把它们一起选上"
-                    )
-                else:
-                    self._toast(
-                        f"Markdown 已读入，保存课次时一并上传 {len(pending)} 张图片"
-                        if pending
-                        else "Markdown 已读入"
-                    )
-
-            self._files_callback = picked
-
-        markdown_button = ft.TextButton(
-            "导入 Markdown（连图片一起选）",
-            icon=ft.Icons.UPLOAD_FILE,
-            action=self._pick_files_action(),
-            on_click=import_markdown,
-        )
-
         # 每个候选孩子身上带着"他在读哪些等级"，好跟着上面的等级筛
         picked: list[tuple[int, ft.Checkbox, set]] = []
         holder = None
@@ -270,14 +220,16 @@ class LessonDialogsMixin:
                 minutes.update()
                 return
             level_id = int(level_dd.value) if (level_dd.value or "").strip() else None
+            # 课评和教案在课次详情的「课堂内容」里直接写；这里只改排课信息，
+            # 保存时把原来的内容原样带回去，不能顺手清空。
             args = (
                 (day.value or "").strip(),
                 (start.value or "").strip(),
                 mins,
                 int(type_dd.value),
                 level_id,
-                comment.value or "",
-                plan.value or "",
+                lesson["comment"] if editing else "",
+                lesson["plan"] if editing else "",
                 "",
             )
             if editing:
@@ -287,8 +239,6 @@ class LessonDialogsMixin:
                     teacher_id=int(teacher_dd.value) if (teacher_dd.value or "").strip() else None,
                     template_id=int(class_dd.value) if (class_dd.value or "").strip() else None,
                 )
-                self._save_plan_uploads(lesson["id"], pending_plan_images)
-                db.cleanup_plan_images(lesson["id"], plan.value or "")
                 self._finish("课次已更新")
                 return
             lesson_id = db.create_lesson(
@@ -297,8 +247,6 @@ class LessonDialogsMixin:
                 template_id=int(class_dd.value) if (class_dd.value or "").strip() else None,
                 rolled=1 if immediate is not None and immediate.value else 0,
             )
-            self._save_plan_uploads(lesson_id, pending_plan_images)
-            db.cleanup_plan_images(lesson_id, plan.value or "")
             count = 0
             for sid, cb, _mine in picked:
                 if cb.value:
@@ -312,7 +260,7 @@ class LessonDialogsMixin:
                     f"课次已排好（{count} 人）：上完课进去点「点名」才算课时"
                 )
 
-        body_controls = [day_box, start, type_dd, level_dd, minutes, teacher_dd, comment]
+        body_controls = [day_box, start, type_dd, level_dd, minutes, teacher_dd]
         if not editing:
             body_controls = [
                 day_box,
@@ -335,14 +283,6 @@ class LessonDialogsMixin:
                 ),
                 holder,
                 show_all,
-                comment,
-                plan,
-                markdown_button,
-                ft.Text(
-                    "教案可以用 Markdown；导入 .md 时把本地图片一起选中，保存后链接自动改好。",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                ),
             ]
         else:
             body_controls = [
@@ -353,14 +293,6 @@ class LessonDialogsMixin:
                 level_dd,
                 minutes,
                 teacher_dd,
-                comment,
-                plan,
-                markdown_button,
-                ft.Text(
-                    "教案可以用 Markdown；导入 .md 时把本地图片一起选中，保存后链接自动改好。",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                ),
             ]
         body = self._form_column(body_controls)
         self._show(

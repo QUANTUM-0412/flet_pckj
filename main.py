@@ -53,6 +53,8 @@ def open_when_ready() -> None:
     服务器本身绑在 0.0.0.0（这样手机连同一个 WiFi 也能访问），
     但 0.0.0.0 不是能浏览的地址 —— 所以这里自己开 127.0.0.1 那个。
     """
+    if os.environ.get("CLASS_HOURS_NO_BROWSER") == "1":
+        return
     url = f"http://127.0.0.1:{PORT}"
     for _ in range(40):
         try:

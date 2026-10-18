@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,15 +21,20 @@ HOUR_MODE = [("充值", 1), ("扣减", -1)]
 # ------------------------------------------------------------------ 小工具
 
 
-def _stored_name(original: str, suffix: str | None = None) -> str:
+def _stored_name(original: str, suffix: str | None = None, prefix: str = "") -> str:
     """给上传的文件起一个不会重名的名字。
 
     传了 suffix 就用它（照片压成 JPEG 之后要改成 .jpg）。
+    prefix 会带上归属（比如 photo_a12 / planimg_l34），迁移到别的系统时
+    文件名仍然是纯 ASCII，不会因为中文、空格、重名出问题。
     """
     if suffix is None:
         suffix = Path(original or "").suffix.lower()[:10]
+    suffix = re.sub(r"[^a-z0-9.]+", "", suffix.lower())[:10]
+    tag = re.sub(r"[^a-z0-9_]+", "", (prefix or "").lower()).strip("_")
+    head = f"{tag}_" if tag else ""
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    return f"{stamp}_{secrets.token_hex(4)}{suffix}"
+    return f"{head}{stamp}_{secrets.token_hex(4)}{suffix}"
 
 
 def _tf(label: str, value="", width=None, **kw) -> ft.TextField:

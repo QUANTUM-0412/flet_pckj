@@ -3076,6 +3076,19 @@ def get_template(template_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def latest_lesson_for_template(template_id: int) -> dict | None:
+    """这个班最近的一节课（做班级海报时默认用它）。"""
+    with _connect() as con:
+        row = con.execute(
+            _LESSON_SELECT
+            + """ WHERE l.template_id = ?
+                  ORDER BY l.lesson_date DESC, l.start_time DESC, l.id DESC
+                  LIMIT 1""",
+            (template_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def create_template(
     weekday: int,
     start_time: str,

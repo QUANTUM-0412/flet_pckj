@@ -421,17 +421,29 @@ find_field(dlg, "开始时间").value = "08:30"
 find_field(dlg, "时长（分钟）").value = "90"
 find_dropdown(dlg, "课型").value = str(zhengke["id"])
 find_dropdown(dlg, "等级（可不选）").value = str(gpl3["id"])
-find_field(dlg, "课评（一节课一份，全班共用）").value = "今天讲循环"
 find_checkbox(dlg, "张晨希").value = True
 click(dlg, "保存")
 
 lessons = db.list_lessons()
 ok(len(lessons) == 1, "课次建好了")
 lesson = lessons[0]
+db.set_lesson_comment(lesson["id"], "今天讲循环")
 rows = db.list_attendance(lesson["id"])
 ok(len(rows) == 1 and rows[0]["minutes"] == 90, "点名记录带上了默认时长")
 ok(db.get_lesson(lesson["id"])["comment"] == "今天讲循环", "课评存在课次上")
 ok(db.get_lesson(lesson["id"])["rolled"] == 0, "记一节课默认先挂着「待点名」")
+app._open_lesson_dialog(db.get_lesson(lesson["id"]))
+_edit_dlg = top_dialog(page)
+ok(
+    not any(
+        isinstance(c, ft.TextField)
+        and c.label
+        and ("课评" in c.label or "教案" in c.label)
+        for c in walk(_edit_dlg)
+    ),
+    "编辑课次里不再重复放课评和教案",
+)
+app._close()
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 24, "还没点名，课时先不扣")
 ok(db.student_points(sid) == 0, "还没点名，积分也先不加")
@@ -985,6 +997,12 @@ app._set_upload_target("attendance", att_photo, "照片")
 app._on_files_picked(FakeEvent([FakeFile("课堂.jpg", b"x" * 1234)]))
 photos = db.list_files("attendance", att_photo, "照片")
 ok(len(photos) == 1 and photos[0]["filename"] == "课堂.jpg", "照片记到数据库里")
+ok(
+    photos[0]["stored_name"].startswith(f"photo_a{att_photo}_")
+    and photos[0]["stored_name"].isascii()
+    and " " not in photos[0]["stored_name"],
+    "照片存成带归属的 ASCII 文件名，以后迁移不怕中文和重名",
+)
 photo_path = db.UPLOAD_DIR / photos[0]["stored_name"]
 ok(photo_path.exists() and photo_path.stat().st_size == 1234, "照片真的写进磁盘了")
 ok(db.file_url(photos[0]).endswith(photos[0]["stored_name"]), "图片地址拼得对")
@@ -997,6 +1015,11 @@ class_photos = db.list_files("lesson", lesson_file, "照片")
 ok(
     len(class_photos) == 1 and class_photos[0]["filename"] == "全班合影.jpg",
     "全班照片挂在课次上",
+)
+ok(
+    class_photos[0]["stored_name"].startswith(f"photo_l{lesson_file}_")
+    and class_photos[0]["stored_name"].isascii(),
+    "课堂照片的文件名带上课次编号",
 )
 app.open_lesson(lesson_file)
 ok(find_text(page.controls[0], "课堂内容"), "课次详情里有课堂内容区")
@@ -1012,6 +1035,11 @@ _md_text, _md_pending, _md_missing = app._prepare_markdown_upload(
 )
 ok("![步骤](/" in _md_text and "images/step1.png" not in _md_text, "本地图片链接改成了站内地址")
 ok(len(_md_pending) == 1 and not _md_missing, "引用的图片进入待上传列表")
+ok(
+    _md_pending[0]["stored_name"].startswith("planimg_")
+    and _md_pending[0]["stored_name"].isascii(),
+    "Markdown 图片也用安全的文件名",
+)
 _md_bad_text, _md_bad_pending, _md_bad_missing = app._prepare_markdown_upload(
     [FakeFile("缺图.md", "![步骤](images/none.png)".encode("utf-8"))]
 )
@@ -1113,6 +1141,16 @@ if _Image is not None:
         db.get_lesson(lesson_file)["plan"] == "# 直接改的教案\n\n不用再进编辑课次。",
         "教案在课堂内容里保存成功",
     )
+    _poster_buttons = [
+        c
+        for c in walk(page.controls[0])
+        if isinstance(c, ft.Button) and c.content == "做海报"
+    ]
+    ok(len(_poster_buttons) >= 2, "课堂内容的照片旁也有「做海报」按钮")
+    app._make_class_poster_for_lesson(db.get_lesson(lesson_file))
+    _class_lesson_poster = top_dialog(page)
+    ok(find_text(_class_lesson_poster, "班级课堂海报"), "课堂内容能直接做班级海报")
+    app._close()
     app._open_poster_for(att_photo, lesson_file)
     _choose = top_dialog(page)
     ok(find_text(_choose, "选照片做海报"), "多张照片时先弹出选照片")
@@ -1128,7 +1166,7 @@ if _Image is not None:
         None,
     )
     ok(_poster_img is not None, "海报弹窗里显示这张图")
-    _poster_files = sorted((db.UPLOAD_DIR / "posters").glob("*.jpg"))
+    _poster_files = sorted((db.UPLOAD_DIR / "posters").glob("poster_s*.jpg"))
     ok(len(_poster_files) == 1, "海报存到 data/files/posters 里")
     _poster = _Image.open(_poster_files[0])
     ok(_poster.width == 1080 and _poster.height > 900, "海报是 1080 宽的长图")
@@ -1137,6 +1175,7 @@ if _Image is not None:
     _lesson = db.get_lesson(lesson_file)
     _poster_data = app._poster_data(_att, _lesson, [])
     ok(_poster_data.subject == "GPL", "海报带上了科目（背景按科目配色）")
+    ok(_poster_data.student_name == "", "海报画面不出现孩子名字")
 
     # 海报背景跟着科目走：科创／图形化／无人机……不能张张一样
     _theme_keys = {
@@ -1392,6 +1431,23 @@ open_lesson = find_button(page.controls[0], "去点名")
 open_lesson.on_click(None)
 ok(app.lesson_id == after[1]["id"], "点「去点名」能进那节课")
 app.open_schedule(False)
+
+db.set_lesson_comment(after[1]["id"], "这周讲了变量和循环")
+app.open_schedule(True)
+app.schedule_date = "2026-09-12"
+app.render()
+ok(find_button(page.controls[0], "做海报") is not None, "班级列表上有「做海报」按钮")
+app._make_class_poster_for_template(db.get_template(sem_tid))
+_class_poster = top_dialog(page)
+ok(find_text(_class_poster, "班级课堂海报"), "班级海报弹窗打开了")
+ok(
+    any(
+        isinstance(c, ft.Image) and str(c.src).startswith("/posters/")
+        for c in walk(_class_poster)
+    ),
+    "班级海报图生成了",
+)
+app._close()
 
 db.delete_template(sem_tid)
 sem_enrollments = db.list_enrollments(sem_kid)
