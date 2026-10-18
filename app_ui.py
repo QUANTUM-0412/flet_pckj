@@ -70,6 +70,7 @@ class ClassHoursApp(
         self._last_wide: bool | None = None
         self._row_refs: dict[int, dict] = {}
         self._upload_target: tuple[str, int, str] | None = None
+        self._files_callback = None
         self.user: dict | None = None
         self._payment_items_map: dict[int, list[dict]] = {}
 

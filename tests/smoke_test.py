@@ -117,6 +117,8 @@ def find_text(control, needle: str) -> bool:
     for c in walk(control):
         if isinstance(c, ft.Text) and needle in str(c.value or ""):
             return True
+        if isinstance(c, ft.Markdown) and needle in str(c.value or ""):
+            return True
     return False
 
 
@@ -995,8 +997,31 @@ ok(
     "全班照片挂在课次上",
 )
 app.open_lesson(lesson_file)
-ok(find_text(page.controls[0], "全班照片（1 张）"), "课次详情里有全班照片区")
-ok(find_button(page.controls[0], "加全班照片") is not None, "能直接上传全班照片")
+ok(find_text(page.controls[0], "课堂内容"), "课次详情里有课堂内容区")
+ok(find_text(page.controls[0], "课堂照片（1 张）"), "课堂照片并在课堂内容里")
+ok(find_button(page.controls[0], "加课堂照片") is not None, "能直接上传课堂照片")
+
+# 教案：Markdown 渲染 + 本地图片自动改链接
+_md_text, _md_pending, _md_missing = app._prepare_markdown_upload(
+    [
+        FakeFile("第一课.md", "# 第一课\n\n![步骤](images/step1.png)\n".encode("utf-8")),
+        FakeFile("step1.png", b"png-bytes"),
+    ]
+)
+ok("![步骤](/" in _md_text and "images/step1.png" not in _md_text, "本地图片链接改成了站内地址")
+ok(len(_md_pending) == 1 and not _md_missing, "引用的图片进入待上传列表")
+_md_bad_text, _md_bad_pending, _md_bad_missing = app._prepare_markdown_upload(
+    [FakeFile("缺图.md", "![步骤](images/none.png)".encode("utf-8"))]
+)
+ok(_md_bad_missing == ["none.png"] and not _md_bad_pending, "缺图片时能说清缺哪张")
+db.set_lesson_plan(lesson_file, _md_text)
+app._save_plan_uploads(lesson_file, _md_pending)
+app.open_lesson(lesson_file)
+ok(
+    any(isinstance(c, ft.Markdown) for c in walk(page.controls[0])),
+    "教案用 Markdown 控件显示",
+)
+ok(find_button(page.controls[0], "上传 Markdown") is not None, "详情页能上传 Markdown")
 
 # 手机原图自动压小：长边 1600、几百 KB，给家长看还看得清
 try:

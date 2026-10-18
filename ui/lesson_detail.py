@@ -126,18 +126,6 @@ class LessonDetailMixin:
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    ft.Text("课评", size=12, color=ft.Colors.GREY_600),
-                    ft.Text(
-                        lesson["comment"] or "还没写课评",
-                        size=13,
-                        color=ft.Colors.GREY_700 if lesson["comment"] else ft.Colors.GREY_500,
-                    ),
-                    ft.Text("教案", size=12, color=ft.Colors.GREY_600),
-                    ft.Text(
-                        lesson["plan"] or "还没写教案",
-                        size=13,
-                        color=ft.Colors.GREY_700 if lesson["plan"] else ft.Colors.GREY_500,
-                    ),
                     *(
                         [
                             ft.Text("备注", size=12, color=ft.Colors.GREY_600),
@@ -198,26 +186,6 @@ class LessonDetailMixin:
 
         rows = db.list_attendance(lesson_id)
         photos = db.files_by_owner("attendance", [r["id"] for r in rows], "照片")
-        class_photos = db.list_files("lesson", lesson_id, "照片")
-        class_photo_card = self._section(
-            f"全班照片（{len(class_photos)} 张）",
-            ft.Column(
-                [
-                    self._photo_strip(
-                        lesson_id,
-                        class_photos,
-                        owner_type="lesson",
-                        add_label="加全班照片",
-                    ),
-                    ft.Text(
-                        "全班合影传一次就够了；给每个孩子做海报时也会一起用上。",
-                        size=12,
-                        color=ft.Colors.GREY_600,
-                    ),
-                ],
-                spacing=6,
-            ),
-        )
         items = [self._attendance_row(a, lesson, photos.get(a["id"], [])) for a in rows]
         if not items:
             items = [
@@ -238,7 +206,7 @@ class LessonDetailMixin:
                 header,
                 *([makeup_card] if makeup_card else []),
                 info,
-                class_photo_card,
+                self._lesson_content_card(lesson),
                 self._lesson_files_card(lesson),
                 roll,
                 ft.Container(height=8),
@@ -246,6 +214,80 @@ class LessonDetailMixin:
             expand=True,
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
+        )
+
+    def _lesson_content_card(self, lesson: dict) -> ft.Container:
+        """课评、教案、课堂照片放在一起，做海报和回看都从这里找。"""
+        comment = (lesson.get("comment") or "").strip()
+        plan = (lesson.get("plan") or "").strip()
+        class_photos = db.list_files("lesson", lesson["id"], "照片")
+        plan_view = (
+            ft.Markdown(
+                plan,
+                selectable=True,
+                extension_set=ft.MarkdownExtensionSet.GITHUB_FLAVORED,
+                soft_line_break=True,
+                auto_follow_links=True,
+                auto_follow_links_target=ft.UrlTarget.BLANK,
+                image_error_content=ft.Text(
+                    "图片没加载出来，确认上传时把它一起选中了",
+                    size=11,
+                    color=ft.Colors.RED_400,
+                ),
+            )
+            if plan
+            else ft.Text("还没写教案", size=13, color=ft.Colors.GREY_500)
+        )
+        return self._section(
+            "课堂内容",
+            ft.Column(
+                [
+                    ft.Text("课评", size=12, color=ft.Colors.GREY_600),
+                    ft.Text(
+                        comment or "还没写课评",
+                        size=13,
+                        color=ft.Colors.GREY_700 if comment else ft.Colors.GREY_500,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text(
+                                "教案 · 支持 Markdown",
+                                size=12,
+                                color=ft.Colors.GREY_600,
+                                expand=True,
+                            ),
+                            self._plan_upload_button(lesson["id"]),
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    plan_view,
+                    ft.Text(
+                        "上传 .md 时，把里面引用的本地图片一起选中；"
+                        "图片会自动传上来，链接也会自动改好。",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    ft.Divider(height=1, color=ft.Colors.GREY_200),
+                    ft.Text(
+                        f"课堂照片（{len(class_photos)} 张）",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    self._photo_strip(
+                        lesson["id"],
+                        class_photos,
+                        owner_type="lesson",
+                        add_label="加课堂照片",
+                    ),
+                    ft.Text(
+                        "全班合影传一次就够了；给每个孩子做海报时也会一起用上。",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                    ),
+                ],
+                spacing=8,
+            ),
         )
 
     def _ask_roll_call(self, lesson: dict) -> None:

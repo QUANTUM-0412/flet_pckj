@@ -8,7 +8,8 @@ import shutil
 import subprocess
 import tempfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote
 
 import flet as ft
 
@@ -23,6 +24,64 @@ PHOTO_MAX_SIDE = 1600
 PHOTO_QUALITY = 82
 PHOTO_TARGET_BYTES = 800 * 1024
 PHOTO_SKIP_BYTES = 350 * 1024  # 本来就小的图不用重新编码
+
+MARKDOWN_SUFFIXES = (".md", ".markdown")
+MARKDOWN_IMAGE_SUFFIXES = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".heic",
+    ".heif",
+    ".tif",
+    ".tiff",
+)
+MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+MD_HTML_IMAGE_RE = re.compile(
+    r'(<img\b[^>]*\bsrc=["\'])([^"\']+)(["\'])', re.IGNORECASE
+)
+
+
+def _markdown_text(data: bytes) -> str:
+    """中文 Markdown 常常是 UTF-8，也有从 Windows 存成 GBK 的。"""
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _markdown_target(raw: str) -> tuple[str, str]:
+    """把 ``图片.png "标题"``／``<图片 名字.png>`` 拆成地址和后面的标题。"""
+    raw = (raw or "").strip()
+    if raw.startswith("<") and ">" in raw:
+        end = raw.index(">")
+        return raw[1:end].strip(), raw[end + 1 :].strip()
+    match = re.match(r"^(\S+)(\s+.+)?$", raw)
+    if match:
+        return match.group(1), match.group(2) or ""
+    return raw, ""
+
+
+def _local_image_basename(target: str) -> str | None:
+    """本地图片取文件名；网络图片、已经上传的 ``/xxx.jpg`` 不动。"""
+    target = (target or "").strip()
+    if not target or target.startswith("#"):
+        return None
+    if target.lower().startswith("file://"):
+        target = unquote(target[7:])
+    elif not re.match(r"^[A-Za-z]:[\\/]", target) and re.match(
+        r"^[A-Za-z][A-Za-z0-9+.-]*:", target
+    ):
+        return None  # http:、https:、data: 这类网络地址
+    target = unquote(target).split("?", 1)[0].split("#", 1)[0].replace("\\", "/")
+    if target.startswith("/") and target.count("/") == 1:
+        return None  # 已经是上传后能直接访问的 /文件名
+    name = PurePosixPath(target).name
+    return name if "." in name else None
 
 
 def _encode_jpeg(image, max_side: int, quality: int) -> bytes:
@@ -208,10 +267,19 @@ class FilesMixin:
         )
 
     def _on_files_picked(self, e) -> None:
+        files = list(getattr(e, "files", None) or [])
+        if not files:  # 用户点了取消
+            self._files_callback = None
+            self._upload_target = None
+            return
+        callback = self._files_callback
+        if callback is not None:
+            self._files_callback = None
+            callback(files)
+            return
         target = self._upload_target
         self._upload_target = None
-        files = list(getattr(e, "files", None) or [])
-        if not target or not files:
+        if not target:
             return
         owner_type, owner_id, kind = target
         saved = 0
@@ -235,6 +303,147 @@ class FilesMixin:
             saved += 1
         self.render()
         self._toast(f"传好了 {saved} 个文件" if saved else "没有收到文件")
+
+    def _pick_files_action(self) -> ft.PickFiles:
+        return ft.PickFiles(
+            self.picker,
+            allow_multiple=True,
+            with_data=True,
+            compression_quality=0,
+            file_type=ft.FilePickerFileType.ANY,
+        )
+
+    def _prepare_markdown_upload(
+        self, files: list
+    ) -> tuple[str, list[dict], list[str]] | None:
+        """读 Markdown，把本地图片换成本系统的地址。
+
+        图片先放在内存里，等课次保存成功再写盘；中途取消不会留下孤儿文件。
+        """
+        markdown = next(
+            (
+                f
+                for f in files
+                if (getattr(f, "name", "") or "").lower().endswith(MARKDOWN_SUFFIXES)
+            ),
+            None,
+        )
+        if markdown is None:
+            self._toast("请选择 .md 文件（图片可以一起选）")
+            return None
+        data = getattr(markdown, "bytes", None)
+        if not data:
+            self._toast("这个 Markdown 文件是空的")
+            return None
+
+        images: dict[str, object] = {}
+        for f in files:
+            name = getattr(f, "name", "") or ""
+            payload = getattr(f, "bytes", None)
+            if not name.lower().endswith(MARKDOWN_IMAGE_SUFFIXES) or not payload:
+                continue
+            images[Path(name).name.lower()] = f
+
+        pending: list[dict] = []
+        used: dict[str, dict] = {}
+        missing: list[str] = []
+
+        def image_url(name: str) -> str | None:
+            key = name.lower()
+            source = images.get(key)
+            if source is None:
+                if name not in missing:
+                    missing.append(name)
+                return None
+            entry = used.get(key)
+            if entry is None:
+                filename = getattr(source, "name", "") or name
+                entry = {
+                    "stored_name": _stored_name(filename),
+                    "filename": filename,
+                    "data": bytes(source.bytes),
+                }
+                used[key] = entry
+                pending.append(entry)
+            return f"/{entry['stored_name']}"
+
+        def replace_md(match) -> str:
+            alt, raw = match.group(1), match.group(2)
+            target, title = _markdown_target(raw)
+            name = _local_image_basename(target)
+            if not name:
+                return match.group(0)
+            url = image_url(name)
+            if not url:
+                return match.group(0)
+            return f"![{alt}]({url}{title})"
+
+        def replace_html(match) -> str:
+            prefix, raw, suffix = match.groups()
+            name = _local_image_basename(raw)
+            if not name:
+                return match.group(0)
+            url = image_url(name)
+            if not url:
+                return match.group(0)
+            return f"{prefix}{url}{suffix}"
+
+        text = MD_IMAGE_RE.sub(replace_md, _markdown_text(bytes(data)))
+        text = MD_HTML_IMAGE_RE.sub(replace_html, text)
+        return text, pending, missing
+
+    def _save_plan_uploads(self, lesson_id: int, pending: list[dict]) -> int:
+        saved = 0
+        for item in pending:
+            path = db.UPLOAD_DIR / item["stored_name"]
+            try:
+                path.write_bytes(item["data"])
+            except OSError:
+                continue
+            db.add_file(
+                "lesson",
+                lesson_id,
+                "教案图片",
+                item["filename"],
+                item["stored_name"],
+                len(item["data"]),
+            )
+            saved += 1
+        return saved
+
+    def _plan_upload_button(self, lesson_id: int) -> ft.Button:
+        """课次详情里的「上传 Markdown」：连同本地图片一起导入。"""
+
+        def picked(files: list) -> None:
+            result = self._prepare_markdown_upload(files)
+            if result is None:
+                return
+            text, pending, missing = result
+            saved = self._save_plan_uploads(lesson_id, pending)
+            db.set_lesson_plan(lesson_id, text)
+            db.cleanup_plan_images(lesson_id, text)
+            self.render()
+            if missing:
+                self._toast(
+                    f"教案已导入；还缺 {len(missing)} 张图片："
+                    + "、".join(missing[:4])
+                    + ("…" if len(missing) > 4 else "")
+                )
+            else:
+                self._toast(
+                    f"教案已导入，上传了 {saved} 张图片" if saved else "教案已导入"
+                )
+
+        def open_picker(e) -> None:
+            self._files_callback = picked
+
+        return ft.Button(
+            "上传 Markdown",
+            icon=ft.Icons.UPLOAD_FILE,
+            tooltip=".md 里引用的本地图片可以一起选中，会自动上传并改好链接",
+            action=self._pick_files_action(),
+            on_click=open_picker,
+        )
 
     def _open_photo(self, file_row: dict) -> None:
         width = min(520, (self.page.width or 900) - 100)

@@ -2171,6 +2171,41 @@ def update_lesson(
     recompute_lesson(lesson_id)
 
 
+def set_lesson_plan(lesson_id: int, plan: str) -> None:
+    """只改教案内容（导入 Markdown 时用，其他字段不动）。"""
+    with _connect() as con:
+        con.execute(
+            "UPDATE lessons SET plan = ? WHERE id = ?",
+            (plan or "", lesson_id),
+        )
+
+
+def cleanup_plan_images(lesson_id: int, plan: str) -> int:
+    """删掉教案里已经不再引用的图片，返回删了几张。
+
+    图片按 ``/文件名`` 写在 Markdown 里；换了一份教案以后，旧图片顺手清掉，
+    数据库和磁盘都不会越积越多。
+    """
+    text = plan or ""
+    removed = 0
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT id, stored_name FROM files
+                WHERE owner_type = 'lesson' AND owner_id = ? AND kind = '教案图片'""",
+            (lesson_id,),
+        ).fetchall()
+        for row in rows:
+            if f"/{row['stored_name']}" in text:
+                continue
+            con.execute("DELETE FROM files WHERE id = ?", (row["id"],))
+            try:
+                (UPLOAD_DIR / row["stored_name"]).unlink(missing_ok=True)
+            except OSError:
+                pass
+            removed += 1
+    return removed
+
+
 _LESSON_SELECT = """
     SELECT l.*,
            ct.name  AS class_type_name,
