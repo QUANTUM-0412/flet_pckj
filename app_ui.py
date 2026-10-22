@@ -26,6 +26,9 @@ from ui.files import FilesMixin
 from ui.hours import HoursMixin
 from ui.enrollment import EnrollmentMixin
 from ui.settings import SettingsMixin
+from ui.forum import ForumMixin
+from ui.student_portal import StudentPortalMixin
+from ui.badges import BadgesMixin
 
 
 class ClassHoursApp(
@@ -45,6 +48,9 @@ class ClassHoursApp(
     HoursMixin,
     EnrollmentMixin,
     SettingsMixin,
+    ForumMixin,
+    StudentPortalMixin,
+    BadgesMixin,
 ):
     """整个应用的界面，由 ui/ 里各个功能模块拼成。"""
 
@@ -52,6 +58,7 @@ class ClassHoursApp(
         self.page = page
         self.tab = 0
         self.student_id: int | None = None
+        self._student_edit_id: int | None = None
         self.lesson_id: int | None = None
         self.show_schedule = False
         self.schedule_date = date.today().isoformat()
@@ -63,6 +70,7 @@ class ClassHoursApp(
         self.filter_school = ""
         self.filter_owner = ""
         self.lesson_keyword = ""
+        self.forum_keyword = ""
         self.lesson_week = ""  # 空着就是本周；否则存那一周的周一（YYYY-MM-DD）
         self.status_filter = ""
         self.trial_filter = ""
@@ -73,6 +81,8 @@ class ClassHoursApp(
         self._files_callback = None
         self.user: dict | None = None
         self._payment_items_map: dict[int, list[dict]] = {}
+        self._poster_edit = False
+        self._pending_student_credentials: tuple[dict, str | None] | None = None
 
         self.picker = ft.FilePicker(on_result=self._on_files_picked)
         self.launcher = ft.UrlLauncher()

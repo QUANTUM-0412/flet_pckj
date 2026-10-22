@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import flet as ft
 
+import db
+
 
 class ShellMixin:
     """外壳与导航（ClassHoursApp 的一部分）。"""
@@ -12,12 +14,24 @@ class ShellMixin:
         return (self.page.width or 1000) >= 820
 
     def _nav_items(self):
+        if self.is_student():
+            return [
+                (ft.Icons.HOME_OUTLINED, ft.Icons.HOME, "我的"),
+                (ft.Icons.SCHOOL_OUTLINED, ft.Icons.SCHOOL, "课程"),
+                (ft.Icons.FORUM_OUTLINED, ft.Icons.FORUM, "论坛"),
+            ]
         return [
             (ft.Icons.PEOPLE_OUTLINE, ft.Icons.PEOPLE, "学员"),
             (ft.Icons.SCHOOL_OUTLINED, ft.Icons.SCHOOL, "课程"),
             (ft.Icons.PERSON_SEARCH, ft.Icons.PERSON_SEARCH, "试听"),
             (ft.Icons.PAYMENTS_OUTLINED, ft.Icons.PAYMENTS, "缴费"),
+            (ft.Icons.FORUM_OUTLINED, ft.Icons.FORUM, "论坛"),
             (ft.Icons.INSIGHTS_OUTLINED, ft.Icons.INSIGHTS, "报表"),
+            (
+                ft.Icons.WORKSPACE_PREMIUM_OUTLINED,
+                ft.Icons.WORKSPACE_PREMIUM,
+                "竞技",
+            ),
             (ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "设置"),
         ]
 
@@ -53,6 +67,10 @@ class ShellMixin:
                 )
             )
         self.page.update()
+        pending = self._pending_student_credentials
+        if pending is not None:
+            self._pending_student_credentials = None
+            self._show_student_credentials(*pending)
 
     def _on_resize(self, e) -> None:
         if self.is_wide() != self._last_wide:
@@ -131,6 +149,12 @@ class ShellMixin:
         )
 
     def _body(self) -> ft.Control:
+        if self.is_student():
+            if self.tab == 1:
+                return self._student_course_view()
+            if self.tab == 2:
+                return self._forum_view()
+            return self._student_portal_view()
         if self.tab == 0:
             # 从学员页点进某节课，看课次详情；返回就回到这个学员
             if self.lesson_id is not None:
@@ -150,7 +174,11 @@ class ShellMixin:
         if self.tab == 3:
             return self._payments_view()
         if self.tab == 4:
+            return self._forum_view()
+        if self.tab == 5:
             return self._reports_view()
+        if self.tab == 6:
+            return self._badge_directory_view()
         return self._settings_view()
 
     def open_lesson(self, lesson_id: int | None) -> None:
@@ -166,5 +194,8 @@ class ShellMixin:
         self.render()
 
     def open_student(self, student_id: int | None) -> None:
+        db.advance_student_grades()
+        if student_id != self.student_id:
+            self._student_edit_id = None
         self.student_id = student_id
         self.render()

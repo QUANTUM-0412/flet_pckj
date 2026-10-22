@@ -38,6 +38,8 @@ class AuthMixin:
                 "username": user["username"],
                 "display_name": user["display_name"],
                 "role": user["role"],
+                "student_id": user["student_id"],
+                "forum_nickname": user["forum_nickname"],
             }
             self._remember_login(user)
             self.render()
@@ -122,6 +124,8 @@ class AuthMixin:
                 "username": record["username"],
                 "display_name": record["display_name"],
                 "role": record["role"],
+                "student_id": record["student_id"],
+                "forum_nickname": record["forum_nickname"],
             }
             self.render()
 
@@ -183,6 +187,56 @@ class AuthMixin:
 
     def is_admin(self) -> bool:
         return bool(self.user and self.user.get("role") == db.ROLE_ROOT)
+
+    def is_student(self) -> bool:
+        return bool(self.user and self.user.get("role") == db.ROLE_STUDENT)
+
+    def _my_user_id(self) -> int | None:
+        return int((self.user or {}).get("id") or 0) or None
+
+    def _can_manage_teacher(self, teacher_id: int | None) -> bool:
+        """管理员能管全部；普通老师只能管归在自己名下的记录。"""
+        if self.is_admin():
+            return True
+        me = self._my_user_id()
+        return bool(me and teacher_id and int(teacher_id) == me)
+
+    def _can_manage_level(self, level: dict | None) -> bool:
+        level_data = dict(level) if level is not None else {}
+        return bool(
+            level_data
+            and self._can_manage_teacher(level_data.get("default_teacher_id"))
+        )
+
+    def _can_manage_course(self, course: dict | None) -> bool:
+        course_data = dict(course) if course is not None else {}
+        return bool(
+            course_data
+            and self._can_manage_teacher(course_data.get("teacher_id"))
+        )
+
+    def _can_manage_student(self, student_id: int | None) -> bool:
+        if self.is_admin():
+            return True
+        me = self._my_user_id()
+        if not me or not student_id:
+            return False
+        return any(
+            int(row.get("teacher_id") or 0) == me
+            for row in db.student_owners(int(student_id))
+        )
+
+    def _can_manage_enrollment(self, enrollment: dict | None) -> bool:
+        if not enrollment:
+            return False
+        if self.is_admin():
+            return True
+        owner = enrollment.get("owner_teacher_id")
+        if owner:
+            return self._can_manage_teacher(int(owner))
+        return self._can_manage_student(
+            int(enrollment.get("student_id") or 0) or None
+        )
 
     def _whoami(self) -> str:
         if not self.user:

@@ -112,17 +112,13 @@ class PaymentsMixin:
                     "缴费记录",
                     f"{_month_text(month)}收入 {db.num_text(month_total)} 元"
                     f" · 一共 {db.num_text(total)} 元",
-                    (
-                        [
-                            ft.Button(
-                                "记一笔",
-                                icon=ft.Icons.ADD,
-                                on_click=lambda e: self._open_payment_dialog(),
-                            )
-                        ]
-                        if self.is_admin()
-                        else []
-                    ),
+                    [
+                        ft.Button(
+                            "记一笔",
+                            icon=ft.Icons.ADD,
+                            on_click=lambda e: self._open_payment_dialog(),
+                        )
+                    ],
                 ),
                 month_bar,
                 *blocks,
@@ -240,18 +236,44 @@ class PaymentsMixin:
         return bits
 
     def _open_payment_dialog(self, payment: dict | None = None, student_id: int | None = None) -> None:
-        students = db.list_students()
+        admin = self.is_admin()
+        editing = payment is not None
+        if editing and not admin:
+            self._toast("已有缴费只能由管理员修改")
+            return
+        if student_id and not self._can_manage_student(student_id):
+            self._toast("只能给自己名下的学员记缴费")
+            return
+        students = [
+            s
+            for s in db.list_students()
+            if admin or self._can_manage_student(s["id"])
+        ]
+        packages = db.list_course_packages(active_only=True)
+        selected_package_id = (
+            payment.get("package_id") if editing and payment.get("package_id") else None
+        )
+        if selected_package_id and not any(
+            int(p["id"]) == int(selected_package_id) for p in packages
+        ):
+            old_package = db.get_course_package(selected_package_id)
+            if old_package:
+                packages.append(old_package)
         hour_types = db.list_hour_types()
         levels = db.list_levels(active_only=True)
-        editing = payment is not None
 
         # 家长来交钱的时候，学员档案常常还没建，所以这里可以直接建一个
         new_fields = self._student_fields(with_status=False, with_note=False)
+        if not admin:
+            owner_id = self._my_user_id()
+            new_fields["owner"].value = str(owner_id)
+            new_fields["owner"].disabled = True
         new_holder = ft.Column(
             [
                 ft.Text("新学员，先填一下（保存时一并建档）", size=12, color=ft.Colors.GREY_600),
                 new_fields["name"],
                 ft.Row([new_fields["gender"], new_fields["grade"]], spacing=10, expand=False),
+                new_fields["birth_date"],
                 new_fields["school"],
                 new_fields["phone"],
                 new_fields["guardian"],
@@ -295,6 +317,37 @@ class PaymentsMixin:
         student_dd.on_select = sync_new_block
         day = _tf("日期", payment["paid_on"] if editing else date.today().isoformat(), width=DIALOG_WIDTH)
         note = _tf("备注", payment["note"] if editing else "", width=DIALOG_WIDTH)
+        package_dd = _dd(
+            "固定课包（可选）",
+            [ft.DropdownOption(key="", text="不用课包（普通缴费）")]
+            + _opts(
+                [
+                    (
+                        p["id"],
+                        f"{p['name']} · {db.num_text(p['price'])} 元",
+                    )
+                    for p in packages
+                ]
+            ),
+            value=str(selected_package_id) if selected_package_id else "",
+            width=DIALOG_WIDTH,
+        )
+        package_hint = ft.Text(
+            "课包会自动填入固定课时和金额；普通缴费不会送代金券。",
+            size=11,
+            color=ft.Colors.GREY_600,
+        )
+        package_level = _dd(
+            "报的等级（课包统一）",
+            [ft.DropdownOption(key="", text="不指定")]
+            + _opts([(l["id"], db.level_display_name(l)) for l in levels]),
+            value="",
+            width=DIALOG_WIDTH,
+            visible=False,
+        )
+        package_table_holder = ft.Container(visible=False)
+        gift_holder = ft.Column(spacing=6, tight=True, visible=False)
+        gift_rows: list[dict] = []
         rows_holder = ft.Column(spacing=8, tight=True)
         rows: list[dict] = []
         total_text = ft.Text("", size=13, weight=ft.FontWeight.W_600)
@@ -362,7 +415,7 @@ class PaymentsMixin:
                 voucher_dd.value = ""
             if not list_rows:
                 voucher_hint.value = (
-                    "这个孩子还没有可用的代金券（缴「正课」才送，"
+                    "这个孩子还没有可用的代金券（固定课包满 3000 元才送，"
                     "但券可以用在任何一笔缴费上）"
                 )
             if update:
@@ -375,40 +428,46 @@ class PaymentsMixin:
             except ValueError:
                 raise ValueError("数字填得不对")
 
-        zhengke_id = next((h["id"] for h in hour_types if h["name"] == "正课"), None)
         issue_hint = ft.Text("", size=12, color=ft.Colors.GREY_600)
 
+        def selected_package() -> dict | None:
+            value = (package_dd.value or "").strip()
+            if not value:
+                return None
+            return next(
+                (p for p in packages if str(p["id"]) == value),
+                None,
+            )
+
         def issue_text() -> str:
-            base = 0.0
-            has_zhengke = False
-            for row in rows:
-                if zhengke_id and str(row["type"].value) == str(zhengke_id):
-                    has_zhengke = True
-                    try:
-                        base += _number(row["amount"])
-                    except ValueError:
-                        pass
-            face, count = db.voucher_plan(base)
+            package = selected_package()
+            if not package:
+                return "普通缴费不送代金券；只有选择满 3000 元的固定课包才送"
+            face, count = db.voucher_plan(
+                float(package["price"] or 0),
+                package_selected=True,
+            )
             if face:
                 return (
-                    f"这笔正课 {db.num_text(base)} 元 → 送 {count} 张 "
+                    f"这个课包 {db.num_text(package['price'])} 元 → 送 {count} 张 "
                     f"{db.num_text(face)} 元的代金券（{db.VOUCHER_MONTHS} 个月有效）"
                 )
-            if has_zhengke:
-                return (
-                    "填上正课的金额就送代金券"
-                    f"（面额 = 正课金额 ÷ 10，一次 {db.VOUCHER_COUNT} 张，"
-                    f"{db.VOUCHER_MONTHS} 个月有效）"
-                )
-            return "这笔不送代金券（只有缴「正课」才送；手里的券照样能抵这笔）"
+            return (
+                f"这个课包未满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元，不送代金券；"
+                "手里的券照样能抵这笔"
+            )
 
         def refresh_total(update=True, *_):
-            total = 0.0
-            for row in rows:
-                try:
-                    total += _number(row["amount"])
-                except ValueError:
-                    pass
+            package = selected_package()
+            if package:
+                total = float(package["price"] or 0)
+            else:
+                total = 0.0
+                for row in rows:
+                    try:
+                        total += _number(row["amount"])
+                    except ValueError:
+                        pass
             voucher = chosen_voucher()
             cut = float(voucher["face"]) if voucher else 0.0
             if cut:
@@ -429,15 +488,18 @@ class PaymentsMixin:
             for h in hour_types:
                 if h["name"] == class_type_name:
                     return h["id"]
-            if class_type_name == "校内社团":
-                return next((h["id"] for h in hour_types if h["name"] == "社团"), None)
             if class_type_name in ("替课",):
                 return next((h["id"] for h in hour_types if h["name"] == "正课"), None)
             return None
 
         def student_enrollments() -> list[dict]:
             sid = picked_student_id()
-            return db.list_enrollments(sid) if sid else []
+            rows = db.list_enrollments(sid) if sid else []
+            return [
+                en
+                for en in rows
+                if admin or self._can_manage_enrollment(en)
+            ]
 
         def enroll_options() -> list[ft.DropdownOption]:
             options = [ft.DropdownOption(key="", text="不指定（按等级和老师算）")]
@@ -473,6 +535,7 @@ class PaymentsMixin:
             level_id=None,
             owner_teacher_id=None,
             enrollment_id=None,
+            locked=False,
             update=True,
         ):
             enroll_dd = _dd(
@@ -491,16 +554,31 @@ class PaymentsMixin:
             level_dd = _dd(
                 "报的等级",
                 [ft.DropdownOption(key="", text="不指定")]
-                + _opts([(l["id"], db.level_full_name(l)) for l in levels]),
+                + _opts([(l["id"], db.level_display_name(l)) for l in levels]),
                 value=str(level_id) if level_id else "",
                 width=148,
             )
             owner_dd = _dd(
                 "归属老师（算谁的客户）",
-                _teacher_opts("不指定"),
-                value=str(owner_teacher_id) if owner_teacher_id else "",
+                (
+                    _teacher_opts("不指定")
+                    if admin
+                    else [
+                        ft.DropdownOption(
+                            key=str(self._my_user_id()),
+                            text=self._whoami(),
+                        )
+                    ]
+                ),
+                value=(
+                    str(owner_teacher_id)
+                    if admin and owner_teacher_id
+                    else ("" if admin else str(self._my_user_id()))
+                ),
                 width=148,
             )
+            if not admin:
+                owner_dd.disabled = True
             hours_f = _tf(
                 "数量（课时）",
                 hours,
@@ -516,6 +594,9 @@ class PaymentsMixin:
                 hint_text="0 就是赠送",
                 on_change=refresh_total,
             )
+            if locked:
+                for control in (type_dd, owner_dd, hours_f, amount_f):
+                    control.disabled = True
             row = {
                 "enroll": enroll_dd,
                 "type": type_dd,
@@ -524,6 +605,7 @@ class PaymentsMixin:
                 "amount": amount_f,
                 "owner": owner_dd,
                 "owner_touched": bool(owner_teacher_id),
+                "package_item": False,
             }
 
             def on_enroll(e=None):
@@ -537,11 +619,13 @@ class PaymentsMixin:
                     if en.get("level_id"):
                         level_dd.value = str(en["level_id"])
                     hour_id = hour_type_for_class_type(en.get("class_type_name"))
-                    if hour_id:
+                    if hour_id and not locked:
                         type_dd.value = str(hour_id)
-                    if en.get("owner_teacher_id"):
+                    if admin and en.get("owner_teacher_id"):
                         owner_dd.value = str(en["owner_teacher_id"])
                         row["owner_touched"] = True
+                    elif not admin:
+                        owner_dd.value = str(self._my_user_id())
                     for control in (level_dd, type_dd, owner_dd):
                         control.update()
                     refresh_total()
@@ -557,7 +641,11 @@ class PaymentsMixin:
                 if row["owner_touched"]:
                     return
                 lid = int(level_dd.value) if (level_dd.value or "").strip() else None
-                default = db.default_owner_teacher(picked_student_id(), lid)
+                default = (
+                    db.default_owner_teacher(picked_student_id(), lid)
+                    if admin
+                    else self._my_user_id()
+                )
                 owner_dd.value = str(default) if default else ""
                 owner_dd.update()
 
@@ -573,6 +661,13 @@ class PaymentsMixin:
                 rows_holder.update()
                 refresh_total()
 
+            remove_button = ft.IconButton(
+                ft.Icons.CLOSE,
+                tooltip="去掉这一行",
+                icon_size=18,
+                on_click=remove,
+                visible=not locked,
+            )
             box = ft.Container(
                 content=ft.Column(
                     [
@@ -581,12 +676,7 @@ class PaymentsMixin:
                             [
                                 type_dd,
                                 level_dd,
-                                ft.IconButton(
-                                    ft.Icons.CLOSE,
-                                    tooltip="去掉这一行",
-                                    icon_size=18,
-                                    on_click=remove,
-                                ),
+                                remove_button,
                             ],
                             spacing=4,
                             wrap=True,
@@ -608,17 +698,175 @@ class PaymentsMixin:
                 refresh_total()
             return row
 
-        if editing:
-            for item in db.list_payment_items(payment["id"]):
-                add_row(
-                    hour_type_id=item["hour_type_id"],
-                    hours=db.num_text(item["hours"]),
-                    amount=db.num_text(item["amount"]),
-                    level_id=item["level_id"],
-                    owner_teacher_id=item["owner_teacher_id"],
-                    enrollment_id=item["enrollment_id"],
-                    update=False,
+        rows_actions = ft.Row(
+            [
+                ft.TextButton(
+                    "+ 加一行",
+                    icon=ft.Icons.ADD,
+                    on_click=lambda e: add_row(),
                 )
+            ],
+            alignment=ft.MainAxisAlignment.END,
+        )
+        gift_actions = ft.Row(
+            [
+                ft.TextButton(
+                    "+ 额外赠送考级／比赛课时",
+                    icon=ft.Icons.CARD_GIFTCARD,
+                    on_click=lambda e: add_gift(),
+                )
+            ],
+            alignment=ft.MainAxisAlignment.END,
+            visible=False,
+        )
+
+        def clear_rows() -> None:
+            rows.clear()
+            rows_holder.controls.clear()
+
+        def package_table(package: dict) -> ft.Row:
+            table = ft.DataTable(
+                columns=[
+                    ft.DataColumn(ft.Text("课时类型", size=12)),
+                    ft.DataColumn(ft.Text("数量", size=12), numeric=True),
+                    ft.DataColumn(ft.Text("金额", size=12), numeric=True),
+                ],
+                rows=[
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(ft.Text(item["hour_type_name"], size=12)),
+                            ft.DataCell(
+                                ft.Text(f"{db.num_text(item['hours'])} 节", size=12)
+                            ),
+                            ft.DataCell(
+                                ft.Text(
+                                    (
+                                        f"{db.num_text(package['price'])} 元"
+                                        if index == 0
+                                        else "赠送"
+                                    ),
+                                    size=12,
+                                )
+                            ),
+                        ]
+                    )
+                    for index, item in enumerate(package["items"])
+                ],
+                column_spacing=18,
+                horizontal_lines=ft.BorderSide(1, ft.Colors.GREY_200),
+                heading_row_height=34,
+                data_row_min_height=34,
+                data_row_max_height=40,
+            )
+            return ft.Row([table], scroll=ft.ScrollMode.AUTO)
+
+        gift_hour_types = [h for h in hour_types if h["name"] != "正课"]
+
+        def add_gift(update: bool = True) -> None:
+            type_dd = _dd(
+                "赠送课时类型",
+                _opts([(h["id"], h["name"]) for h in gift_hour_types]),
+                value=str(gift_hour_types[0]["id"]) if gift_hour_types else "",
+                width=180,
+            )
+            hours = _tf(
+                "赠送数量",
+                "",
+                width=140,
+                keyboard_type=ft.KeyboardType.NUMBER,
+            )
+            row = {"type": type_dd, "hours": hours}
+
+            def remove(e=None):
+                gift_rows.remove(row)
+                gift_holder.controls.remove(box)
+                gift_holder.update()
+
+            box = ft.Row(
+                [
+                    type_dd,
+                    hours,
+                    ft.IconButton(
+                        ft.Icons.CLOSE,
+                        tooltip="去掉这项赠送",
+                        icon_size=18,
+                        on_click=remove,
+                    ),
+                ],
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            gift_rows.append(row)
+            gift_holder.controls.append(box)
+            if update:
+                gift_holder.update()
+
+        def refresh_package_ui(update: bool = True) -> None:
+            package = selected_package()
+            has_package = package is not None
+            package_table_holder.content = package_table(package) if package else None
+            package_table_holder.visible = has_package
+            package_level.visible = has_package
+            gift_holder.visible = has_package
+            rows_holder.visible = not has_package
+            rows_actions.visible = not has_package
+            gift_actions.visible = has_package
+            package_hint.value = (
+                f"已选「{package['name']}」：固定 {db.num_text(package['price'])} 元。"
+                if package
+                else "课包会自动填入固定课时和金额；普通缴费不会送代金券。"
+            )
+            if update:
+                package_table_holder.update()
+                package_level.update()
+                gift_holder.update()
+                rows_holder.update()
+                rows_actions.update()
+                gift_actions.update()
+                package_hint.update()
+                refresh_total()
+
+        def apply_package(update: bool = True) -> None:
+            clear_rows()
+            if not selected_package():
+                add_row("", "", "", None, update=False)
+            apply_owner_defaults()
+            refresh_package_ui(update=update)
+
+        if editing:
+            package = selected_package()
+            payment_items = db.list_payment_items(payment["id"])
+            if package:
+                level_value = next(
+                    (str(item["level_id"]) for item in payment_items if item["level_id"]),
+                    "",
+                )
+                package_level.value = level_value
+                expected_left = {
+                    int(item["hour_type_id"]): float(item["hours"])
+                    for item in package["items"]
+                }
+                for item in payment_items:
+                    type_id = int(item["hour_type_id"])
+                    hours_value = float(item["hours"] or 0)
+                    used = min(hours_value, expected_left.get(type_id, 0.0))
+                    expected_left[type_id] = expected_left.get(type_id, 0.0) - used
+                    extra = hours_value - used
+                    if extra > 0:
+                        add_gift(update=False)
+                        gift_rows[-1]["type"].value = str(type_id)
+                        gift_rows[-1]["hours"].value = db.num_text(extra)
+            else:
+                for item in payment_items:
+                    add_row(
+                        hour_type_id=item["hour_type_id"],
+                        hours=db.num_text(item["hours"]),
+                        amount=db.num_text(item["amount"]),
+                        level_id=item["level_id"],
+                        owner_teacher_id=item["owner_teacher_id"],
+                        enrollment_id=item["enrollment_id"],
+                        update=False,
+                    )
         else:
             add_row("", "", "", None, update=False)
 
@@ -633,46 +881,101 @@ class PaymentsMixin:
                     if (row["level"].value or "").strip()
                     else None
                 )
-                default = db.default_owner_teacher(sid, lid)
+                default = (
+                    db.default_owner_teacher(sid, lid)
+                    if admin
+                    else self._my_user_id()
+                )
                 row["owner"].value = str(default) if default else ""
 
         if not editing:
             apply_owner_defaults()
 
+        package_dd.on_select = lambda e: apply_package()
+        package_level.on_select = lambda e: refresh_total()
+        refresh_package_ui(update=False)
+
         def collect() -> list[dict]:
             items = []
-            for row in rows:
-                try:
-                    hours_value = _number(row["hours"])
-                    amount_value = _number(row["amount"])
-                except ValueError:
-                    self._toast("数量或金额填得不对")
-                    return []
-                if hours_value <= 0:
-                    continue
-                items.append(
-                    {
-                        "hour_type_id": int(row["type"].value),
-                        "level_id": int(row["level"].value)
-                        if (row["level"].value or "").strip()
-                        else None,
-                        "hours": hours_value,
-                        "amount": amount_value,
-                        "owner_teacher_id": (
-                            int(row["owner"].value)
-                            if (row["owner"].value or "").strip()
-                            else None
-                        ),
-                        "enrollment_id": (
-                            int(row["enroll"].value)
-                            if (row["enroll"].value or "").strip()
-                            else None
-                        ),
-                    }
-                )
+            package = selected_package()
+            level_id = (
+                int(package_level.value)
+                if (package_level.value or "").strip()
+                else None
+            )
+            if package:
+                for index, item in enumerate(package["items"]):
+                    items.append(
+                        {
+                            "hour_type_id": int(item["hour_type_id"]),
+                            "level_id": level_id,
+                            "hours": float(item["hours"]),
+                            "amount": float(package["price"]) if index == 0 else 0,
+                            "owner_teacher_id": (
+                                None if admin else self._my_user_id()
+                            ),
+                            "enrollment_id": None,
+                            "package_item": True,
+                        }
+                    )
+                for gift in gift_rows:
+                    try:
+                        hours_value = _number(gift["hours"])
+                    except ValueError:
+                        self._toast("赠送数量填得不对")
+                        return []
+                    if hours_value <= 0:
+                        continue
+                    items.append(
+                        {
+                            "hour_type_id": int(gift["type"].value),
+                            "level_id": level_id,
+                            "hours": hours_value,
+                            "amount": 0,
+                            "owner_teacher_id": (
+                                None if admin else self._my_user_id()
+                            ),
+                            "enrollment_id": None,
+                            "package_item": False,
+                        }
+                    )
+            else:
+                for row in rows:
+                    try:
+                        hours_value = _number(row["hours"])
+                        amount_value = _number(row["amount"])
+                    except ValueError:
+                        self._toast("数量或金额填得不对")
+                        return []
+                    if hours_value <= 0:
+                        continue
+                    items.append(
+                        {
+                            "hour_type_id": int(row["type"].value),
+                            "level_id": int(row["level"].value)
+                            if (row["level"].value or "").strip()
+                            else None,
+                            "hours": hours_value,
+                            "amount": amount_value,
+                            "owner_teacher_id": (
+                                int(row["owner"].value)
+                                if admin and (row["owner"].value or "").strip()
+                                else (None if admin else self._my_user_id())
+                            ),
+                            "enrollment_id": (
+                                int(row["enroll"].value)
+                                if (row["enroll"].value or "").strip()
+                                else None
+                            ),
+                            "package_item": False,
+                        }
+                    )
             return items
 
         def save(e):
+            if editing and not admin:
+                self._toast("已有缴费只能由管理员修改")
+                return
             try:
                 date.fromisoformat((day.value or "").strip())
             except ValueError:
@@ -683,20 +986,47 @@ class PaymentsMixin:
             if not items:
                 self._toast("至少填一行的课时数")
                 return
+            gifts = [
+                item
+                for item in items
+                if not item.get("package_item")
+                and float(item.get("amount") or 0) <= 0
+            ]
+            if gifts:
+                zhengke_id = next(
+                    (h["id"] for h in hour_types if h["name"] == "正课"),
+                    None,
+                )
+                if zhengke_id and any(
+                    int(item["hour_type_id"]) == int(zhengke_id)
+                    for item in gifts
+                ):
+                    self._toast("正课不能作为赠送课时手动添加")
+                    return
+                if not (note.value or "").strip():
+                    note.error = "赠送课时必须写明原因"
+                    note.update()
+                    return
             # 课时数没问题了，再决定挂到哪个孩子名下（没有档案就当场建一个）
+            credentials = None
             if student_dd.value == NEW_STUDENT:
-                values = self._student_values(new_fields)
+                values = self._student_values(new_fields, require_birth_date=True)
                 if values is None:
                     return
                 target_id = db.create_student(values)
+                credentials = db.ensure_student_account(target_id)
             else:
                 target_id = int(student_dd.value)
+            if not self._can_manage_student(target_id):
+                self._toast("只能给自己名下的学员记缴费")
+                return
             args = (
                 target_id,
                 (day.value or "").strip(),
                 items,
                 note.value or "",
                 int(voucher_dd.value) if (voucher_dd.value or "").strip() else None,
+                int(package_dd.value) if (package_dd.value or "").strip() else None,
             )
             try:
                 if editing:
@@ -704,7 +1034,12 @@ class PaymentsMixin:
                     self._finish("缴费记录已更新")
                 else:
                     db.create_payment(*args)
-                    self._finish("缴费记好了，课时已经加上")
+                    if credentials:
+                        self.page.pop_dialog()
+                        self.render()
+                        self._show_student_credentials(*credentials)
+                    else:
+                        self._finish("缴费记好了，课时已经加上")
             except ValueError as err:
                 self._toast(str(err))
 
@@ -716,21 +1051,36 @@ class PaymentsMixin:
                 student_dd,
                 new_holder,
                 day,
+                package_dd,
+                package_hint,
+                package_table_holder,
+                package_level,
                 ft.Text(
                     "这次买的课时（可以加多行：买的、送的都记上；"
                     "选上等级就会顺手建好「报名课程」）",
                     size=12,
                     color=ft.Colors.GREY_600,
                 ),
-                rows_holder,
-                ft.Row(
-                    [ft.TextButton("+ 加一行", icon=ft.Icons.ADD, on_click=lambda e: add_row())],
-                    alignment=ft.MainAxisAlignment.END,
+                ft.Text(
+                    "「哪门课程」用来关联孩子已经报过的班；新学员还没有报名时"
+                    "选「不指定」，选好每个等级的课时后会顺手创建报名。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
                 ),
+                rows_holder,
+                rows_actions,
+                gift_actions,
+                gift_holder,
                 voucher_dd,
                 voucher_hint,
                 total_text,
                 issue_hint,
+                ft.Text(
+                    "手动赠送考级／比赛课时时，必须填写备注原因；"
+                    "正课不能作为赠送课时手动添加。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
                 note,
             ]
         )
@@ -802,9 +1152,7 @@ class PaymentsMixin:
         for r in rows:
             present = int(r["attendance"] or 0)
             if present:
-                points = (
-                    1 + int(r["discipline"] or 0) + int(r["performance"] or 0)
-                ) * 10 + float(r["bonus"] or 0)
+                points = db.attendance_points(r)
                 hours = float(r["minutes"] or 0) / 60 if r["class_type_deduct"] else 0
                 state = ft.Text("出勤", size=12, color=ft.Colors.GREEN_700)
             else:
@@ -931,7 +1279,7 @@ class PaymentsMixin:
                     icon=ft.Icons.ADD,
                     on_click=lambda e: self._open_payment_dialog(None, s["id"]),
                 )
-                if admin
+                if self._can_manage_student(s["id"])
                 else None
             ),
         )

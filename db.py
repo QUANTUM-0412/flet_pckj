@@ -13,9 +13,11 @@ import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
+
+from slugify import slugify
 
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("CLASS_HOURS_DB") or (APP_DIR / "data" / "app.db"))
@@ -23,6 +25,9 @@ DB_PATH = Path(os.environ.get("CLASS_HOURS_DB") or (APP_DIR / "data" / "app.db")
 UPLOAD_DIR = Path(os.environ.get("CLASS_HOURS_FILES") or (DB_PATH.parent / "files"))
 EXPORT_DIR = UPLOAD_DIR / "exports"
 WARN_BALANCE = 3  # 剩余课时少于这个数就提醒
+ATTENDANCE_POINTS = 10
+BEHAVIOR_SCORE_MIN = -10
+BEHAVIOR_SCORE_MAX = 10
 
 # --------------------------------------------------------------- 初始化的字典
 
@@ -35,7 +40,7 @@ DEFAULT_CLASS_TYPES: list[tuple[str, int, str | None, str | None]] = [
     ("考级", 1, "考级", "正课"),
     ("竞赛", 1, "竞赛", "正课"),
     ("托管", 1, "托管", None),
-    ("校内社团", 1, "社团", None),
+    ("社团", 1, "社团", None),
     ("试听", 0, None, None),
     ("替课", 1, "正课", None),  # 老师替课，课照上，课时照扣
 ]
@@ -54,13 +59,71 @@ DEFAULT_LEVELS: list[tuple[str, str, int]] = [
 STUDENT_STATUS = ["在读", "停课"]
 GENDER_OPTIONS = ["男", "女"]
 GRADE_OPTIONS = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "初一", "初二", "初三"]
+BADGE_CATEGORIES = ["竞赛", "考级"]
+LEVEL_TYPES = ["正课", "竞赛", "考级", "托管", "社团"]
+COMPETITION_RESULTS = ["一等奖", "二等奖", "三等奖"]
+EXAM_RESULTS = ["优秀", "良好", "通过"]
+EXAM_LEVELS = ["1级", "2级", "3级", "4级"]
+GRADE_PROGRESSION = {
+    "一年级": "二年级",
+    "二年级": "三年级",
+    "三年级": "四年级",
+    "四年级": "五年级",
+    "五年级": "六年级",
+    "六年级": "初一",
+    "初一": "初二",
+    "初二": "初三",
+}
 WEEKDAY_NAMES = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 TRIAL_STATUS = ["待试听", "已试听", "已报名", "没意向"]
 ROLE_ROOT = "root"
 ROLE_TEACHER = "teacher"
-ROLE_NAMES = {ROLE_ROOT: "管理员", ROLE_TEACHER: "老师"}
+ROLE_STUDENT = "student"
+ROLE_NAMES = {ROLE_ROOT: "管理员", ROLE_TEACHER: "老师", ROLE_STUDENT: "学生"}
 DEFAULT_ADMIN_USER = "root"
 DEFAULT_ADMIN_PASSWORD = "1234"
+FORUM_ADJECTIVES = (
+    "闪亮",
+    "好奇",
+    "勇敢",
+    "机智",
+    "快乐",
+    "星际",
+    "认真",
+    "敏捷",
+    "冷静",
+    "热情",
+    "神秘",
+    "活泼",
+)
+FORUM_NOUNS = (
+    "小火箭",
+    "代码猫",
+    "积木侠",
+    "小齿轮",
+    "探险家",
+    "小狐狸",
+    "观察员",
+    "创造者",
+    "小星星",
+    "机器人",
+    "画板",
+    "雷达",
+)
+FORUM_NICKNAME_BLOCKED_WORDS = (
+    "傻逼",
+    "操你",
+    "妈的",
+    "滚蛋",
+    "废物",
+    "垃圾",
+    "去死",
+    "死全家",
+    "贱人",
+    "蠢猪",
+    "混蛋",
+    "王八蛋",
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS students (
@@ -68,11 +131,27 @@ CREATE TABLE IF NOT EXISTS students (
     name        TEXT    NOT NULL,
     gender      TEXT    NOT NULL DEFAULT '',
     grade       TEXT    NOT NULL DEFAULT '',
+    grade_academic_year INTEGER NOT NULL DEFAULT 0,
+    birth_date  TEXT    NOT NULL DEFAULT '',
+    grade_auto  INTEGER NOT NULL DEFAULT 0,
     school      TEXT    NOT NULL DEFAULT '',
     phone       TEXT    NOT NULL DEFAULT '',
     note        TEXT    NOT NULL DEFAULT '',
     status      TEXT    NOT NULL DEFAULT '在读',
     owner_teacher_id INTEGER REFERENCES users(id),
+    created_at  TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS student_badges (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    category    TEXT    NOT NULL DEFAULT '竞赛',
+    level_id    INTEGER REFERENCES levels(id) ON DELETE SET NULL,
+    title       TEXT    NOT NULL DEFAULT '',
+    level_name  TEXT    NOT NULL DEFAULT '',
+    result      TEXT    NOT NULL DEFAULT '一等奖',
+    happened_on TEXT    NOT NULL DEFAULT '',
+    note        TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT ''
 );
 
@@ -111,8 +190,11 @@ CREATE TABLE IF NOT EXISTS levels (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     subject         TEXT    NOT NULL DEFAULT '',
     name            TEXT    NOT NULL,
+    level_type      TEXT    NOT NULL DEFAULT '正课',
     default_minutes INTEGER NOT NULL DEFAULT 90,
     default_teacher_id INTEGER REFERENCES users(id),
+    badge_category TEXT NOT NULL DEFAULT '',
+    badge_exam_level TEXT NOT NULL DEFAULT '',
     active          INTEGER NOT NULL DEFAULT 1,
     sort            INTEGER NOT NULL DEFAULT 0,
     UNIQUE(subject, name)
@@ -193,16 +275,39 @@ CREATE TABLE IF NOT EXISTS attendance (
     enrollment_id INTEGER REFERENCES enrollments(id) ON DELETE SET NULL,
     attendance    INTEGER NOT NULL DEFAULT 1,
     discipline    INTEGER NOT NULL DEFAULT 1,
+    discipline_score REAL NOT NULL DEFAULT 0,
     performance   INTEGER NOT NULL DEFAULT 1,
+    performance_score REAL NOT NULL DEFAULT 0,
     bonus         REAL    NOT NULL DEFAULT 0,
+    bonus_reason  TEXT    NOT NULL DEFAULT '',
+    poor_discipline_reason TEXT NOT NULL DEFAULT '',
+    poor_performance_reason TEXT NOT NULL DEFAULT '',
     minutes       REAL    NOT NULL DEFAULT 90,
     comment       TEXT    NOT NULL DEFAULT '',
     owner_teacher_id INTEGER REFERENCES users(id),
     created_at    TEXT    NOT NULL DEFAULT ''
 );
 
+-- 固定课包：价格和包含的课时数固定；只有使用课包且价格不低于 3000 元才送券。
+CREATE TABLE IF NOT EXISTS course_packages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,
+    price      REAL    NOT NULL DEFAULT 0,
+    active     INTEGER NOT NULL DEFAULT 1,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS course_package_items (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id   INTEGER NOT NULL REFERENCES course_packages(id) ON DELETE CASCADE,
+    hour_type_id INTEGER NOT NULL REFERENCES hour_types(id),
+    hours        REAL    NOT NULL DEFAULT 0,
+    sort         INTEGER NOT NULL DEFAULT 0
+);
+
 -- 缴费：一笔钱买了哪种课时
--- 代金券：缴费正课送的一批券（一次 10 张，面额 = 正课金额 ÷ 10，24 个月有效），
+-- 代金券：固定课包满 3000 元才送一批（10 张，面额 = 课包价格 ÷ 10，24 个月有效），
 -- 以后每次缴费最多用掉 1 张。放在 payments 前面建，好让外键指得着。
 CREATE TABLE IF NOT EXISTS vouchers (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +331,7 @@ CREATE TABLE IF NOT EXISTS payments (
     note         TEXT    NOT NULL DEFAULT '',
     voucher_id   INTEGER REFERENCES vouchers(id),
     voucher_amount REAL  NOT NULL DEFAULT 0,
+    package_id   INTEGER REFERENCES course_packages(id) ON DELETE SET NULL,
     teacher_id   INTEGER REFERENCES users(id),
     created_at   TEXT    NOT NULL DEFAULT ''
 );
@@ -286,6 +392,75 @@ CREATE TABLE IF NOT EXISTS files (
     uploaded_at TEXT    NOT NULL DEFAULT ''
 );
 
+-- 学生给老师提交的帮助请求
+CREATE TABLE IF NOT EXISTS help_tickets (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id         INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    lesson_id          INTEGER REFERENCES lessons(id) ON DELETE SET NULL,
+    subject            TEXT    NOT NULL DEFAULT '',
+    content            TEXT    NOT NULL DEFAULT '',
+    status             TEXT    NOT NULL DEFAULT '待处理',
+    cost_points        REAL    NOT NULL DEFAULT 0,
+    reply              TEXT    NOT NULL DEFAULT '',
+    rejected_reason    TEXT    NOT NULL DEFAULT '',
+    replied_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at         TEXT    NOT NULL DEFAULT '',
+    replied_at         TEXT    NOT NULL DEFAULT ''
+);
+
+-- 论坛悬赏：学生和老师都可以发布、回答、采纳
+CREATE TABLE IF NOT EXISTS forum_bounties (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_student_id  INTEGER REFERENCES students(id) ON DELETE SET NULL,
+    target_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    title              TEXT    NOT NULL DEFAULT '',
+    content            TEXT    NOT NULL DEFAULT '',
+    bounty_points      REAL    NOT NULL DEFAULT 0,
+    status             TEXT    NOT NULL DEFAULT '待解决',
+    accepted_answer_id INTEGER,
+    penalty_points     REAL    NOT NULL DEFAULT 0,
+    moderation_note    TEXT    NOT NULL DEFAULT '',
+    created_at         TEXT    NOT NULL DEFAULT '',
+    completed_at       TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS forum_answers (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    bounty_id         INTEGER NOT NULL REFERENCES forum_bounties(id) ON DELETE CASCADE,
+    author_user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
+    content           TEXT    NOT NULL DEFAULT '',
+    created_at        TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS forum_wallets (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    balance REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS forum_wallet_transactions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    change      REAL    NOT NULL DEFAULT 0,
+    kind        TEXT    NOT NULL DEFAULT '',
+    note        TEXT    NOT NULL DEFAULT '',
+    source_type TEXT    NOT NULL DEFAULT '',
+    source_id   INTEGER,
+    created_at  TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS forum_mutes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    muted_until   TEXT    NOT NULL DEFAULT '',
+    reason        TEXT    NOT NULL DEFAULT '',
+    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    status        TEXT    NOT NULL DEFAULT '生效',
+    created_at    TEXT    NOT NULL DEFAULT ''
+);
+
 -- 固定课表：每周几、几点、哪个等级，哪些孩子
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -296,6 +471,8 @@ CREATE TABLE IF NOT EXISTS users (
     role          TEXT    NOT NULL DEFAULT 'teacher',
     phone         TEXT    NOT NULL DEFAULT '',
     is_teacher    INTEGER NOT NULL DEFAULT 1,
+    student_id    INTEGER REFERENCES students(id) ON DELETE CASCADE,
+    forum_nickname TEXT   NOT NULL DEFAULT '',
     active        INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT    NOT NULL DEFAULT ''
 );
@@ -378,6 +555,8 @@ def init_db() -> None:
         con.executescript(SCHEMA)
         _migrate(con)
         _seed(con)
+        _seed_default_course_package(con)
+    advance_student_grades()
     ensure_default_admin()
 
 
@@ -443,6 +622,12 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE payments ADD COLUMN voucher_id INTEGER REFERENCES vouchers(id)")
     if "voucher_amount" not in pay_columns:
         con.execute("ALTER TABLE payments ADD COLUMN voucher_amount REAL NOT NULL DEFAULT 0")
+    _ensure_column(
+        con,
+        "payments",
+        "package_id",
+        "INTEGER REFERENCES course_packages(id) ON DELETE SET NULL",
+    )
     if "warn" not in hour_columns:
         con.execute("ALTER TABLE hour_types ADD COLUMN warn INTEGER NOT NULL DEFAULT 0")
         # 默认只有正课提醒
@@ -460,6 +645,16 @@ def _migrate(con: sqlite3.Connection) -> None:
     con.execute("UPDATE students SET status = '在读' WHERE status = '结课'")
     # 监护人姓名
     _ensure_column(con, "students", "guardian", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "students", "birth_date", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "students", "grade_auto", "INTEGER NOT NULL DEFAULT 0")
+    if _ensure_column(
+        con, "students", "grade_academic_year", "INTEGER NOT NULL DEFAULT 0"
+    ):
+        # 老数据不猜过去升了几年级；从当前学年开始建立基准。
+        con.execute(
+            "UPDATE students SET grade_academic_year = ? WHERE grade_academic_year = 0",
+            (_academic_year(),),
+        )
     # 归属老师是不是手动钉住的（钉住以后不再跟着缴费自动变）
     _ensure_column(con, "students", "owner_manual", "INTEGER NOT NULL DEFAULT 0")
     # 老的"一笔缴费一种课时"拆成明细行
@@ -477,23 +672,125 @@ def _migrate(con: sqlite3.Connection) -> None:
                 )
     # ---- 老师与归属：老库补字段（新库在 SCHEMA 里已经有了）
     _ensure_column(con, "users", "phone", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(
+        con,
+        "users",
+        "student_id",
+        "INTEGER REFERENCES students(id) ON DELETE CASCADE",
+    )
+    _ensure_column(con, "users", "forum_nickname", "TEXT NOT NULL DEFAULT ''")
+    _backfill_forum_nicknames(con)
     if _ensure_column(con, "users", "is_teacher", "INTEGER NOT NULL DEFAULT 1"):
         # 老库里的管理员不一定是上课老师，先不列进"归属老师"下拉，需要的话在设置里勾上
         con.execute("UPDATE users SET is_teacher = 0 WHERE role = 'root'")
     _ensure_column(con, "students", "owner_teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "levels", "default_teacher_id", "INTEGER REFERENCES users(id)")
+    _ensure_column(con, "levels", "level_type", "TEXT NOT NULL DEFAULT '正课'")
+    _ensure_column(con, "levels", "badge_category", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "levels", "badge_exam_level", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(
+        con,
+        "student_badges",
+        "level_id",
+        "INTEGER REFERENCES levels(id) ON DELETE SET NULL",
+    )
+    con.execute(
+        """UPDATE levels SET level_type = '竞赛'
+            WHERE level_type = '正课'
+              AND (badge_category = '竞赛' OR subject LIKE '%竞赛%' OR name LIKE '%竞赛%')"""
+    )
+    con.execute(
+        """UPDATE levels SET level_type = '考级'
+            WHERE level_type = '正课'
+              AND (badge_category = '考级' OR subject LIKE '%考级%' OR name LIKE '%考级%')"""
+    )
+    con.execute(
+        """UPDATE levels SET level_type = '社团'
+            WHERE level_type = '正课'
+              AND (subject LIKE '%社团%' OR name LIKE '%社团%')"""
+    )
+    con.execute(
+        """UPDATE levels SET level_type = '托管'
+            WHERE level_type = '正课'
+              AND (subject LIKE '%托管%' OR name LIKE '%托管%')"""
+    )
+    # 类型已经选成竞赛／考级的历史等级，同步补上旧徽章关联字段，
+    # 让新版「竞赛考级」目录能直接识别。
+    con.execute(
+        """UPDATE levels SET badge_category = level_type
+            WHERE level_type IN ('竞赛', '考级') AND badge_category = ''"""
+    )
+    # 旧版把社团课型叫「校内社团」，现在统一显示为「社团」。
+    # 如果库里已经同时有两个名字，就把旧名下的记录并到「社团」再删旧项。
+    legacy_club = con.execute(
+        "SELECT id FROM class_types WHERE name = '校内社团'"
+    ).fetchone()
+    current_club = con.execute(
+        "SELECT id FROM class_types WHERE name = '社团'"
+    ).fetchone()
+    if legacy_club is not None:
+        legacy_id = int(legacy_club["id"])
+        if current_club is None:
+            con.execute(
+                "UPDATE class_types SET name = '社团' WHERE id = ?",
+                (legacy_id,),
+            )
+        else:
+            current_id = int(current_club["id"])
+            for table in ("enrollments", "schedule_templates", "lessons"):
+                con.execute(
+                    f"UPDATE {table} SET class_type_id = ? WHERE class_type_id = ?",
+                    (current_id, legacy_id),
+                )
+            con.execute(
+                "DELETE FROM class_types WHERE id = ?",
+                (legacy_id,),
+            )
     _ensure_column(con, "enrollments", "owner_teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "lessons", "teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "attendance", "owner_teacher_id", "INTEGER REFERENCES users(id)")
+    _ensure_column(
+        con, "attendance", "performance_score", "REAL NOT NULL DEFAULT 0"
+    )
+    _ensure_column(
+        con, "attendance", "discipline_score", "REAL NOT NULL DEFAULT 0"
+    )
+    _ensure_column(con, "attendance", "bonus_reason", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(
+        con, "attendance", "poor_discipline_reason", "TEXT NOT NULL DEFAULT ''"
+    )
+    _ensure_column(
+        con, "attendance", "poor_performance_reason", "TEXT NOT NULL DEFAULT ''"
+    )
     _ensure_column(con, "payments", "teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "payment_items", "owner_teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "trials", "owner_teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "schedule_templates", "teacher_id", "INTEGER REFERENCES users(id)")
+    _ensure_column(con, "help_tickets", "cost_points", "REAL NOT NULL DEFAULT 0")
+    _ensure_column(con, "help_tickets", "rejected_reason", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(
+        con,
+        "forum_bounties",
+        "target_user_id",
+        "INTEGER REFERENCES users(id) ON DELETE SET NULL",
+    )
+    _ensure_column(
+        con, "forum_bounties", "penalty_points", "REAL NOT NULL DEFAULT 0"
+    )
+    _ensure_column(
+        con, "forum_bounties", "moderation_note", "TEXT NOT NULL DEFAULT ''"
+    )
+    con.execute(
+        "UPDATE help_tickets SET status = '已完成' WHERE status = '已回复'"
+    )
+    con.execute(
+        "UPDATE help_tickets SET status = '已完成' WHERE status = '已关闭'"
+    )
     # ---- 班级：固定课表升级成正式班级，报名挂到班级上
     _ensure_column(con, "schedule_templates", "name", "TEXT NOT NULL DEFAULT ''")
     # 等级可以"停用"：不再出现在新建课程／报名／缴费的下拉里，老记录照旧
     _ensure_column(con, "levels", "active", "INTEGER NOT NULL DEFAULT 1")
-    # 课程名的规范字段：年份-学期-等级-Cls-序号
+    # 课程名的规范字段：年份-学期-等级-类别-Cls-序号
     _ensure_column(con, "schedule_templates", "year", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "schedule_templates", "term", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "schedule_templates", "seq", "INTEGER NOT NULL DEFAULT 0")
@@ -514,6 +811,18 @@ def _migrate(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_payitem_owner ON payment_items(owner_teacher_id)",
         "CREATE INDEX IF NOT EXISTS idx_payitem_enroll ON payment_items(enrollment_id)",
         "CREATE INDEX IF NOT EXISTS idx_trials_owner ON trials(owner_teacher_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student "
+        "ON users(student_id) WHERE student_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_forum_nickname "
+        "ON users(forum_nickname) WHERE forum_nickname <> ''",
+        "CREATE INDEX IF NOT EXISTS idx_help_student ON help_tickets(student_id)",
+        "CREATE INDEX IF NOT EXISTS idx_help_status ON help_tickets(status)",
+        "CREATE INDEX IF NOT EXISTS idx_forum_bounty_status ON forum_bounties(status)",
+        "CREATE INDEX IF NOT EXISTS idx_forum_answer_bounty ON forum_answers(bounty_id)",
+        "CREATE INDEX IF NOT EXISTS idx_forum_wallet_user ON forum_wallet_transactions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_forum_mutes_user ON forum_mutes(user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_student_badges_student "
+        "ON student_badges(student_id, category)",
     ):
         con.execute(statement)
     # 课程名唯一（空名字的老课程不算，等管理员起名）
@@ -528,6 +837,22 @@ def _migrate(con: sqlite3.Connection) -> None:
     _backfill_course_name_parts(con)
     backfill_teacher_attribution(con)
     backfill_enrollment_classes(con)
+    # 旧规则给低于 3000 元的手动缴费也发过券。未使用的那类券自动收回；
+    # 已经使用过的券保留，避免破坏已有缴费和报表记录。
+    con.execute(
+        """DELETE FROM vouchers
+            WHERE id NOT IN (
+                SELECT voucher_id FROM payments WHERE voucher_id IS NOT NULL
+            )
+              AND payment_id IN (
+                SELECT p.id
+                  FROM payments p
+                  LEFT JOIN course_packages cp ON cp.id = p.package_id
+                 WHERE p.package_id IS NULL
+                   AND p.amount < ?
+              )""",
+        (VOUCHER_MIN_PACKAGE_PRICE,),
+    )
     # 学员的总体状态跟着课程走（有在读就是在读）
     for row in con.execute("SELECT DISTINCT student_id FROM enrollments").fetchall():
         refresh_student(int(row["student_id"]), con)
@@ -686,7 +1011,7 @@ _COURSE_PREFIX_RE = re.compile(r"^\s*(\d{4})\s*-\s*(\d+)\s*-")
 
 
 def parse_course_name(name: str) -> dict:
-    """把 2026-2-STEM-Lvl-02-Cls-01 拆成 年份／学期／等级／序号。"""
+    """把 2026-2-STEM-Lvl-02-正课-Cls-01 拆成年份／学期／等级／序号。"""
     m = _COURSE_NAME_RE.match(name or "")
     if not m:
         return {}
@@ -699,7 +1024,7 @@ def parse_course_name(name: str) -> dict:
 
 
 def make_course_name(year: str, term: str, level_text: str, seq: int) -> str:
-    """课程名的规范写法：2026-2-STEM-Lvl-02-Cls-01。"""
+    """课程名的规范写法：2026-2-STEM-Lvl-02-正课-Cls-01。"""
     return (
         f"{(year or '').strip()}-{(term or '').strip()}-"
         f"{(level_text or '').strip()}-Cls-{int(seq or 1):02d}"
@@ -762,12 +1087,12 @@ def next_course_seq(
 
 
 def normalize_course_names() -> int:
-    """把现有课程名统一成 年份-学期-等级-Cls-序号。返回改了几门。"""
+    """把现有课程名统一成 年份-学期-等级-类别-Cls-序号。返回改了几门。"""
     changed = 0
     with _connect() as con:
         _backfill_course_name_parts(con)
         rows = con.execute(
-            """SELECT t.*, l.subject, l.name AS level_name
+            """SELECT t.*, l.subject, l.name AS level_name, l.level_type
                  FROM schedule_templates t
                  LEFT JOIN levels l ON l.id = t.level_id
                 ORDER BY t.id"""
@@ -782,6 +1107,9 @@ def normalize_course_names() -> int:
             subject = (row["subject"] or "").strip()
             level_name = (row["level_name"] or "").strip()
             level_text = f"{subject}-{level_name}" if subject else level_name
+            category = (row["level_type"] or "").strip()
+            if category:
+                level_text = f"{level_text}-{category}"
             if not (row["year"] and row["term"] and level_text and row["seq"]):
                 continue
             seq = int(row["seq"])
@@ -1270,16 +1598,146 @@ def _seed(con: sqlite3.Connection) -> None:
             ),
         )
     for i, (subject, name, minutes) in enumerate(DEFAULT_LEVELS):
+        label = f"{subject}{name}"
+        level_type = (
+            "竞赛"
+            if "竞赛" in label
+            else "考级"
+            if "考级" in label
+            else "社团"
+            if "社团" in label
+            else "托管"
+            if "托管" in label
+            else "正课"
+        )
         con.execute(
-            """INSERT OR IGNORE INTO levels(subject, name, default_minutes, sort)
-               VALUES(?, ?, ?, ?)""",
-            (subject, name, minutes, i),
+            """INSERT OR IGNORE INTO levels
+                   (subject, name, level_type, badge_category,
+                    default_minutes, sort)
+               VALUES(?, ?, ?, ?, ?, ?)""",
+            (
+                subject,
+                name,
+                level_type,
+                level_type if level_type in BADGE_CATEGORIES else "",
+                minutes,
+                i,
+            ),
         )
     con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('seeded', '1')")
 
 
+def _seed_default_course_package(con: sqlite3.Connection) -> None:
+    """首次升级时预置一个 3000 元固定课包，只写一次。"""
+    if con.execute(
+        "SELECT 1 FROM meta WHERE key = 'default_course_package_seeded'"
+    ).fetchone():
+        return
+    hours = {
+        r["name"]: int(r["id"])
+        for r in con.execute("SELECT id, name FROM hour_types")
+    }
+    needed = ("正课", "考级", "竞赛")
+    if not all(name in hours for name in needed):
+        return
+    cur = con.execute(
+        """INSERT INTO course_packages(name, price, active, note, created_at)
+           VALUES(?, ?, 1, ?, ?)""",
+        (
+            "3000 元固定课包",
+            3000.0,
+            "正课 24 课时，赠送考级 1 课时、竞赛 1 课时",
+            _today(),
+        ),
+    )
+    package_id = int(cur.lastrowid)
+    for sort, (name, count) in enumerate(
+        (("正课", 24.0), ("考级", 1.0), ("竞赛", 1.0))
+    ):
+        con.execute(
+            """INSERT INTO course_package_items
+                   (package_id, hour_type_id, hours, sort)
+               VALUES(?, ?, ?, ?)""",
+            (package_id, hours[name], count, sort),
+        )
+    con.execute(
+        "INSERT OR REPLACE INTO meta(key, value) "
+        "VALUES('default_course_package_seeded', '1')"
+    )
+
+
 def _today() -> str:
     return date.today().isoformat()
+
+
+def _academic_year(on_date: date | str | None = None) -> int:
+    """9 月开学；1～8 月仍属于上一年开始的学年。"""
+    if isinstance(on_date, str) and on_date:
+        try:
+            day = date.fromisoformat(on_date)
+        except ValueError:
+            day = date.today()
+    elif isinstance(on_date, date):
+        day = on_date
+    else:
+        day = date.today()
+    return day.year if day.month >= 9 else day.year - 1
+
+
+def grade_from_birth_date(
+    birth_date: str, on_date: date | str | None = None
+) -> str:
+    """按 8 月 31 日前满 6 岁入一年级，计算当前学年应在的年级。"""
+    try:
+        born = date.fromisoformat((birth_date or "").strip())
+    except ValueError:
+        return ""
+    entry_year = born.year + (6 if (born.month, born.day) <= (8, 31) else 7)
+    index = _academic_year(on_date) - entry_year
+    if index < 0:
+        return ""
+    return GRADE_OPTIONS[min(index, len(GRADE_OPTIONS) - 1)]
+
+
+def advance_student_grades(on_date: date | str | None = None) -> int:
+    """按学年自动升年级；同一年级只升一次，初三毕业后保持初三。"""
+    target_year = _academic_year(on_date)
+    changed = 0
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT id, grade, grade_academic_year, birth_date, grade_auto "
+            "FROM students"
+        ).fetchall()
+        for row in rows:
+            grade = row["grade"] or ""
+            current_year = int(row["grade_academic_year"] or 0)
+            if row["birth_date"]:
+                inferred = grade_from_birth_date(row["birth_date"], on_date)
+                if inferred != grade or current_year != target_year:
+                    con.execute(
+                        """UPDATE students
+                              SET grade = ?, grade_academic_year = ?
+                            WHERE id = ?""",
+                        (inferred, target_year, row["id"]),
+                    )
+                    changed += 1
+                continue
+            if current_year <= 0:
+                con.execute(
+                    "UPDATE students SET grade_academic_year = ? WHERE id = ?",
+                    (target_year, row["id"]),
+                )
+                continue
+            if target_year <= current_year:
+                continue
+            for _ in range(target_year - current_year):
+                grade = GRADE_PROGRESSION.get(grade, grade)
+            con.execute(
+                "UPDATE students SET grade = ?, grade_academic_year = ? WHERE id = ?",
+                (grade, target_year, row["id"]),
+            )
+            changed += 1
+    return changed
 
 
 # -------------------------------------------------------------------- 学员档案
@@ -1290,6 +1748,80 @@ def _hash_password(password: str, salt: str) -> str:
     ).hex()
 
 
+def _forum_nickname_for(con: sqlite3.Connection, user_id: int) -> str:
+    """按账号 ID 生成稳定、唯一、与真实姓名无关的论坛昵称。"""
+    index = max(0, int(user_id) - 1)
+    adjective = FORUM_ADJECTIVES[index % len(FORUM_ADJECTIVES)]
+    noun = FORUM_NOUNS[(index * 7) % len(FORUM_NOUNS)]
+    base = f"{adjective}{noun}"
+    candidate = base
+    suffix = 2
+    while con.execute(
+        "SELECT 1 FROM users WHERE forum_nickname = ? AND id <> ?",
+        (candidate, int(user_id)),
+    ).fetchone():
+        candidate = f"{base}{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _backfill_forum_nicknames(con: sqlite3.Connection) -> None:
+    for row in con.execute(
+        "SELECT id FROM users WHERE forum_nickname = '' ORDER BY id"
+    ).fetchall():
+        con.execute(
+            "UPDATE users SET forum_nickname = ? WHERE id = ?",
+            (_forum_nickname_for(con, int(row["id"])), int(row["id"])),
+        )
+
+
+def update_forum_nickname(
+    user_id: int, nickname: str, actor_user_id: int | None = None
+) -> str:
+    """修改论坛昵称；本人或管理员可操作，昵称需唯一且不暴露真实信息。"""
+    actor_id = int(actor_user_id or user_id)
+    actor = _forum_user(actor_id)
+    if actor.get("role") != ROLE_ROOT and actor_id != int(user_id):
+        raise ValueError("只能修改自己的论坛昵称")
+    target = _forum_user(user_id)
+    text = (nickname or "").strip()
+    if not re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9_]{2,16}", text):
+        raise ValueError("昵称需为 2～16 个汉字、字母、数字或下划线")
+    lowered = text.casefold()
+    if any(word.casefold() in lowered for word in FORUM_NICKNAME_BLOCKED_WORDS):
+        raise ValueError("昵称包含不文明用语")
+    student = get_student(int(target["student_id"])) if target.get("student_id") else None
+    private_values = [
+        target.get("display_name") or "",
+        target.get("username") or "",
+        (student or {}).get("name") or "",
+    ]
+    if any(
+        len(value.strip()) >= 2 and value.strip().casefold() in lowered
+        for value in private_values
+    ):
+        raise ValueError("昵称不能包含真实姓名或登录账号")
+    phone = (target.get("phone") or "") or ((student or {}).get("phone") or "")
+    phone_digits = re.sub(r"\D", "", phone)
+    if re.search(r"\d{7,}", text) or (
+        len(phone_digits) >= 7 and phone_digits in text
+    ):
+        raise ValueError("昵称不能包含联系方式")
+    with _connect() as con:
+        duplicate = con.execute(
+            """SELECT id FROM users
+                WHERE forum_nickname = ? COLLATE NOCASE AND id <> ?""",
+            (text, int(user_id)),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError("这个昵称已经被使用了")
+        con.execute(
+            "UPDATE users SET forum_nickname = ? WHERE id = ?",
+            (text, int(user_id)),
+        )
+    return text
+
+
 def ensure_default_admin() -> None:
     """第一次运行时建一个管理员账号。"""
     with _connect() as con:
@@ -1297,7 +1829,7 @@ def ensure_default_admin() -> None:
         if int(row["c"] or 0) > 0:
             return
         salt = secrets.token_hex(8)
-        con.execute(
+        cur = con.execute(
             """INSERT INTO users
                    (username, password_hash, salt, display_name, role, is_teacher, created_at)
                VALUES(?, ?, ?, ?, 'root', 0, ?)""",
@@ -1308,6 +1840,11 @@ def ensure_default_admin() -> None:
                 "管理员",
                 _today(),
             ),
+        )
+        user_id = int(cur.lastrowid)
+        con.execute(
+            "UPDATE users SET forum_nickname = ? WHERE id = ?",
+            (_forum_nickname_for(con, user_id), user_id),
         )
 
 
@@ -1338,6 +1875,73 @@ def list_users() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_student_user(student_id: int) -> dict | None:
+    with _connect() as con:
+        row = con.execute(
+            "SELECT * FROM users WHERE student_id = ?", (student_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def ensure_student_account(
+    student_id: int, initial_password: str | None = None
+) -> tuple[dict, str | None]:
+    """确保正式学员有一个学生账号；返回账号和本次生成的初始密码。"""
+    student = get_student(student_id)
+    if student is None:
+        raise ValueError("学员不存在")
+    existing = get_student_user(student_id)
+    if existing is not None:
+        return existing, None
+    birth_date = (student.get("birth_date") or "").strip()
+    password = initial_password or (
+        birth_date.replace("-", "")
+        if birth_date
+        else str(secrets.randbelow(90_000_000) + 10_000_000)
+    )
+    base = slugify(student["name"], separator="").lower() or f"student{int(student_id)}"
+    username = base
+    suffix = 2
+    while True:
+        try:
+            user_id = create_user(
+                username,
+                password,
+                student["name"],
+                ROLE_STUDENT,
+                is_teacher=False,
+                student_id=int(student_id),
+            )
+            break
+        except ValueError as err:
+            if "用户名已经有了" not in str(err):
+                raise
+            username = f"{base}{suffix}"
+            suffix += 1
+    account = get_user(user_id)
+    if account is None:
+        raise ValueError("学生账号创建失败")
+    return account, password
+
+
+def create_missing_student_accounts() -> list[dict]:
+    """给所有还没有账号的正式学员补账号，返回本次生成的账号密码。"""
+    created = []
+    for student in list_students():
+        if get_student_user(student["id"]) is not None:
+            continue
+        account, password = ensure_student_account(student["id"])
+        created.append(
+            {
+                "student_id": int(student["id"]),
+                "name": student["name"],
+                "username": account["username"],
+                "password": password or "",
+            }
+        )
+    return created
+
+
 def list_teachers(active_only: bool = True) -> list[dict]:
     """能当「归属老师／上课老师」的人：账号里勾了"上课老师"的。
 
@@ -1366,6 +1970,7 @@ def create_user(
     role: str = ROLE_TEACHER,
     phone: str = "",
     is_teacher: bool | None = None,
+    student_id: int | None = None,
 ) -> int:
     username = (username or "").strip()
     if not username:
@@ -1373,6 +1978,12 @@ def create_user(
     if not password:
         raise ValueError("密码不能为空")
     role = role if role in ROLE_NAMES else ROLE_TEACHER
+    if role == ROLE_STUDENT:
+        if not student_id or get_student(int(student_id)) is None:
+            raise ValueError("学生账号必须绑定一个学员")
+        is_teacher = False
+    elif student_id:
+        raise ValueError("只有学生账号才能绑定学员")
     if is_teacher is None:
         is_teacher = role == ROLE_TEACHER
     salt = secrets.token_hex(8)
@@ -1382,11 +1993,17 @@ def create_user(
         ).fetchone()
         if exists:
             raise ValueError("这个用户名已经有了")
+        if student_id:
+            linked = con.execute(
+                "SELECT id FROM users WHERE student_id = ?", (int(student_id),)
+            ).fetchone()
+            if linked is not None:
+                raise ValueError("这个学员已经有账号了")
         cur = con.execute(
             """INSERT INTO users
                    (username, password_hash, salt, display_name, role, phone,
-                    is_teacher, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                    is_teacher, student_id, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 username,
                 _hash_password(password, salt),
@@ -1395,10 +2012,16 @@ def create_user(
                 role,
                 (phone or "").strip(),
                 1 if is_teacher else 0,
+                int(student_id) if student_id else None,
                 _today(),
             ),
         )
-        return int(cur.lastrowid)
+        user_id = int(cur.lastrowid)
+        con.execute(
+            "UPDATE users SET forum_nickname = ? WHERE id = ?",
+            (_forum_nickname_for(con, user_id), user_id),
+        )
+        return user_id
 
 
 def set_user_password(user_id: int, password: str) -> None:
@@ -1423,10 +2046,13 @@ def update_user(
     role = role if role in ROLE_NAMES else ROLE_TEACHER
     with _connect() as con:
         current = con.execute(
-            "SELECT is_teacher FROM users WHERE id = ?", (user_id,)
+            "SELECT is_teacher, student_id FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         if is_teacher is None:
             is_teacher = bool(current["is_teacher"]) if current else True
+        if current is not None and current["student_id"]:
+            role = ROLE_STUDENT
+            is_teacher = False
         if role != ROLE_ROOT or not active:
             roots = con.execute(
                 "SELECT COUNT(*) AS c FROM users WHERE role = 'root' AND active = 1 AND id != ?",
@@ -1613,13 +2239,17 @@ def create_student(data: dict) -> int:
     with _connect() as con:
         cur = con.execute(
             """INSERT INTO students
-                   (name, gender, grade, school, phone, guardian, note, status,
+                   (name, gender, grade, grade_academic_year, birth_date, grade_auto,
+                    school, phone, guardian, note, status,
                     owner_teacher_id, owner_manual, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name,
                 data.get("gender", ""),
                 data.get("grade", ""),
+                _academic_year(),
+                data.get("birth_date", ""),
+                1 if data.get("birth_date") else 0,
                 data.get("school", ""),
                 data.get("phone", ""),
                 data.get("guardian", ""),
@@ -1639,26 +2269,42 @@ def update_student(student_id: int, data: dict) -> None:
         raise ValueError("姓名不能为空")
     with _connect() as con:
         # 归属老师现在是跟着课程算的，表单里不再填；没传就别动它
+        current_owner = con.execute(
+            "SELECT owner_teacher_id, owner_manual, grade, grade_academic_year, "
+            "birth_date, grade_auto "
+            "FROM students WHERE id = ?",
+            (student_id,),
+        ).fetchone()
         if "owner_teacher_id" in data:
             owner = data.get("owner_teacher_id")
             manual = 1 if data.get("owner_manual") else 0
         else:
-            current = con.execute(
-                "SELECT owner_teacher_id, owner_manual FROM students WHERE id = ?",
-                (student_id,),
-            ).fetchone()
-            owner = current["owner_teacher_id"] if current is not None else None
-            manual = int(current["owner_manual"] or 0) if current is not None else 0
+            owner = current_owner["owner_teacher_id"] if current_owner is not None else None
+            manual = int(current_owner["owner_manual"] or 0) if current_owner is not None else 0
+        new_grade = data.get("grade", "")
+        birth_date = data.get(
+            "birth_date",
+            current_owner["birth_date"] if current_owner is not None else "",
+        )
+        grade_year = (
+            _academic_year()
+            if current_owner is None or new_grade != (current_owner["grade"] or "")
+            else int(current_owner["grade_academic_year"] or _academic_year())
+        )
         con.execute(
             """UPDATE students
-                  SET name = ?, gender = ?, grade = ?, school = ?, phone = ?,
+                  SET name = ?, gender = ?, grade = ?, grade_academic_year = ?,
+                      birth_date = ?, grade_auto = ?, school = ?, phone = ?,
                       guardian = ?, note = ?, status = ?, owner_teacher_id = ?,
                       owner_manual = ?
                 WHERE id = ?""",
             (
                 name,
                 data.get("gender", ""),
-                data.get("grade", ""),
+                new_grade,
+                grade_year,
+                birth_date,
+                1 if birth_date else 0,
                 data.get("school", ""),
                 data.get("phone", ""),
                 data.get("guardian", ""),
@@ -1677,6 +2323,264 @@ def update_student(student_id: int, data: dict) -> None:
 def delete_student(student_id: int) -> None:
     with _connect() as con:
         con.execute("DELETE FROM students WHERE id = ?", (student_id,))
+
+
+def list_student_badges(student_id: int) -> list[dict]:
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT * FROM student_badges
+                WHERE student_id = ?
+                ORDER BY happened_on DESC, id DESC""",
+            (int(student_id),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _linked_badge_student_ids(
+    con: sqlite3.Connection, level_id: int
+) -> list[int]:
+    """和竞赛／考级级别关联过的学员。
+
+    报名、缴费、课次和已有徽章都算关联；这样先缴费、后补报名，
+    或者直接按课次参加过比赛的孩子，也不会从颁发名单里漏掉。
+    """
+    rows = con.execute(
+        """SELECT student_id FROM enrollments WHERE level_id = ?
+           UNION
+           SELECT p.student_id
+             FROM payment_items pi
+             JOIN payments p ON p.id = pi.payment_id
+            WHERE pi.level_id = ?
+           UNION
+           SELECT a.student_id
+             FROM attendance a
+             JOIN lessons l ON l.id = a.lesson_id
+            WHERE l.level_id = ?
+           UNION
+           SELECT student_id FROM student_badges WHERE level_id = ?""",
+        (int(level_id),) * 4,
+    ).fetchall()
+    return sorted({int(row["student_id"]) for row in rows})
+
+
+def list_badge_level_participants(level_id: int) -> list[dict]:
+    """竞赛／考级目录里，这个级别已关联的学员。"""
+    with _connect() as con:
+        student_ids = _linked_badge_student_ids(con, level_id)
+        if not student_ids:
+            return []
+        marks = ",".join("?" for _ in student_ids)
+        rows = con.execute(
+            f"""SELECT s.id, s.name, s.grade, s.school, s.status,
+                       u.display_name AS owner_teacher_name
+                  FROM students s
+                  LEFT JOIN users u ON u.id = s.owner_teacher_id
+                 WHERE s.id IN ({marks})
+                 ORDER BY CASE s.status WHEN '在读' THEN 0 ELSE 1 END, s.name""",
+            student_ids,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_level_badges(level_id: int) -> list[dict]:
+    """某个竞赛／考级级别下已经颁发的徽章。"""
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT sb.*, s.name AS student_name
+                 FROM student_badges sb
+                 JOIN students s ON s.id = sb.student_id
+                WHERE sb.level_id = ?
+                ORDER BY sb.happened_on DESC, sb.id DESC""",
+            (int(level_id),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_badge_awards_for_level(
+    level_id: int,
+    title: str,
+    awards: dict[int, str],
+    happened_on: str,
+    note: str = "",
+) -> int:
+    """按一个已关联级别，一次给多名学员颁发比赛／考级结果。
+
+    同一级别、同一名称、同一日期重复提交时更新原结果，不重复生成徽章。
+    """
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("请填写比赛或考级名称")
+    day = (happened_on or "").strip()
+    if not day:
+        raise ValueError("请填写比赛或考级日期")
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise ValueError("日期写成 2026-10-22 这样")
+    if not awards:
+        raise ValueError("请至少勾选一名学员")
+
+    with _connect() as con:
+        level = con.execute(
+            "SELECT * FROM levels WHERE id = ? AND active = 1",
+            (int(level_id),),
+        ).fetchone()
+        if level is None:
+            raise ValueError("这个竞赛／考级级别不存在或已停用")
+        category = badge_category_for_level(level)
+        if not category:
+            raise ValueError("这个级别没有关联竞赛或考级徽章")
+        allowed_results = (
+            COMPETITION_RESULTS if category == "竞赛" else EXAM_RESULTS
+        )
+        linked_ids = set(_linked_badge_student_ids(con, int(level_id)))
+        cleaned: list[tuple[int, str]] = []
+        for raw_student_id, raw_result in awards.items():
+            student_id = int(raw_student_id)
+            result = (raw_result or "").strip()
+            if student_id not in linked_ids:
+                raise ValueError("有学员没有关联到这个竞赛／考级级别")
+            if result not in allowed_results:
+                raise ValueError("请选择有效的比赛或考级结果")
+            cleaned.append((student_id, result))
+
+        level_name = (
+            level["badge_exam_level"]
+            if category == "考级"
+            else (level["name"] or "")
+        )
+        if category == "考级" and level_name not in EXAM_LEVELS:
+            raise ValueError("这个考级级别还没有配置 1～4 级")
+        for student_id, result in cleaned:
+            existing = con.execute(
+                """SELECT id FROM student_badges
+                    WHERE student_id = ? AND category = ? AND level_id = ?
+                      AND title = ? AND happened_on = ?
+                    ORDER BY id DESC LIMIT 1""",
+                (student_id, category, int(level_id), title, day),
+            ).fetchone()
+            if existing is not None:
+                con.execute(
+                    """UPDATE student_badges
+                          SET level_name = ?, result = ?, note = ?
+                        WHERE id = ?""",
+                    (
+                        level_name,
+                        result,
+                        (note or "").strip(),
+                        int(existing["id"]),
+                    ),
+                )
+            else:
+                con.execute(
+                    """INSERT INTO student_badges
+                           (student_id, category, level_id, title, level_name,
+                            result, happened_on, note, created_at)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        student_id,
+                        category,
+                        int(level_id),
+                        title,
+                        level_name,
+                        result,
+                        day,
+                        (note or "").strip(),
+                        _today(),
+                    ),
+                )
+    return len(cleaned)
+
+
+def save_student_badge(
+    student_id: int,
+    category: str,
+    title: str,
+    level_name: str,
+    result: str,
+    happened_on: str,
+    note: str = "",
+    badge_id: int | None = None,
+    level_id: int | None = None,
+) -> int:
+    category = category if category in BADGE_CATEGORIES else ""
+    if not category:
+        raise ValueError("请选择竞赛或考级")
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("请填写比赛或考级名称")
+    allowed_results = (
+        COMPETITION_RESULTS if category == "竞赛" else EXAM_RESULTS
+    )
+    result = (result or "").strip()
+    if result not in allowed_results:
+        raise ValueError("请选择有效的结果")
+    level_name = (level_name or "").strip()
+    if category == "考级" and level_name not in EXAM_LEVELS:
+        raise ValueError("考级级别只能是 1级、2级、3级、4级")
+    day = (happened_on or "").strip()
+    if day:
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            raise ValueError("日期写成 2026-10-22 这样")
+    with _connect() as con:
+        if level_id:
+            linked = con.execute(
+                """SELECT badge_category, badge_exam_level, active
+                     FROM levels WHERE id = ?""",
+                (int(level_id),),
+            ).fetchone()
+            if (
+                linked is None
+                or not linked["active"]
+                or linked["badge_category"] != category
+            ):
+                raise ValueError("关联等级与徽章类别不一致")
+            if category == "考级":
+                level_name = linked["badge_exam_level"] or level_name
+        if badge_id:
+            con.execute(
+                """UPDATE student_badges
+                      SET category = ?, title = ?, level_name = ?, result = ?,
+                          happened_on = ?, note = ?, level_id = ?
+                    WHERE id = ? AND student_id = ?""",
+                (
+                    category,
+                    title,
+                    level_name,
+                    result,
+                    day,
+                    (note or "").strip(),
+                    int(level_id) if level_id else None,
+                    int(badge_id),
+                    int(student_id),
+                ),
+            )
+            return int(badge_id)
+        cur = con.execute(
+            """INSERT INTO student_badges
+                   (student_id, category, level_id, title, level_name, result,
+                    happened_on, note, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(student_id),
+                category,
+                int(level_id) if level_id else None,
+                title,
+                level_name,
+                result,
+                day,
+                (note or "").strip(),
+                _today(),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def delete_student_badge(badge_id: int) -> None:
+    with _connect() as con:
+        con.execute("DELETE FROM student_badges WHERE id = ?", (int(badge_id),))
 
 
 # ------------------------------------------------------------------ 等级／课型
@@ -1727,21 +2631,64 @@ def level_full_name(row: sqlite3.Row | dict) -> str:
     return f"{subject}-{name}" if subject else name
 
 
+def level_display_name(row: sqlite3.Row | dict) -> str:
+    """界面和下拉里显示的等级名：科目-等级-类别。"""
+    base = level_full_name(row)
+    category = row["level_type"] if row["level_type"] else ""
+    if category not in LEVEL_TYPES:
+        category = badge_category_for_level(row)
+    if category and not base.endswith(f"-{category}"):
+        return f"{base}-{category}"
+    return base
+
+
+def badge_category_for_level(row: sqlite3.Row | dict) -> str:
+    """等级的竞赛／考级类别。
+
+    新版以 `level_type` 为准；同时兼容只写了旧 `badge_category`
+    字段的历史数据。
+    """
+    category = row["badge_category"] if row["badge_category"] else row["level_type"]
+    return category if category in BADGE_CATEGORIES else ""
+
+
 def create_level(
-    subject: str, name: str, minutes: int, default_teacher_id: int | None = None
+    subject: str,
+    name: str,
+    minutes: int,
+    default_teacher_id: int | None = None,
+    badge_category: str = "",
+    badge_exam_level: str = "",
+    level_type: str | None = None,
 ) -> int:
     name = (name or "").strip()
     if not name:
         raise ValueError("等级名称不能为空")
+    level_type = (
+        level_type
+        if level_type in LEVEL_TYPES
+        else (badge_category if badge_category in BADGE_CATEGORIES else "正课")
+    )
+    badge_category = level_type if level_type in BADGE_CATEGORIES else ""
+    badge_exam_level = (
+        badge_exam_level if badge_category == "考级" else ""
+    )
+    if badge_category == "考级" and badge_exam_level not in EXAM_LEVELS:
+        raise ValueError("考级徽章级别只能是 1级、2级、3级、4级")
     with _connect() as con:
         cur = con.execute(
-            """INSERT INTO levels(subject, name, default_minutes, default_teacher_id, sort)
-               VALUES(?, ?, ?, ?, 100)""",
+            """INSERT INTO levels
+                   (subject, name, level_type, default_minutes, default_teacher_id,
+                    badge_category, badge_exam_level, sort)
+               VALUES(?, ?, ?, ?, ?, ?, ?, 100)""",
             (
                 (subject or "").strip(),
                 name,
+                level_type,
                 int(minutes),
                 int(default_teacher_id) if default_teacher_id else None,
+                badge_category,
+                badge_exam_level,
             ),
         )
         return int(cur.lastrowid)
@@ -1753,20 +2700,39 @@ def update_level(
     name: str,
     minutes: int,
     default_teacher_id: int | None = None,
+    badge_category: str = "",
+    badge_exam_level: str = "",
+    level_type: str | None = None,
 ) -> None:
     name = (name or "").strip()
     if not name:
         raise ValueError("等级名称不能为空")
+    level_type = (
+        level_type
+        if level_type in LEVEL_TYPES
+        else (badge_category if badge_category in BADGE_CATEGORIES else "正课")
+    )
+    badge_category = level_type if level_type in BADGE_CATEGORIES else ""
+    badge_exam_level = (
+        badge_exam_level if badge_category == "考级" else ""
+    )
+    if badge_category == "考级" and badge_exam_level not in EXAM_LEVELS:
+        raise ValueError("考级徽章级别只能是 1级、2级、3级、4级")
     with _connect() as con:
         con.execute(
             """UPDATE levels
-                  SET subject = ?, name = ?, default_minutes = ?, default_teacher_id = ?
+                  SET subject = ?, name = ?, level_type = ?,
+                      default_minutes = ?, default_teacher_id = ?,
+                      badge_category = ?, badge_exam_level = ?
                 WHERE id = ?""",
             (
                 (subject or "").strip(),
                 name,
+                level_type,
                 int(minutes),
                 int(default_teacher_id) if default_teacher_id else None,
+                badge_category,
+                badge_exam_level,
                 level_id,
             ),
         )
@@ -1854,6 +2820,30 @@ def list_class_types() -> list[sqlite3.Row]:
         )
 
 
+def _class_type_id_for_level(
+    con: sqlite3.Connection, level_id: int
+) -> int | None:
+    """等级类别对应的课型 id。"""
+    row = con.execute(
+        "SELECT level_type FROM levels WHERE id = ?",
+        (int(level_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    name = row["level_type"] or "正课"
+    class_type = con.execute(
+        "SELECT id FROM class_types WHERE name = ?",
+        (name,),
+    ).fetchone()
+    return int(class_type["id"]) if class_type else None
+
+
+def class_type_id_for_level(level_id: int) -> int | None:
+    """界面上「课型不选」时，用来显示和保存等级对应的默认课型。"""
+    with _connect() as con:
+        return _class_type_id_for_level(con, level_id)
+
+
 def update_class_type(
     class_type_id: int,
     deduct: bool,
@@ -1880,7 +2870,8 @@ def update_class_type(
 def list_enrollments(student_id: int) -> list[dict]:
     with _connect() as con:
         rows = con.execute(
-            """SELECT e.*, l.subject, l.name AS level_name, l.default_minutes,
+            """SELECT e.*, l.subject, l.name AS level_name, l.level_type,
+                      l.default_minutes,
                       l.default_teacher_id AS level_teacher_id,
                       ct.name AS class_type_name,
                       u.display_name AS owner_teacher_name,
@@ -2385,7 +3376,20 @@ _LESSON_SELECT = """
               FROM attendance a WHERE a.lesson_id = l.id) AS attended_minutes,
            (SELECT COUNT(*) FROM attendance a
              WHERE a.lesson_id = l.id AND a.attendance = 1) AS attended_count,
-           (SELECT COALESCE(SUM((a.attendance + a.discipline + a.performance) * 10 + a.bonus), 0)
+           (SELECT COALESCE(SUM(
+                CASE WHEN a.attendance = 1 THEN
+                    10
+                       + CASE
+                             WHEN a.discipline = 1 THEN 10
+                             ELSE a.discipline_score
+                         END
+                       + CASE
+                             WHEN a.performance = 1 THEN 10
+                             ELSE a.performance_score
+                         END
+                       + a.bonus
+                ELSE 0 END
+            ), 0)
               FROM attendance a WHERE a.lesson_id = l.id) AS points
       FROM lessons l
       LEFT JOIN class_types ct ON ct.id = l.class_type_id
@@ -2676,13 +3680,86 @@ def add_attendance(
     return new_id
 
 
-_ATT_FIELDS = {"attendance", "discipline", "performance", "bonus", "minutes", "comment"}
+_ATT_FIELDS = {
+    "attendance",
+    "discipline",
+    "discipline_score",
+    "performance",
+    "performance_score",
+    "bonus",
+    "bonus_reason",
+    "poor_discipline_reason",
+    "poor_performance_reason",
+    "minutes",
+    "comment",
+}
+
+
+def discipline_points(a: dict) -> float:
+    """纪律好固定 10 分；纪律不好按老师填写的 -10 < x < 10 计分。"""
+    if int(a.get("discipline") or 0):
+        return float(ATTENDANCE_POINTS)
+    return float(a.get("discipline_score") or 0)
+
+
+def learning_points(a: dict) -> float:
+    """学习好固定 10 分；不好时按老师填写的 -10 < x < 10 计分。"""
+    if int(a.get("performance") or 0):
+        return float(ATTENDANCE_POINTS)
+    return float(a.get("performance_score") or 0)
+
+
+def attendance_points(a: dict) -> float:
+    """按一条点名记录算积分。"""
+    if not int(a.get("attendance") or 0):
+        return 0.0
+    return float(
+        ATTENDANCE_POINTS
+        + discipline_points(a)
+        + learning_points(a)
+        + float(a.get("bonus") or 0)
+    )
+
+
+def attendance_point_note(lesson_title: str, a: dict) -> str:
+    """积分流水的备注：上课标题加上纪律、学习和奖励原因。"""
+    parts = [lesson_title] if lesson_title else []
+    if not int(a.get("discipline") or 0):
+        reason = str(a.get("poor_discipline_reason") or "").strip()
+        score = num_text(discipline_points(a))
+        parts.append(
+            f"纪律不好（得分 {score}）：{reason}"
+            if reason
+            else f"纪律不好（得分 {score}）"
+        )
+    if not int(a.get("performance") or 0):
+        reason = str(a.get("poor_performance_reason") or "").strip()
+        score = num_text(learning_points(a))
+        parts.append(
+            f"学习不好（得分 {score}）：{reason}"
+            if reason
+            else f"学习不好（得分 {score}）"
+        )
+    if float(a.get("bonus") or 0):
+        reason = str(a.get("bonus_reason") or "").strip()
+        parts.append(f"突出发挥：{reason}" if reason else "突出发挥")
+    return " · ".join(parts)
 
 
 def update_attendance(attendance_id: int, **fields) -> None:
     data = {k: v for k, v in fields.items() if k in _ATT_FIELDS}
     if not data:
         return
+    for field, title in (
+        ("discipline_score", "纪律分"),
+        ("performance_score", "学习分"),
+    ):
+        if field not in data:
+            continue
+        score = float(data[field] or 0)
+        if not BEHAVIOR_SCORE_MIN < score < BEHAVIOR_SCORE_MAX:
+            raise ValueError(f"{title}必须大于 -10 且小于 10")
+        data[field] = score
     sql = ", ".join(f"{k} = ?" for k in data)
     with _connect() as con:
         row = con.execute(
@@ -2734,20 +3811,22 @@ def recompute_lesson(lesson_id: int) -> None:
         label = lesson_label(lesson)
         for a in rows:
             present = int(a["attendance"] or 0)
-            # 请假不算分：出勤为 0 时，后面三个勾和加分都不算
-            points = (
-                (present + int(a["discipline"] or 0) + int(a["performance"] or 0)) * 10
-                + float(a["bonus"] or 0)
-                if present
-                else 0.0
-            )
+            # 请假不算分；纪律或学习没勾时，使用老师填写的分数。
+            points = attendance_points(a)
             if points:
                 con.execute(
                     """INSERT INTO point_transactions
                            (student_id, change, kind, happened_on, note,
                             source_type, source_id, created_at)
                        VALUES(?, ?, '上课', ?, ?, 'lesson', ?, ?)""",
-                    (a["student_id"], float(points), day, label, lesson_id, _today()),
+                    (
+                        a["student_id"],
+                        float(points),
+                        day,
+                        attendance_point_note(label, a),
+                        lesson_id,
+                        _today(),
+                    ),
                 )
     # 课时按这个孩子的全部上课记录重算（先上课后缴费也能归位）
     for a in rows:
@@ -3002,7 +4081,10 @@ def points_balances() -> list[dict]:
 def student_recent_lessons(student_id: int, limit: int = 5) -> list[dict]:
     with _connect() as con:
         rows = con.execute(
-            """SELECT a.attendance, a.discipline, a.performance, a.bonus, a.minutes,
+            """SELECT a.attendance, a.discipline, a.discipline_score,
+                      a.performance, a.performance_score, a.bonus,
+                      a.bonus_reason, a.poor_discipline_reason,
+                      a.poor_performance_reason, a.minutes,
                       a.comment AS attendance_comment,
                       l.id AS lesson_id, l.lesson_date, l.start_time,
                       ct.name AS class_type_name, ct.deduct AS class_type_deduct,
@@ -3016,6 +4098,38 @@ def student_recent_lessons(student_id: int, limit: int = 5) -> list[dict]:
             (student_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def student_course_lessons(student_id: int, limit: int = 200) -> list[dict]:
+    """学生端课程记录：只取这个孩子自己的出勤、积分、课评和教案。"""
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT a.attendance, a.discipline, a.performance,
+                      a.discipline_score, a.performance_score,
+                      a.bonus, a.minutes,
+                      l.id AS lesson_id, l.lesson_date, l.start_time,
+                      l.comment, l.plan,
+                      ct.name AS class_type_name, ct.deduct AS class_type_deduct,
+                      lv.subject, lv.name AS level_name,
+                      t.name AS class_name,
+                      u.display_name AS teacher_name
+                 FROM attendance a
+                 JOIN lessons l ON l.id = a.lesson_id
+                 LEFT JOIN class_types ct ON ct.id = l.class_type_id
+                 LEFT JOIN levels lv ON lv.id = l.level_id
+                 LEFT JOIN schedule_templates t ON t.id = l.template_id
+                 LEFT JOIN users u ON u.id = l.teacher_id
+                WHERE a.student_id = ?
+                ORDER BY l.lesson_date DESC, l.start_time DESC, l.id DESC
+                LIMIT ?""",
+            (student_id, limit),
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["points"] = attendance_points(item) if item["attendance"] else 0.0
+        out.append(item)
+    return out
 
 
 def attendance_names(lesson_ids: list[int]) -> dict[int, list[dict]]:
@@ -3248,7 +4362,7 @@ def create_template(
     weekday: int | tuple[int, ...] | list[int] | str,
     start_time: str,
     minutes: int,
-    class_type_id: int,
+    class_type_id: int | None,
     level_id: int | None,
     note: str = "",
     start_date: str = "",
@@ -3263,6 +4377,8 @@ def create_template(
     name = (name or "").strip()
     if not name:
         raise ValueError("课程名不能为空")
+    if not level_id:
+        raise ValueError("请选择等级")
     days = normalize_weekdays(weekday)
     anchor = days[0] if days else -1
     times_json = weekday_times_value(days, weekday_times, start_time)
@@ -3277,6 +4393,11 @@ def create_template(
         (start_time or "").strip(),
     )
     with _connect() as con:
+        class_type_id = class_type_id or _class_type_id_for_level(
+            con, int(level_id)
+        )
+        if not class_type_id:
+            raise ValueError("这个等级还没有对应的课型")
         exists = con.execute(
             "SELECT id FROM schedule_templates WHERE name = ?", (name,)
         ).fetchone()
@@ -3316,7 +4437,7 @@ def update_template(
     weekday: int | tuple[int, ...] | list[int] | str,
     start_time: str,
     minutes: int,
-    class_type_id: int,
+    class_type_id: int | None,
     level_id: int | None,
     note: str = "",
     start_date: str = "",
@@ -3331,6 +4452,8 @@ def update_template(
     name = (name or "").strip()
     if not name:
         raise ValueError("课程名不能为空")
+    if not level_id:
+        raise ValueError("请选择等级")
     days = normalize_weekdays(weekday)
     anchor = days[0] if days else -1
     times_json = weekday_times_value(days, weekday_times, start_time)
@@ -3345,6 +4468,11 @@ def update_template(
         (start_time or "").strip(),
     )
     with _connect() as con:
+        class_type_id = class_type_id or _class_type_id_for_level(
+            con, int(level_id)
+        )
+        if not class_type_id:
+            raise ValueError("这个等级还没有对应的课型")
         exists = con.execute(
             "SELECT id FROM schedule_templates WHERE name = ? AND id <> ?",
             (name, template_id),
@@ -3700,6 +4828,659 @@ def unrolled_lessons(limit: int = 200) -> list[dict]:
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------------------ 帮助请求
+
+HELP_STATUSES = ["待处理", "已完成", "已拒绝"]
+HELP_COST_META = "help_request_cost"
+HELP_DEFAULT_COST = 10.0
+
+
+def help_request_cost() -> float:
+    try:
+        return max(0.0, float(get_meta(HELP_COST_META, str(HELP_DEFAULT_COST))))
+    except (TypeError, ValueError):
+        return HELP_DEFAULT_COST
+
+
+def set_help_request_cost(points: float) -> None:
+    value = float(points)
+    if value < 0:
+        raise ValueError("帮助请求积分不能小于 0")
+    set_meta(HELP_COST_META, num_text(value))
+
+
+def create_help_ticket(
+    student_id: int,
+    created_by_user_id: int | None,
+    subject: str,
+    content: str,
+    lesson_id: int | None = None,
+) -> int:
+    title = (subject or "").strip()
+    body = (content or "").strip()
+    if not title:
+        raise ValueError("请填写问题标题")
+    if not body:
+        raise ValueError("请填写需要帮助的内容")
+    cost = help_request_cost()
+    if cost > student_points(student_id):
+        raise ValueError(f"积分不足，提交一次需要 {num_text(cost)} 积分")
+    with _connect() as con:
+        cur = con.execute(
+            """INSERT INTO help_tickets
+                   (student_id, created_by_user_id, lesson_id, subject, content,
+                    status, cost_points, created_at)
+               VALUES(?, ?, ?, ?, ?, '待处理', ?, ?)""",
+            (
+                int(student_id),
+                int(created_by_user_id) if created_by_user_id else None,
+                int(lesson_id) if lesson_id else None,
+                title,
+                body,
+                cost,
+                _today(),
+            ),
+        )
+        ticket_id = int(cur.lastrowid)
+        if cost:
+            con.execute(
+                """INSERT INTO point_transactions
+                       (student_id, change, kind, happened_on, note,
+                        source_type, source_id, created_at)
+                   VALUES(?, ?, '帮助请求', ?, ?, 'help_ticket', ?, ?)""",
+                (
+                    int(student_id),
+                    -cost,
+                    _today(),
+                    f"提交帮助请求：{title}",
+                    ticket_id,
+                    _today(),
+                ),
+            )
+        return ticket_id
+
+
+def list_help_tickets(
+    student_id: int | None = None,
+    status: str = "",
+) -> list[dict]:
+    sql = """
+        SELECT h.*, s.name AS student_name,
+               creator.display_name AS creator_name,
+               replier.display_name AS replier_name
+          FROM help_tickets h
+          JOIN students s ON s.id = h.student_id
+          LEFT JOIN users creator ON creator.id = h.created_by_user_id
+          LEFT JOIN users replier ON replier.id = h.replied_by_user_id
+         WHERE 1 = 1
+    """
+    args: list[Any] = []
+    if student_id is not None:
+        sql += " AND h.student_id = ?"
+        args.append(int(student_id))
+    if status:
+        sql += " AND h.status = ?"
+        args.append(status)
+    sql += """ ORDER BY CASE h.status
+                           WHEN '待处理' THEN 0
+                           WHEN '已完成' THEN 1
+                           ELSE 2
+                       END,
+                       h.created_at DESC, h.id DESC"""
+    with _connect() as con:
+        rows = con.execute(sql, args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pending_help_ticket(
+    con: sqlite3.Connection, ticket_id: int
+) -> sqlite3.Row:
+    row = con.execute(
+        "SELECT * FROM help_tickets WHERE id = ?", (int(ticket_id),)
+    ).fetchone()
+    if row is None:
+        raise ValueError("帮助请求不存在")
+    if row["status"] != "待处理":
+        raise ValueError("这条帮助请求已经处理过了")
+    return row
+
+
+def complete_help_ticket(
+    ticket_id: int,
+    result: str,
+    replied_by_user_id: int | None,
+) -> None:
+    text = (result or "").strip()
+    if not text:
+        raise ValueError("请填写完成说明")
+    with _connect() as con:
+        _pending_help_ticket(con, ticket_id)
+        con.execute(
+            """UPDATE help_tickets
+                  SET reply = ?, status = '已完成',
+                      replied_by_user_id = ?, replied_at = ?
+                WHERE id = ?""",
+            (
+                text,
+                int(replied_by_user_id) if replied_by_user_id else None,
+                _today(),
+                int(ticket_id),
+            ),
+        )
+
+
+def reject_help_ticket(
+    ticket_id: int,
+    reason: str,
+    replied_by_user_id: int | None,
+) -> None:
+    text = (reason or "").strip()
+    if not text:
+        raise ValueError("拒绝请求必须填写理由")
+    with _connect() as con:
+        ticket = _pending_help_ticket(con, ticket_id)
+        con.execute(
+            """UPDATE help_tickets
+                  SET status = '已拒绝', rejected_reason = ?,
+                      replied_by_user_id = ?, replied_at = ?
+                WHERE id = ?""",
+            (
+                text,
+                int(replied_by_user_id) if replied_by_user_id else None,
+                _today(),
+                int(ticket_id),
+            ),
+        )
+        cost = float(ticket["cost_points"] or 0)
+        already_refunded = con.execute(
+            """SELECT 1 FROM point_transactions
+                WHERE source_type = 'help_ticket' AND source_id = ?
+                  AND kind = '帮助退回' LIMIT 1""",
+            (int(ticket_id),),
+        ).fetchone()
+        if cost and not already_refunded:
+            con.execute(
+                """INSERT INTO point_transactions
+                       (student_id, change, kind, happened_on, note,
+                        source_type, source_id, created_at)
+                   VALUES(?, ?, '帮助退回', ?, ?, 'help_ticket', ?, ?)""",
+                (
+                    int(ticket["student_id"]),
+                    cost,
+                    _today(),
+                    f"帮助请求被拒绝：{text}",
+                    int(ticket_id),
+                    _today(),
+                ),
+            )
+
+
+def reply_help_ticket(
+    ticket_id: int,
+    reply: str,
+    replied_by_user_id: int | None,
+) -> None:
+    """兼容旧调用：回复并完成请求。"""
+    complete_help_ticket(ticket_id, reply, replied_by_user_id)
+
+
+# ------------------------------------------------------------------ 论坛悬赏
+
+FORUM_STATUSES = ["待解决", "已完成", "已取消"]
+
+
+def _forum_user(user_id: int) -> dict:
+    user = get_user(int(user_id))
+    if user is None:
+        raise ValueError("用户不存在")
+    return user
+
+
+def forum_points_balance(user_id: int) -> float:
+    user = _forum_user(user_id)
+    if user.get("student_id"):
+        return student_points(int(user["student_id"]))
+    with _connect() as con:
+        row = con.execute(
+            "SELECT balance FROM forum_wallets WHERE user_id = ?", (int(user_id),)
+        ).fetchone()
+    return float(row["balance"] or 0) if row else 0.0
+
+
+def list_forum_users(exclude_user_id: int | None = None) -> list[dict]:
+    sql = """SELECT u.id, u.username, u.display_name, u.role, u.student_id,
+                    u.forum_nickname,
+                    s.name AS student_name
+               FROM users u
+               LEFT JOIN students s ON s.id = u.student_id
+              WHERE u.active = 1
+                AND u.role IN ('student', 'teacher')"""
+    args: list[Any] = []
+    if exclude_user_id:
+        sql += " AND u.id <> ?"
+        args.append(int(exclude_user_id))
+    sql += """ ORDER BY CASE u.role
+                          WHEN 'student' THEN 0
+                          WHEN 'teacher' THEN 1
+                          ELSE 2
+                       END,
+                       COALESCE(s.name, u.display_name, u.username)"""
+    with _connect() as con:
+        rows = con.execute(sql, args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def forum_point_history(user_id: int, limit: int = 100) -> list[dict]:
+    """当前用户的论坛相关积分流水。"""
+    user = _forum_user(user_id)
+    if user.get("student_id"):
+        with _connect() as con:
+            rows = con.execute(
+                """SELECT happened_on, change, kind, note, source_type, source_id
+                     FROM point_transactions
+                    WHERE student_id = ? AND source_type = 'forum_bounty'
+                    ORDER BY happened_on DESC, id DESC
+                    LIMIT ?""",
+                (int(user["student_id"]), int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT created_at AS happened_on, change, kind, note,
+                      source_type, source_id
+                 FROM forum_wallet_transactions
+                WHERE user_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?""",
+            (int(user_id), int(limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def forum_mute_state(user_id: int) -> dict:
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as con:
+        row = con.execute(
+            """SELECT * FROM forum_mutes
+                WHERE user_id = ? AND status = '生效' AND muted_until > ?
+                ORDER BY muted_until DESC, id DESC LIMIT 1""",
+            (int(user_id), now_text),
+        ).fetchone()
+    if row is None:
+        return {
+            "active": False,
+            "muted_until": "",
+            "reason": "",
+        }
+    return {
+        "active": True,
+        "muted_until": row["muted_until"],
+        "reason": row["reason"],
+    }
+
+
+def mute_forum_user(
+    user_id: int,
+    admin_user_id: int,
+    muted_until: str,
+    reason: str,
+) -> None:
+    admin = _forum_user(admin_user_id)
+    if admin.get("role") != ROLE_ROOT:
+        raise ValueError("只有管理员可以禁言论坛账号")
+    target = _forum_user(user_id)
+    if target.get("role") == ROLE_ROOT:
+        raise ValueError("不能禁言管理员")
+    text = (reason or "").strip()
+    if not text:
+        raise ValueError("请填写禁言原因")
+    raw = (muted_until or "").strip()
+    try:
+        until = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise ValueError("禁言时间写成 2026-10-25 18:30 这样")
+    if until <= datetime.now():
+        raise ValueError("禁言截止时间必须晚于现在")
+    with _connect() as con:
+        con.execute(
+            """UPDATE forum_mutes SET status = '已结束'
+                WHERE user_id = ? AND status = '生效'""",
+            (int(user_id),),
+        )
+        con.execute(
+            """INSERT INTO forum_mutes
+                   (user_id, muted_until, reason, created_by_user_id,
+                    status, created_at)
+               VALUES(?, ?, ?, ?, '生效', ?)""",
+            (
+                int(user_id),
+                until.strftime("%Y-%m-%d %H:%M:%S"),
+                text,
+                int(admin_user_id),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+
+
+def unmute_forum_user(user_id: int, admin_user_id: int) -> None:
+    admin = _forum_user(admin_user_id)
+    if admin.get("role") != ROLE_ROOT:
+        raise ValueError("只有管理员可以解除禁言")
+    with _connect() as con:
+        con.execute(
+            """UPDATE forum_mutes SET status = '已结束'
+                WHERE user_id = ? AND status = '生效'""",
+            (int(user_id),),
+        )
+
+
+def _assert_forum_not_muted(user_id: int) -> None:
+    state = forum_mute_state(user_id)
+    if state["active"]:
+        raise ValueError(
+            f"账号已被禁言至 {state['muted_until'][:16]}，暂时不能发布或回答"
+        )
+
+
+def _forum_change_points(
+    con: sqlite3.Connection,
+    user_id: int,
+    change: float,
+    kind: str,
+    note: str,
+    source_type: str,
+    source_id: int,
+) -> None:
+    user = con.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    if user is None:
+        raise ValueError("用户不存在")
+    if user["student_id"]:
+        con.execute(
+            """INSERT INTO point_transactions
+                   (student_id, change, kind, happened_on, note,
+                    source_type, source_id, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(user["student_id"]),
+                float(change),
+                kind,
+                _today(),
+                note,
+                source_type,
+                int(source_id),
+                _today(),
+            ),
+        )
+        return
+    con.execute(
+        "INSERT OR IGNORE INTO forum_wallets(user_id, balance) VALUES(?, 0)",
+        (int(user_id),),
+    )
+    con.execute(
+        "UPDATE forum_wallets SET balance = balance + ? WHERE user_id = ?",
+        (float(change), int(user_id)),
+    )
+    con.execute(
+        """INSERT INTO forum_wallet_transactions
+               (user_id, change, kind, note, source_type, source_id, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?)""",
+        (
+            int(user_id),
+            float(change),
+            kind,
+            note,
+            source_type,
+            int(source_id),
+            _today(),
+        ),
+    )
+
+
+def create_forum_bounty(
+    author_user_id: int,
+    title: str,
+    content: str,
+    bounty_points: float,
+    target_user_id: int | None = None,
+) -> int:
+    title = (title or "").strip()
+    content = (content or "").strip()
+    if not title:
+        raise ValueError("请填写悬赏标题")
+    if not content:
+        raise ValueError("请填写问题内容")
+    points = float(bounty_points or 0)
+    if points < 0:
+        raise ValueError("悬赏积分不能小于 0")
+    user = _forum_user(author_user_id)
+    _assert_forum_not_muted(author_user_id)
+    target_id = int(target_user_id) if target_user_id else None
+    if target_id:
+        if target_id == int(author_user_id):
+            raise ValueError("不能指定自己作为交易对象")
+        target = get_user(target_id)
+        if target is None or not target.get("active"):
+            raise ValueError("指定的交易对象不存在或已停用")
+    if points > forum_points_balance(author_user_id):
+        raise ValueError("悬赏积分不能超过自己的可用积分")
+    with _connect() as con:
+        cur = con.execute(
+            """INSERT INTO forum_bounties
+                   (author_user_id, author_student_id, target_user_id, title, content,
+                    bounty_points, status, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, '待解决', ?)""",
+            (
+                int(author_user_id),
+                user.get("student_id"),
+                target_id,
+                title,
+                content,
+                points,
+                _today(),
+            ),
+        )
+        bounty_id = int(cur.lastrowid)
+        if points:
+            _forum_change_points(
+                con,
+                int(author_user_id),
+                -points,
+                "悬赏支出",
+                f"发布悬赏：{title}",
+                "forum_bounty",
+                bounty_id,
+            )
+    return bounty_id
+
+
+def list_forum_bounties() -> list[dict]:
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT b.*,
+                      COALESCE(s.name, u.display_name, u.username) AS author_name,
+                      u.role AS author_role,
+                      u.forum_nickname AS author_nickname,
+                      COALESCE(NULLIF(tu.display_name, ''), tu.username) AS target_name,
+                      tu.role AS target_role,
+                      tu.forum_nickname AS target_nickname,
+                      (SELECT COUNT(*) FROM forum_answers fa
+                        WHERE fa.bounty_id = b.id) AS answer_count,
+                      (SELECT content FROM forum_answers fa
+                        WHERE fa.id = b.accepted_answer_id) AS accepted_answer
+                 FROM forum_bounties b
+                 JOIN users u ON u.id = b.author_user_id
+                 LEFT JOIN users tu ON tu.id = b.target_user_id
+                 LEFT JOIN students s ON s.id = b.author_student_id
+                ORDER BY CASE b.status WHEN '待解决' THEN 0 ELSE 1 END,
+                         b.created_at DESC, b.id DESC"""
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_forum_answers(bounty_id: int) -> list[dict]:
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT a.*,
+                      COALESCE(s.name, u.display_name, u.username) AS author_name,
+                      u.role AS author_role,
+                      u.forum_nickname AS author_nickname
+                 FROM forum_answers a
+                 JOIN users u ON u.id = a.author_user_id
+                 LEFT JOIN students s ON s.id = a.author_student_id
+                WHERE a.bounty_id = ?
+                ORDER BY a.id""",
+            (int(bounty_id),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_forum_answer(bounty_id: int, author_user_id: int, content: str) -> int:
+    text = (content or "").strip()
+    if not text:
+        raise ValueError("请填写回答内容")
+    user = _forum_user(author_user_id)
+    _assert_forum_not_muted(author_user_id)
+    with _connect() as con:
+        bounty = con.execute(
+            "SELECT * FROM forum_bounties WHERE id = ?", (int(bounty_id),)
+        ).fetchone()
+        if bounty is None:
+            raise ValueError("悬赏不存在")
+        if bounty["status"] != "待解决":
+            raise ValueError("这个悬赏已经结束")
+        if int(bounty["author_user_id"]) == int(author_user_id):
+            raise ValueError("不能回答自己发布的悬赏")
+        if (
+            bounty["target_user_id"]
+            and int(bounty["target_user_id"]) != int(author_user_id)
+        ):
+            raise ValueError("这个悬赏已经指定了交易对象")
+        cur = con.execute(
+            """INSERT INTO forum_answers
+                   (bounty_id, author_user_id, author_student_id, content, created_at)
+               VALUES(?, ?, ?, ?, ?)""",
+            (
+                int(bounty_id),
+                int(author_user_id),
+                user.get("student_id"),
+                text,
+                _today(),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def accept_forum_answer(
+    bounty_id: int, answer_id: int, author_user_id: int
+) -> None:
+    with _connect() as con:
+        bounty = con.execute(
+            "SELECT * FROM forum_bounties WHERE id = ?", (int(bounty_id),)
+        ).fetchone()
+        if bounty is None:
+            raise ValueError("悬赏不存在")
+        if int(bounty["author_user_id"]) != int(author_user_id):
+            raise ValueError("只有发布者可以采纳答案")
+        if bounty["status"] != "待解决":
+            raise ValueError("这个悬赏已经结束")
+        answer = con.execute(
+            "SELECT * FROM forum_answers WHERE id = ? AND bounty_id = ?",
+            (int(answer_id), int(bounty_id)),
+        ).fetchone()
+        if answer is None:
+            raise ValueError("答案不存在")
+        points = float(bounty["bounty_points"] or 0)
+        if points:
+            _forum_change_points(
+                con,
+                int(answer["author_user_id"]),
+                points,
+                "悬赏收入",
+                f"采纳答案：{bounty['title']}",
+                "forum_bounty",
+                int(bounty_id),
+            )
+        con.execute(
+            """UPDATE forum_bounties
+                  SET status = '已完成', accepted_answer_id = ?, completed_at = ?
+                WHERE id = ?""",
+            (int(answer_id), _today(), int(bounty_id)),
+        )
+
+
+def cancel_forum_bounty(bounty_id: int, author_user_id: int) -> None:
+    with _connect() as con:
+        bounty = con.execute(
+            "SELECT * FROM forum_bounties WHERE id = ?", (int(bounty_id),)
+        ).fetchone()
+        if bounty is None:
+            raise ValueError("悬赏不存在")
+        if int(bounty["author_user_id"]) != int(author_user_id):
+            raise ValueError("只有发布者可以取消悬赏")
+        if bounty["status"] != "待解决":
+            raise ValueError("这个悬赏已经结束")
+        points = float(bounty["bounty_points"] or 0)
+        if points:
+            _forum_change_points(
+                con,
+                int(author_user_id),
+                points,
+                "悬赏退回",
+                f"取消悬赏：{bounty['title']}",
+                "forum_bounty",
+                int(bounty_id),
+            )
+        con.execute(
+            "UPDATE forum_bounties SET status = '已取消', completed_at = ? WHERE id = ?",
+            (_today(), int(bounty_id)),
+        )
+
+
+def deduct_forum_bounty_points(
+    bounty_id: int,
+    admin_user_id: int,
+    points: float,
+    reason: str,
+) -> None:
+    """管理员对不当悬赏手动扣分；学生扣学习积分，老师扣论坛积分。"""
+    admin = _forum_user(admin_user_id)
+    if admin.get("role") != ROLE_ROOT:
+        raise ValueError("只有管理员可以手动扣分")
+    value = float(points or 0)
+    if value <= 0:
+        raise ValueError("扣分数必须大于 0")
+    text = (reason or "").strip()
+    if not text:
+        raise ValueError("请填写扣分原因")
+    with _connect() as con:
+        bounty = con.execute(
+            "SELECT * FROM forum_bounties WHERE id = ?", (int(bounty_id),)
+        ).fetchone()
+        if bounty is None:
+            raise ValueError("悬赏不存在")
+        author_id = int(bounty["author_user_id"])
+    available = forum_points_balance(author_id)
+    if value > available:
+        raise ValueError("扣分数不能超过发布者当前可用积分")
+    with _connect() as con:
+        _forum_change_points(
+            con,
+            author_id,
+            -value,
+            "论坛扣分",
+            f"言论不当：{text}",
+            "forum_bounty",
+            int(bounty_id),
+        )
+        con.execute(
+            """UPDATE forum_bounties
+                  SET penalty_points = penalty_points + ?,
+                      moderation_note = ?
+                WHERE id = ?""",
+            (value, text, int(bounty_id)),
+        )
 
 
 # ------------------------------------------------------------------ 试听跟进
@@ -4239,8 +6020,13 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
                     a["owner_teacher_name"] or "",
                     "到" if a["attendance"] else "请假",
                     "是" if a["discipline"] else "",
+                    a["discipline_score"],
                     "是" if a["performance"] else "",
+                    a["performance_score"],
                     a["bonus"],
+                    a["bonus_reason"],
+                    a["poor_discipline_reason"],
+                    a["poor_performance_reason"],
                     a["minutes"],
                     a["comment"],
                 ]
@@ -4248,7 +6034,22 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
     sheets.append(
         (
             "点名明细",
-            ["日期", "学员", "归属老师", "出勤", "纪律", "表现", "突出发挥", "时长(分)", "单独点评"],
+            [
+                "日期",
+                "学员",
+                "归属老师",
+                "出勤",
+                "纪律",
+                "纪律不好得分",
+                "学习",
+                "学习不好得分",
+                "突出发挥",
+                "突出发挥原因",
+                "纪律不好原因",
+                "学习不好原因",
+                "时长(分)",
+                "单独点评",
+            ],
             rows,
         )
     )
@@ -4379,17 +6180,184 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
     return sheets
 
 
+def list_course_packages(active_only: bool = True) -> list[dict]:
+    sql = "SELECT * FROM course_packages"
+    if active_only:
+        sql += " WHERE active = 1"
+    sql += " ORDER BY price, id"
+    with _connect() as con:
+        packages = [dict(r) for r in con.execute(sql)]
+        for package in packages:
+            package["items"] = [
+                dict(r)
+                for r in con.execute(
+                    """SELECT pi.*, ht.name AS hour_type_name
+                         FROM course_package_items pi
+                         JOIN hour_types ht ON ht.id = pi.hour_type_id
+                        WHERE pi.package_id = ?
+                        ORDER BY pi.sort, pi.id""",
+                    (package["id"],),
+                )
+            ]
+    return packages
+
+
+def get_course_package(package_id: int | None) -> dict | None:
+    if not package_id:
+        return None
+    with _connect() as con:
+        row = con.execute(
+            "SELECT * FROM course_packages WHERE id = ?", (package_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        package = dict(row)
+        package["items"] = [
+            dict(r)
+            for r in con.execute(
+                """SELECT pi.*, ht.name AS hour_type_name
+                     FROM course_package_items pi
+                     JOIN hour_types ht ON ht.id = pi.hour_type_id
+                    WHERE pi.package_id = ?
+                    ORDER BY pi.sort, pi.id""",
+                (package_id,),
+            )
+        ]
+    return package
+
+
+def save_course_package(
+    package_id: int | None,
+    name: str,
+    price: float,
+    items: list[dict],
+    note: str = "",
+) -> int:
+    """新增或修改固定课包。items 只记课时类型和数量，价格统一在课包上。"""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("请填课包名称")
+    clean_price = float(price or 0)
+    if clean_price <= 0:
+        raise ValueError("课包价格要大于 0")
+    totals: dict[int, float] = {}
+    for raw in items or []:
+        hour_type_id = raw.get("hour_type_id")
+        hours = float(raw.get("hours") or 0)
+        if not hour_type_id or hours <= 0:
+            continue
+        key = int(hour_type_id)
+        totals[key] = totals.get(key, 0.0) + hours
+    if not totals:
+        raise ValueError("课包至少要包含一种课时")
+    with _connect() as con:
+        duplicate = con.execute(
+            "SELECT id FROM course_packages WHERE name = ? AND id <> ?",
+            (clean_name, int(package_id or 0)),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError(f"已经有叫「{clean_name}」的课包了")
+        if package_id:
+            con.execute(
+                """UPDATE course_packages
+                      SET name = ?, price = ?, note = ?, active = 1
+                    WHERE id = ?""",
+                (clean_name, clean_price, (note or "").strip(), int(package_id)),
+            )
+            target_id = int(package_id)
+            con.execute(
+                "DELETE FROM course_package_items WHERE package_id = ?",
+                (target_id,),
+            )
+        else:
+            cur = con.execute(
+                """INSERT INTO course_packages
+                       (name, price, active, note, created_at)
+                   VALUES(?, ?, 1, ?, ?)""",
+                (clean_name, clean_price, (note or "").strip(), _today()),
+            )
+            target_id = int(cur.lastrowid)
+        for sort, (hour_type_id, hours) in enumerate(totals.items()):
+            con.execute(
+                """INSERT INTO course_package_items
+                       (package_id, hour_type_id, hours, sort)
+                   VALUES(?, ?, ?, ?)""",
+                (target_id, hour_type_id, hours, sort),
+            )
+    return target_id
+
+
+def delete_course_package(package_id: int) -> None:
+    with _connect() as con:
+        con.execute("DELETE FROM course_packages WHERE id = ?", (package_id,))
+
+
+def _validate_package_payment(
+    con: sqlite3.Connection, package_id: int, clean: list[dict]
+) -> dict:
+    row = con.execute(
+        "SELECT * FROM course_packages WHERE id = ?", (int(package_id),)
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到这个固定课包")
+    package = dict(row)
+    expected = {
+        int(r["hour_type_id"]): float(r["hours"])
+        for r in con.execute(
+            "SELECT hour_type_id, hours FROM course_package_items WHERE package_id = ?",
+            (int(package_id),),
+        )
+    }
+    package_items = [item for item in clean if item.get("package_item")]
+    extra_items = [item for item in clean if not item.get("package_item")]
+    actual: dict[int, float] = {}
+    for item in package_items:
+        key = int(item["hour_type_id"])
+        actual[key] = actual.get(key, 0.0) + float(item["hours"])
+    if set(expected) != set(actual) or any(
+        abs(expected[key] - actual[key]) > 1e-6 for key in expected
+    ):
+        raise ValueError("固定课包的课时内容被改动了，请重新选择课包")
+    nominal = sum(float(item["amount"] or 0) for item in package_items)
+    if abs(nominal - float(package["price"])) > 1e-6:
+        raise ValueError("固定课包的金额不能单独修改，请重新选择课包")
+    if any(float(item["amount"] or 0) != 0 for item in extra_items):
+        raise ValueError("固定课包只能额外添加 0 元的赠送课时")
+    return package
+
+
+def _validate_manual_gifts(con: sqlite3.Connection, clean: list[dict], note: str) -> None:
+    """手动赠送只允许考级／竞赛等非正课，并且整笔缴费要有备注原因。"""
+    gifts = [
+        item
+        for item in clean
+        if not item.get("package_item") and float(item["amount"] or 0) <= 0
+    ]
+    if not gifts:
+        return
+    zhengke = con.execute(
+        "SELECT id FROM hour_types WHERE name = '正课'"
+    ).fetchone()
+    if zhengke is not None and any(
+        int(item["hour_type_id"]) == int(zhengke["id"]) for item in gifts
+    ):
+        raise ValueError("正课不能作为赠送课时手动添加")
+    if not (note or "").strip():
+        raise ValueError("手动赠送课时必须在备注里写明原因")
+
+
 def create_payment(
     student_id: int,
     paid_on: str,
     items: list[dict],
     note: str = "",
     voucher_id: int | None = None,
+    package_id: int | None = None,
 ) -> int:
     """一笔缴费：总金额由各行相加，行里 amount=0 就是赠送。
 
     用代金券的话：amount 记实收现金，券抵的那部分记在 voucher_amount 里。
-    只有本笔含正课才送券（面额 = 正课金额 ÷ 10，一次 10 张）。
+    只有明确选择固定课包且课包价格不低于 3000 元才送券。
     """
     clean = _clean_payment_items(items)
     if not clean:
@@ -4400,13 +6368,19 @@ def create_payment(
     total = max(0.0, nominal - used_amount)
     first = clean[0]
     with _connect() as con:
+        _validate_manual_gifts(con, clean, note)
+        package = (
+            _validate_package_payment(con, int(package_id), clean)
+            if package_id
+            else None
+        )
         clean = _fill_item_owners(con, student_id, clean)
         owner_id = _single_owner(clean)
         cur = con.execute(
             """INSERT INTO payments
                    (student_id, paid_on, amount, hour_type_id, hours, note,
-                    voucher_id, voucher_amount, teacher_id, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    voucher_id, voucher_amount, package_id, teacher_id, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 student_id,
                 paid_on,
@@ -4416,6 +6390,7 @@ def create_payment(
                 note,
                 used_id,
                 used_amount,
+                int(package_id) if package else None,
                 owner_id,
                 _today(),
             ),
@@ -4440,7 +6415,7 @@ def create_payment(
             )
     sync_payment_hours(payment_id)
     sync_payment_enrollments(payment_id)
-    issue_vouchers(student_id, payment_id, voucher_base(clean), paid_on)
+    issue_vouchers(student_id, payment_id, package, paid_on)
     recompute_student(student_id)
     refresh_student(student_id)  # 客户归谁跟着这笔缴费的归属走
     return payment_id
@@ -4453,6 +6428,7 @@ def update_payment(
     items: list[dict],
     note: str = "",
     voucher_id: int | None = None,
+    package_id: int | None = None,
 ) -> None:
     clean = _clean_payment_items(items)
     if not clean:
@@ -4463,6 +6439,12 @@ def update_payment(
     total = max(0.0, nominal - used_amount)
     first = clean[0]
     with _connect() as con:
+        _validate_manual_gifts(con, clean, note)
+        package = (
+            _validate_package_payment(con, int(package_id), clean)
+            if package_id
+            else None
+        )
         clean = _fill_item_owners(con, student_id, clean)
         owner_id = _single_owner(clean)
         # 顺序很重要：先清掉老流水，再删老的行
@@ -4472,7 +6454,8 @@ def update_payment(
         con.execute(
             """UPDATE payments
                   SET student_id = ?, paid_on = ?, amount = ?, hour_type_id = ?,
-                      hours = ?, note = ?, voucher_id = ?, voucher_amount = ?, teacher_id = ?
+                      hours = ?, note = ?, voucher_id = ?, voucher_amount = ?,
+                      package_id = ?, teacher_id = ?
                 WHERE id = ?""",
             (
                 student_id,
@@ -4483,6 +6466,7 @@ def update_payment(
                 note,
                 used_id,
                 used_amount,
+                int(package_id) if package else None,
                 owner_id,
                 payment_id,
             ),
@@ -4507,7 +6491,7 @@ def update_payment(
             )
     sync_payment_hours(payment_id)
     sync_payment_enrollments(payment_id)
-    issue_vouchers(student_id, payment_id, voucher_base(clean), paid_on)
+    issue_vouchers(student_id, payment_id, package, paid_on)
     recompute_student(student_id)
     refresh_student(student_id)
 
@@ -4530,6 +6514,7 @@ def _clean_payment_items(items: list[dict]) -> list[dict]:
                 "hours": hours,
                 "amount": amount,
                 "owner_teacher_id": int(owner) if owner else None,
+                "package_item": bool(raw.get("package_item")),
             }
         )
     return out
@@ -4608,16 +6593,12 @@ def _fill_item_owners(
 
 
 def _class_type_for_hour_type(con: sqlite3.Connection, hour_type_id: int) -> int | None:
-    """课时账户对应哪个课型（社团 ↔ 校内社团）。"""
+    """课时账户对应哪个课型。"""
     row = con.execute(
         "SELECT name FROM hour_types WHERE id = ?", (hour_type_id,)
     ).fetchone()
     name = row["name"] if row else ""
     ct = con.execute("SELECT id FROM class_types WHERE name = ?", (name,)).fetchone()
-    if ct is None and name == "社团":
-        ct = con.execute(
-            "SELECT id FROM class_types WHERE name = '校内社团'"
-        ).fetchone()
     return int(ct["id"]) if ct else None
 
 
@@ -4717,6 +6698,7 @@ def sync_payment_enrollments(payment_id: int) -> None:
 
 VOUCHER_COUNT = 10   # 一次送几张
 VOUCHER_MONTHS = 24  # 有效期多少个月
+VOUCHER_MIN_PACKAGE_PRICE = 3000.0
 
 
 def _add_months(day: date, months: int) -> date:
@@ -4726,10 +6708,10 @@ def _add_months(day: date, months: int) -> date:
     return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
 
 
-def voucher_plan(base: float) -> tuple[float, int]:
-    """这笔正课钱送多少券：面额 = 正课金额 ÷ 10，一次 10 张。"""
+def voucher_plan(base: float, package_selected: bool = False) -> tuple[float, int]:
+    """固定课包满 3000 元才送券：面额 = 课包价格 ÷ 10，一次 10 张。"""
     money = float(base or 0)
-    if money <= 0:
+    if not package_selected or money < VOUCHER_MIN_PACKAGE_PRICE:
         return 0.0, 0
     return round(money / VOUCHER_COUNT, 2), VOUCHER_COUNT
 
@@ -4786,10 +6768,16 @@ def voucher_uses(voucher_id: int) -> list[dict]:
 
 
 def issue_vouchers(
-    student_id: int, payment_id: int, base: float, issued_on: str
+    student_id: int,
+    payment_id: int,
+    package: dict | None,
+    issued_on: str,
 ) -> int | None:
-    """缴费送券。base 是正课那部分的钱；没正课或金额为 0 就不送。"""
-    face, count = voucher_plan(base)
+    """只有固定课包满 3000 元才送券。"""
+    face, count = voucher_plan(
+        float((package or {}).get("price") or 0),
+        package_selected=bool(package),
+    )
     if face <= 0 or count <= 0:
         return None
     try:

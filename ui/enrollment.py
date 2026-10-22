@@ -13,19 +13,27 @@ class EnrollmentMixin:
 
     def _open_new_student(self) -> None:
         fields = self._student_fields(width=DIALOG_WIDTH)
+        if not self.is_admin():
+            teacher_id = self._my_user_id()
+            fields["owner"].value = str(teacher_id)
+            fields["owner"].disabled = True
+            fields["owner"].label = "归属老师（新学员归你）"
 
         def save(e):
-            values = self._student_values(fields)
+            values = self._student_values(fields, require_birth_date=True)
             if values is None:
                 return
-            db.create_student(values)
-            self._finish("已新增学员")
+            student_id = db.create_student(values)
+            account, password = db.ensure_student_account(student_id)
+            self.page.pop_dialog()
+            self.render()
+            self._show_student_credentials(account, password)
 
         body = self._form_column(
             [
                 fields["name"],
                 fields["gender"],
-                fields["grade"],
+                ft.Row([fields["grade"], fields["birth_date"]], spacing=10),
                 fields["school"],
                 fields["phone"],
                 fields["guardian"],
@@ -45,7 +53,51 @@ class EnrollmentMixin:
             )
         )
 
+    def _show_student_credentials(
+        self, account: dict, password: str | None
+    ) -> None:
+        password_text = (
+            password or "密码已设置过；如需修改，请到学员档案里重设。"
+        )
+        self._show(
+            self._dialog(
+                "学生账号已生成",
+                self._form_column(
+                    [
+                        ft.Text(
+                            "请把登录账号和初始密码交给学生，并提醒学生或老师"
+                            "从学员档案里修改密码。",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Text(
+                            f"用户名：{account['username']}",
+                            size=16,
+                            weight=ft.FontWeight.W_600,
+                            selectable=True,
+                        ),
+                        ft.Text(
+                            f"初始密码：{password_text}",
+                            size=16,
+                            weight=ft.FontWeight.W_600,
+                            selectable=True,
+                        ),
+                    ]
+                ),
+                [ft.Button("知道了", on_click=self._close)],
+            )
+        )
+
     def _open_enrollment_dialog(self, student_id: int, enrollment: dict | None) -> None:
+        admin = self.is_admin()
+        if enrollment is not None:
+            if not self._can_manage_enrollment(enrollment):
+                self._toast("这是其他老师的报名记录，只能查看")
+                return
+        elif not self._can_manage_student(student_id):
+            self._toast("这是其他老师的学员，只能查看")
+            return
+        teacher_id = self._my_user_id()
         levels = db.list_levels(active_only=True)
         if not levels:
             self._toast("请先到「课程设置」里加一个等级")
@@ -56,7 +108,11 @@ class EnrollmentMixin:
             return
 
         editing = enrollment is not None
-        classes = db.list_templates()
+        classes = [
+            c
+            for c in db.list_templates()
+            if admin or int(c.get("teacher_id") or 0) == int(teacher_id or 0)
+        ]
         class_dd = _dd(
             "课程（可选）",
             [ft.DropdownOption(key="", text="不指定课程")]
@@ -79,7 +135,7 @@ class EnrollmentMixin:
         )
         level_dd = _dd(
             "科目-等级",
-            _opts([(l["id"], db.level_full_name(l)) for l in levels]),
+            _opts([(l["id"], db.level_display_name(l)) for l in levels]),
             value=str(enrollment["level_id"]) if editing and enrollment["level_id"] else None,
             width=DIALOG_WIDTH,
         )
@@ -98,14 +154,26 @@ class EnrollmentMixin:
         status_dd = _dd("状态", _status_opts(), value=enrollment["status"] if editing else "在读", width=DIALOG_WIDTH)
         owner_dd = _dd(
             "归属老师（算谁的客户）",
-            _teacher_opts("不指定"),
+            (
+                _teacher_opts("不指定")
+                if admin
+                else [
+                    ft.DropdownOption(
+                        key=str(teacher_id),
+                        text=self._whoami(),
+                    )
+                ]
+            ),
             value=(
                 str(enrollment["owner_teacher_id"] or db.default_owner_teacher(student_id, enrollment["level_id"]) or "")
                 if editing
-                else ""
+                else ("" if admin else str(teacher_id))
             ),
             width=DIALOG_WIDTH,
         )
+        if not admin:
+            owner_dd.value = str(teacher_id)
+            owner_dd.disabled = True
         note = _tf("备注", enrollment["note"] if editing else "", width=DIALOG_WIDTH)
 
         def on_level(e):
@@ -117,7 +185,11 @@ class EnrollmentMixin:
                         minutes.update()
                     break
             # 换了等级，归属老师跟着这个课程的默认老师走（还能手动改）
-            owner_dd.value = str(db.default_owner_teacher(student_id, level_id) or "")
+            owner_dd.value = (
+                str(db.default_owner_teacher(student_id, level_id) or "")
+                if admin
+                else str(teacher_id)
+            )
             owner_dd.update()
 
         level_dd.on_select = on_level
@@ -133,8 +205,10 @@ class EnrollmentMixin:
                     type_dd.value = str(c["class_type_id"])
                 if c["minutes"]:
                     minutes.value = str(c["minutes"])
-                if c["teacher_id"]:
+                if admin and c["teacher_id"]:
                     owner_dd.value = str(c["teacher_id"])
+                elif not admin:
+                    owner_dd.value = str(teacher_id)
                 for control in (level_dd, type_dd, minutes, owner_dd):
                     control.update()
                 break
@@ -142,6 +216,12 @@ class EnrollmentMixin:
         class_dd.on_select = on_class
 
         def save(e):
+            if editing and not self._can_manage_enrollment(enrollment):
+                self._toast("这是其他老师的报名记录，只能查看")
+                return
+            if not editing and not self._can_manage_student(student_id):
+                self._toast("这是其他老师的学员，只能查看")
+                return
             if not level_dd.value or not type_dd.value:
                 self._toast("请选择等级和课型")
                 return
@@ -161,7 +241,11 @@ class EnrollmentMixin:
                 mins,
                 status_dd.value or "在读",
                 note.value or "",
-                int(owner_dd.value) if (owner_dd.value or "").strip() else None,
+                (
+                    int(owner_dd.value)
+                    if admin and (owner_dd.value or "").strip()
+                    else teacher_id
+                ),
                 int(class_dd.value) if (class_dd.value or "").strip() else None,
             )
             if editing:

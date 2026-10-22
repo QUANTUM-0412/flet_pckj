@@ -489,6 +489,11 @@ class LessonDetailMixin:
     def _attendance_row(self, a: dict, lesson: dict, photos: list[dict]) -> ft.Container:
         hours, points = _attendance_calc(a, lesson)
         present = int(a["attendance"] or 0)
+        discipline_good = bool(a["discipline"])
+        discipline_score_value = float(a["discipline_score"] or 0)
+        performance_good = bool(a["performance"])
+        performance_score_value = float(a["performance_score"] or 0)
+        bonus_value = float(a["bonus"] or 0)
         summary = ft.Text(
             f"本次扣 {db.num_text(hours)} 课时 · 积分 +{db.num_text(points)}"
             if present
@@ -498,26 +503,26 @@ class LessonDetailMixin:
         )
         balance = ft.Text(self._student_hours_text(a["student_id"], lesson), size=12, color=ft.Colors.GREY_600)
 
-        def flag_handler(field, current):
-            return lambda e: self._save_attendance_flag(a["id"], field, current, e.control.value)
+        def flag_handler(field):
+            return lambda e: self._save_attendance_flag(a["id"], field, e.control.value)
 
         cb_att = ft.Checkbox(
             label="出勤",
             width=90,
             value=bool(present),
-            on_change=flag_handler("attendance", a["attendance"]),
+            on_change=flag_handler("attendance"),
         )
         cb_dis = ft.Checkbox(
             label="纪律",
             width=90,
-            value=bool(a["discipline"]),
-            on_change=flag_handler("discipline", a["discipline"]),
+            value=discipline_good,
+            on_change=flag_handler("discipline"),
         )
         cb_per = ft.Checkbox(
-            label="表现",
+            label="学习",
             width=90,
-            value=bool(a["performance"]),
-            on_change=flag_handler("performance", a["performance"]),
+            value=performance_good,
+            on_change=flag_handler("performance"),
         )
         bonus = ft.TextField(
             value=db.num_text(a["bonus"]),
@@ -527,6 +532,127 @@ class LessonDetailMixin:
             keyboard_type=ft.KeyboardType.NUMBER,
             on_blur=lambda e: self._save_attendance_value(a["id"], "bonus", a["bonus"], e.control.value),
             on_submit=lambda e: self._save_attendance_value(a["id"], "bonus", a["bonus"], e.control.value),
+        )
+        discipline_score = ft.TextField(
+            value=db.num_text(discipline_score_value),
+            dense=True,
+            text_size=13,
+            label="纪律分（-10 < x < 10）",
+            hint_text="纪律不好时由老师填写，例如 3、0、-4.5",
+            visible=bool(present and not discipline_good),
+            on_blur=lambda e: self._save_behavior_score(
+                a["id"],
+                "discipline_score",
+                "纪律分",
+                a["discipline_score"],
+                e.control.value,
+                e.control,
+            ),
+            on_submit=lambda e: self._save_behavior_score(
+                a["id"],
+                "discipline_score",
+                "纪律分",
+                a["discipline_score"],
+                e.control.value,
+                e.control,
+            ),
+        )
+        poor_discipline_reason = ft.TextField(
+            value=a["poor_discipline_reason"],
+            dense=True,
+            text_size=13,
+            label="纪律不好原因",
+            hint_text="例如：多次打断课堂、影响其他同学",
+            error=(
+                "请写明纪律不好的原因"
+                if present
+                and not discipline_good
+                and not (a["poor_discipline_reason"] or "").strip()
+                else None
+            ),
+            visible=bool(present and not discipline_good),
+            on_blur=lambda e: self._save_attendance_value(
+                a["id"],
+                "poor_discipline_reason",
+                a["poor_discipline_reason"],
+                e.control.value,
+            ),
+            on_submit=lambda e: self._save_attendance_value(
+                a["id"],
+                "poor_discipline_reason",
+                a["poor_discipline_reason"],
+                e.control.value,
+            ),
+        )
+        bonus_reason = ft.TextField(
+            value=a["bonus_reason"],
+            dense=True,
+            text_size=13,
+            label="突出发挥原因",
+            hint_text="例如：主动帮助同学完成搭建",
+            error=(
+                "请写明突出发挥的原因"
+                if present and bonus_value and not (a["bonus_reason"] or "").strip()
+                else None
+            ),
+            visible=bool(present and bonus_value),
+            on_blur=lambda e: self._save_attendance_value(
+                a["id"], "bonus_reason", a["bonus_reason"], e.control.value
+            ),
+            on_submit=lambda e: self._save_attendance_value(
+                a["id"], "bonus_reason", a["bonus_reason"], e.control.value
+            ),
+        )
+        performance_score = ft.TextField(
+            value=db.num_text(performance_score_value),
+            dense=True,
+            text_size=13,
+            label="学习分（-10 < x < 10）",
+            hint_text="学习不好时由老师填写，例如 3、0、-4.5",
+            visible=bool(present and not performance_good),
+            on_blur=lambda e: self._save_behavior_score(
+                a["id"],
+                "performance_score",
+                "学习分",
+                a["performance_score"],
+                e.control.value,
+                e.control,
+            ),
+            on_submit=lambda e: self._save_behavior_score(
+                a["id"],
+                "performance_score",
+                "学习分",
+                a["performance_score"],
+                e.control.value,
+                e.control,
+            ),
+        )
+        poor_reason = ft.TextField(
+            value=a["poor_performance_reason"],
+            dense=True,
+            text_size=13,
+            label="学习不好原因",
+            hint_text="例如：注意力不集中，未能按步骤完成",
+            error=(
+                "请写明学习不好的原因"
+                if present
+                and not performance_good
+                and not (a["poor_performance_reason"] or "").strip()
+                else None
+            ),
+            visible=bool(present and not performance_good),
+            on_blur=lambda e: self._save_attendance_value(
+                a["id"],
+                "poor_performance_reason",
+                a["poor_performance_reason"],
+                e.control.value,
+            ),
+            on_submit=lambda e: self._save_attendance_value(
+                a["id"],
+                "poor_performance_reason",
+                a["poor_performance_reason"],
+                e.control.value,
+            ),
         )
         minutes = ft.TextField(
             value=db.num_text(a["minutes"]),
@@ -549,8 +675,13 @@ class LessonDetailMixin:
         self._row_refs[a["id"]] = {
             "attendance": cb_att,
             "discipline": cb_dis,
+            "discipline_score": discipline_score,
+            "poor_discipline_reason": poor_discipline_reason,
             "performance": cb_per,
+            "performance_score": performance_score,
             "bonus": bonus,
+            "bonus_reason": bonus_reason,
+            "poor_performance_reason": poor_reason,
             "minutes": minutes,
             "comment": comment,
             "summary": summary,
@@ -589,6 +720,12 @@ class LessonDetailMixin:
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Row([cb_att, cb_dis, cb_per], spacing=4, wrap=True),
+                    ft.Text(
+                        "「纪律」和「学习」任意一项不勾选时，"
+                        "分别填写大于 -10 且小于 10 的分数和原因；突出发挥可另外加分。",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                    ),
                     ft.Row(
                         [
                             ft.Text("突出发挥", size=12, color=ft.Colors.GREY_600),
@@ -600,6 +737,11 @@ class LessonDetailMixin:
                         wrap=True,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
+                    discipline_score,
+                    poor_discipline_reason,
+                    performance_score,
+                    bonus_reason,
+                    poor_reason,
                     comment,
                     ft.Row(
                         [
@@ -637,9 +779,14 @@ class LessonDetailMixin:
                 return f"剩余 {db.num_text(account['balance'])}"
         return ""
 
-    def _save_attendance_flag(self, att_id: int, field: str, current, value) -> None:
+    def _save_attendance_flag(self, att_id: int, field: str, value) -> None:
+        row = db.get_attendance(att_id)
+        if row is None:
+            return
         new = 1 if value else 0
-        if new == int(current or 0):
+        if new == int(row[field] or 0):
+            # 即使数据库已经是这个值，也把界面同步一次，避免只勾了外观。
+            self._refresh_attendance_row(att_id)
             return
         fields = {field: new}
         if field == "attendance" and not new:
@@ -667,6 +814,33 @@ class LessonDetailMixin:
         db.update_attendance(att_id, **{field: new})
         self._refresh_attendance_row(att_id)
 
+    def _save_behavior_score(
+        self,
+        att_id: int,
+        field: str,
+        title: str,
+        current,
+        value: str,
+        control: ft.TextField,
+    ) -> None:
+        text = (value or "").strip()
+        try:
+            new = float(text)
+        except ValueError:
+            control.error = "请填写数字"
+            control.update()
+            return
+        if not db.BEHAVIOR_SCORE_MIN < new < db.BEHAVIOR_SCORE_MAX:
+            control.error = f"{title}必须大于 -10 且小于 10"
+            control.update()
+            return
+        if abs(float(current or 0) - new) < 1e-6:
+            control.error = None
+            control.update()
+            return
+        db.update_attendance(att_id, **{field: new})
+        self._refresh_attendance_row(att_id)
+
     def _refresh_attendance_row(self, att_id: int) -> None:
         refs = self._row_refs.get(att_id)
         a = db.get_attendance(att_id)
@@ -682,7 +856,57 @@ class LessonDetailMixin:
         refs["attendance"].value = bool(present)
         refs["discipline"].value = bool(a["discipline"])
         refs["performance"].value = bool(a["performance"])
+        for field, good in (
+            ("discipline_score", a["discipline"]),
+            ("performance_score", a["performance"]),
+        ):
+            score_value = float(a[field] or 0)
+            score_valid = (
+                db.BEHAVIOR_SCORE_MIN
+                < score_value
+                < db.BEHAVIOR_SCORE_MAX
+            )
+            refs[field].value = db.num_text(score_value)
+            refs[field].visible = bool(present and not good)
+            refs[field].error = (
+                "必须大于 -10 且小于 10"
+                if present and not good and not score_valid
+                else None
+            )
+        refs["poor_discipline_reason"].value = a["poor_discipline_reason"]
+        refs["poor_discipline_reason"].visible = bool(
+            present and not a["discipline"]
+        )
+        refs["poor_discipline_reason"].error = (
+            "请写明纪律不好的原因"
+            if present
+            and not a["discipline"]
+            and not (a["poor_discipline_reason"] or "").strip()
+            else None
+        )
         refs["bonus"].value = db.num_text(a["bonus"])
+        refs["bonus_reason"].value = a["bonus_reason"]
+        refs["bonus_reason"].visible = bool(
+            present and float(a["bonus"] or 0)
+        )
+        refs["bonus_reason"].error = (
+            "请写明突出发挥的原因"
+            if present
+            and float(a["bonus"] or 0)
+            and not (a["bonus_reason"] or "").strip()
+            else None
+        )
+        refs["poor_performance_reason"].value = a["poor_performance_reason"]
+        refs["poor_performance_reason"].visible = bool(
+            present and not a["performance"]
+        )
+        refs["poor_performance_reason"].error = (
+            "请写明学习不好的原因"
+            if present
+            and not a["performance"]
+            and not (a["poor_performance_reason"] or "").strip()
+            else None
+        )
         refs["minutes"].value = db.num_text(a["minutes"])
         refs["comment"].value = a["comment"]
         refs["summary"].value = (

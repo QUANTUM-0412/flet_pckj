@@ -120,6 +120,7 @@ POINT_STAR_COLORS = {
     "出勤": (244, 174, 45),
     "纪律": (63, 135, 226),
     "表现": (224, 82, 157),
+    "学习": (224, 82, 157),
     "突出": (241, 112, 44),
 }
 
@@ -853,7 +854,7 @@ def _tag_colors(tag: str, theme: Theme) -> tuple[tuple[int, int, int], tuple[int
         return (255, 242, 224), (158, 92, 6)
     if tag.startswith("纪律"):
         return (232, 240, 254), (18, 80, 143)
-    if tag.startswith("表现"):
+    if tag.startswith(("表现", "学习")):
         return (241, 234, 254), (92, 46, 158)
     if tag.startswith("突出"):
         return (255, 243, 222), (154, 91, 0)

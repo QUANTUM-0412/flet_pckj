@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import flet as ft
 
 import db
 from .common import (
+    DIALOG_WIDTH,
     STATUS_FILTERS,
     WARN_BALANCE,
     _chip,
@@ -48,6 +51,12 @@ class StudentsMixin:
                 width=width,
             ),
             "grade": _dd("年级", _grade_opts(), value=s.get("grade") or None, width=width),
+            "birth_date": _tf(
+                "出生日期",
+                s.get("birth_date", ""),
+                width=width,
+                hint_text="2020-05-18",
+            ),
             "school": school_box,
             "phone": _tf("联系电话", s.get("phone", ""), width=width),
             "guardian": _tf("监护人姓名", s.get("guardian", ""), width=width),
@@ -71,6 +80,20 @@ class StudentsMixin:
                 width=width,
             ),
         }
+        def sync_grade_from_birth(e=None) -> None:
+            raw = (fields["birth_date"].value or "").strip()
+            inferred = db.grade_from_birth_date(raw) if raw else ""
+            if raw:
+                fields["grade"].disabled = True
+                if inferred:
+                    fields["grade"].value = inferred
+                fields["grade"].update()
+            else:
+                fields["grade"].disabled = False
+                fields["grade"].update()
+
+        fields["birth_date"].on_change = sync_grade_from_birth
+        fields["grade"].disabled = bool((s.get("birth_date") or "").strip())
         # 学校是"输入框 + 下拉"一对，取值只看里面的输入框
         fields["school_input"] = school_field
         if with_status:
@@ -93,7 +116,9 @@ class StudentsMixin:
                 inner.disabled = True
         return fields
 
-    def _student_values(self, fields: dict) -> dict | None:
+    def _student_values(
+        self, fields: dict, *, require_birth_date: bool = False
+    ) -> dict | None:
         """把输入控件里的值取出来；姓名没填就标红并返回 None。"""
         name = (fields["name"].value or "").strip()
         if not name:
@@ -104,9 +129,23 @@ class StudentsMixin:
             "name": name,
             "gender": fields["gender"].value or "",
             "grade": fields["grade"].value or "",
+            "birth_date": (fields["birth_date"].value or "").strip(),
             "school": (fields["school_input"].value or "").strip(),
             "phone": fields["phone"].value or "",
         }
+        if values["birth_date"]:
+            try:
+                date.fromisoformat(values["birth_date"])
+            except ValueError:
+                fields["birth_date"].error = "写成 2020-05-18 这样"
+                fields["birth_date"].update()
+                return None
+        elif require_birth_date:
+            fields["birth_date"].error = "新学员请先绑定出生日期"
+            fields["birth_date"].update()
+            return None
+        if values["birth_date"]:
+            values["grade"] = db.grade_from_birth_date(values["birth_date"])
         if "guardian" in fields:
             values["guardian"] = fields["guardian"].value or ""
         if "owner" in fields:
@@ -124,6 +163,7 @@ class StudentsMixin:
         return values
 
     def _students_view(self) -> ft.Column:
+        db.advance_student_grades()
         db.sync_course_statuses()  # 课程到期了就自动结课，进来先过一遍
         rows = db.list_students_with_summary(
             keyword=self.keyword,
@@ -232,17 +272,13 @@ class StudentsMixin:
                 self._header(
                     "学员",
                     f"共 {len(rows)} 人",
-                    (
-                        [
-                            ft.Button(
-                                "新增学员",
-                                icon=ft.Icons.PERSON_ADD,
-                                on_click=lambda e: self._open_new_student(),
-                            )
-                        ]
-                        if self.is_admin()
-                        else []
-                    ),
+                    [
+                        ft.Button(
+                            "新增学员",
+                            icon=ft.Icons.PERSON_ADD,
+                            on_click=lambda e: self._open_new_student(),
+                        )
+                    ],
                 ),
                 ft.Row([search], spacing=10),
                 filter_row,
@@ -400,6 +436,8 @@ class StudentsMixin:
                 header,
                 self._student_makeups_card(s),
                 self._profile_card(s, enrollments),
+                self._student_badges_card(s),
+                self._student_account_card(s),
                 self._hours_card(s, accounts),
                 self._enrollments_card(student_id, enrollments),
                 self._student_lessons_card(s),
@@ -416,8 +454,8 @@ class StudentsMixin:
 
     def _profile_card(self, s: dict, enrollments: list[dict] | None = None) -> ft.Container:
         admin = self.is_admin()
-        fields = self._student_fields(s, readonly=not admin)
-        enrollments = enrollments or []
+        can_edit = self._can_manage_student(s["id"])
+        editing = bool(can_edit and self._student_edit_id == s["id"])
 
         def owner_now() -> str:
             rows = [r for r in db.student_owners(s["id"]) if r.get("name")]
@@ -431,39 +469,274 @@ class StudentsMixin:
             }.get(rows[0]["source"], "")
             return f"现在归属：{names}" + (f"（{source}）" if source else "")
 
+        def start_edit(e=None):
+            self._student_edit_id = s["id"]
+            self.render()
+
+        def cancel_edit(e=None):
+            self._student_edit_id = None
+            self.render()
+
+        if not editing:
+            visible_rows = [
+                ("姓名", s.get("name") or "—"),
+                ("性别", s.get("gender") or "—"),
+                ("状态", s.get("status") or "—"),
+                ("年级", s.get("grade") or "—"),
+                ("出生日期", s.get("birth_date") or "—"),
+                ("学校", s.get("school") or "—"),
+                ("联系电话", s.get("phone") or "—"),
+                ("监护人", s.get("guardian") or "—"),
+                ("归属", owner_now().removeprefix("现在归属：")),
+                ("备注", s.get("note") or "—"),
+            ]
+            body = ft.ResponsiveRow(
+                [
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    label,
+                                    size=11,
+                                    color=ft.Colors.GREY_600,
+                                ),
+                                ft.Text(value, size=13),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        ),
+                        col={"xs": 12, "sm": 6, "md": 4, "lg": 3},
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=9),
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                    )
+                    for label, value in visible_rows
+                ],
+                spacing=8,
+                run_spacing=8,
+            )
+            action = (
+                ft.TextButton(
+                    "编辑",
+                    icon=ft.Icons.EDIT,
+                    on_click=start_edit,
+                )
+                if can_edit
+                else None
+            )
+            return self._section("基本档案", body, action=action)
+
+        fields = self._student_fields(s)
+        if not admin:
+            fields["owner"].disabled = True
+            fields["owner"].label = "归属老师（由管理员管理）"
+
         def save(e):
+            if not self._can_manage_student(s["id"]):
+                self._toast("这是其他老师的学员，只能查看")
+                return
             values = self._student_values(fields)
             if values is None:
                 return
+            if not admin:
+                # 普通老师可以维护自己学员的资料，但不能把归属改给别的老师。
+                values.pop("owner_teacher_id", None)
+                values.pop("owner_manual", None)
             db.update_student(s["id"], values)
+            self._student_edit_id = None
             self._finish("档案已保存")
 
         controls = [
             fields["name"],
             ft.Row([fields["gender"], fields["status"]], spacing=10, expand=False),
-            ft.Row([fields["grade"], fields["school"]], spacing=10, expand=False),
+            ft.Row(
+                [fields["grade"], fields["birth_date"]],
+                spacing=10,
+                expand=False,
+            ),
+            fields["school"],
             ft.Row([fields["phone"], fields["guardian"]], spacing=10, expand=False),
             ft.Text(owner_now(), size=13, weight=ft.FontWeight.W_600),
             ft.Text(
-                "归属默认跟缴费走（谁收的钱，这个客户就算谁的）；"
-                "要钉住某位老师就在上面选他，选「跟缴费走（自动）」再放回自动。",
+                (
+                    "归属默认跟缴费走（谁收的钱，这个客户就算谁的）；"
+                    "要钉住某位老师就在上面选他，选「跟缴费走（自动）」再放回自动。"
+                    if admin
+                    else "普通老师可以维护自己学员的资料和报名；"
+                    "学员归属由管理员维护，其他人的学员只能查看。"
+                ),
                 size=11,
                 color=ft.Colors.GREY_600,
             ),
             fields["owner"],
             fields["note"],
         ]
-        if admin:
-            controls.append(
-                ft.Row(
-                    [ft.Button("保存", icon=ft.Icons.SAVE, on_click=save)],
-                    alignment=ft.MainAxisAlignment.END,
-                )
+        controls.append(
+            ft.Row(
+                [
+                    ft.TextButton("取消", on_click=cancel_edit),
+                    ft.Button("保存", icon=ft.Icons.SAVE, on_click=save),
+                ],
+                alignment=ft.MainAxisAlignment.END,
             )
+        )
         body = self._form_column(controls, scroll=False)
-        for name in ("gender", "status", "grade", "school", "phone", "guardian"):
+        for name in (
+            "gender",
+            "status",
+            "grade",
+            "birth_date",
+            "school",
+            "phone",
+            "guardian",
+        ):
             fields[name].expand = True
         return self._section("基本档案", body)
+
+    def _student_account_card(self, s: dict) -> ft.Container:
+        can_manage = self._can_manage_student(s["id"])
+        if not can_manage:
+            return ft.Container(visible=False)
+        account = db.get_student_user(s["id"])
+        if account is None:
+            if not self.is_admin():
+                return ft.Container(visible=False)
+            return self._section(
+                "学生账号",
+                ft.Text(
+                    "还没有学生账号。创建后，学生只能查看自己的信息、积分、课评和教案。",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                ),
+                action=ft.Button(
+                    "创建账号",
+                    icon=ft.Icons.PERSON_ADD,
+                    on_click=lambda e: self._open_student_account_dialog(s),
+                ),
+            )
+        state = "已停用" if not account["active"] else "可使用"
+        return self._section(
+            "学生账号",
+            ft.ResponsiveRow(
+                [
+                    ft.Container(
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    account["username"],
+                                    size=14,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.Text(
+                                    f"登录账号 · {state}",
+                                    size=12,
+                                    color=ft.Colors.GREY_600,
+                                ),
+                                ft.Text(
+                                    f"论坛昵称：{account.get('forum_nickname') or '未设置'}",
+                                    size=12,
+                                    color=ft.Colors.GREY_600,
+                                ),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        ),
+                        col={"xs": 12, "md": 8},
+                        padding=10,
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                    ft.Container(
+                        ft.Row(
+                            [
+                                ft.TextButton(
+                                    "重设密码",
+                                    icon=ft.Icons.KEY,
+                                    on_click=lambda e: self._open_change_password(
+                                        account["id"]
+                                    ),
+                                ),
+                                *(
+                                    [
+                                        ft.TextButton(
+                                            "修改昵称",
+                                            icon=ft.Icons.BADGE_OUTLINED,
+                                            on_click=lambda e: self._open_forum_nickname_dialog(
+                                                account["id"]
+                                            ),
+                                        )
+                                    ]
+                                    if self.is_admin()
+                                    else []
+                                ),
+                                *(
+                                    [
+                                        ft.TextButton(
+                                            "删除账号",
+                                            icon=ft.Icons.DELETE_OUTLINE,
+                                            on_click=lambda e: self._confirm(
+                                                "删除学生账号",
+                                                f"确定删除「{account['username']}」这个学生账号吗？"
+                                                "学员档案和学习记录不会删除。",
+                                                lambda: db.delete_user(account["id"]),
+                                            ),
+                                        )
+                                    ]
+                                    if self.is_admin()
+                                    else []
+                                ),
+                            ],
+                            spacing=2,
+                            wrap=True,
+                        ),
+                        col={"xs": 12, "md": 4},
+                        alignment=ft.Alignment.CENTER_RIGHT,
+                    ),
+                ],
+                spacing=8,
+                run_spacing=8,
+            ),
+        )
+
+    def _open_student_account_dialog(self, s: dict) -> None:
+        if not self.is_admin():
+            self._toast("只有管理员能创建学生账号")
+            return
+        username = _tf("登录用户名 *", "", width=DIALOG_WIDTH)
+        password = _tf(
+            "初始密码 *",
+            "",
+            width=DIALOG_WIDTH,
+            password=True,
+            can_reveal_password=True,
+        )
+
+        def save(e):
+            try:
+                db.create_user(
+                    username.value or "",
+                    password.value or "",
+                    s["name"],
+                    db.ROLE_STUDENT,
+                    is_teacher=False,
+                    student_id=s["id"],
+                )
+            except ValueError as err:
+                username.error = str(err)
+                username.update()
+                return
+            self._finish("学生账号建好了")
+
+        self._show(
+            self._dialog(
+                "创建学生账号",
+                self._form_column([username, password]),
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("保存", on_click=save),
+                ],
+            )
+        )
 
     def _hours_card(self, s: dict, accounts: list[dict]) -> ft.Container:
         admin = self.is_admin()
@@ -533,13 +806,6 @@ class StudentsMixin:
                                             s["id"], aid
                                         ),
                                     ),
-                                    *([ft.TextButton(
-                                        "调整课时",
-                                        icon=ft.Icons.EDIT_NOTE,
-                                        on_click=lambda e, aid=a["hour_type_id"]: self._open_hours_dialog(
-                                            s["id"], aid
-                                        ),
-                                    )] if admin else []),
                                 ],
                                 alignment=ft.MainAxisAlignment.END,
                             ),
@@ -554,7 +820,7 @@ class StudentsMixin:
         body = ft.Column(rows, spacing=10)
         hint = ft.Text(
             "只显示有记录的账户。上竞赛课先扣竞赛课时，竞赛课时不够会自动扣正课；考级课同理。"
-            "要给其它账户加课时，点「调整课时」。",
+            "需要增加课时请到「缴费」页记一笔。",
             size=11,
             color=ft.Colors.GREY_600,
         )
@@ -565,8 +831,10 @@ class StudentsMixin:
 
     def _enrollments_card(self, student_id: int, enrollments: list[dict]) -> ft.Container:
         admin = self.is_admin()
+        can_edit_student = self._can_manage_student(student_id)
         items = []
         for e in enrollments:
+            can_edit = admin or self._can_manage_enrollment(e)
             status_color = {
                 "在读": ft.Colors.GREEN_700,
                 "停课": ft.Colors.ORANGE_700,
@@ -576,7 +844,7 @@ class StudentsMixin:
             tail: list[ft.Control] = [
                 _chip(e["status"], status_color)
             ]
-            if admin:
+            if can_edit:
                 tail += [
                     ft.IconButton(
                         ft.Icons.EDIT,
@@ -659,7 +927,7 @@ class StudentsMixin:
                 icon=ft.Icons.ADD,
                 on_click=lambda e: self._open_enrollment_dialog(student_id, None),
             )
-            if admin
+            if can_edit_student
             else None
         )
         return self._section("报名课程", ft.Column(items, spacing=10), action=action)

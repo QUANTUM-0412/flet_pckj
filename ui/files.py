@@ -595,7 +595,7 @@ class FilesMixin:
         hours, points = _attendance_calc(a, lesson)
         present = int(a.get("attendance") or 0)
         # 这一行只放「每次会变、家长又关心」的东西：
-        # 出勤/纪律/表现/时长基本每节都一样，就不占地方了
+        # 出勤/纪律/学习/时长基本每节都一样，就不占地方了
         tags: list[str] = []
         if present:
             if float(a.get("bonus") or 0):
@@ -676,13 +676,13 @@ class FilesMixin:
                 poster.PointMark("出勤", bool(present), 10 if present else 0),
                 poster.PointMark(
                     "纪律",
-                    bool(int(a.get("discipline") or 0)),
-                    10 if int(a.get("discipline") or 0) else 0,
+                    bool(present),
+                    db.discipline_points(a) if present else 0,
                 ),
                 poster.PointMark(
-                    "表现",
-                    bool(int(a.get("performance") or 0)),
-                    10 if int(a.get("performance") or 0) else 0,
+                    "学习",
+                    bool(present),
+                    db.learning_points(a) if present else 0,
                 ),
                 poster.PointMark(
                     "突出",
@@ -882,16 +882,6 @@ class FilesMixin:
             self._toast("海报存不下来，检查一下 data 文件夹的权限")
             return
         self._show_poster_dialog(path, "班级课堂海报")
-
-    def _make_class_poster_for_template(self, template: dict) -> None:
-        """课程列表里的「做海报」：优先生成当前日期的课次，没有就用最近一节."""
-        lesson = db.find_lesson_for_template(template, self.schedule_date)
-        if lesson is None:
-            lesson = db.latest_lesson_for_template(int(template["id"]))
-        if lesson is None:
-            self._toast("这个班还没有课次，先排一节课再来做海报")
-            return
-        self._make_class_poster_for_lesson(lesson, template)
 
     def _class_poster_button(self, lesson: dict) -> ft.Button:
         """课堂内容里的班级海报按钮：照片旁边就能点。"""

@@ -77,7 +77,7 @@ class LessonDialogsMixin:
         )
         level_dd = _dd(
             "等级（可不选）",
-            [ft.DropdownOption(key="", text="不指定")] + _opts([(l["id"], db.level_full_name(l)) for l in levels]),
+            [ft.DropdownOption(key="", text="不指定")] + _opts([(l["id"], db.level_display_name(l)) for l in levels]),
             value=str(lesson["level_id"]) if editing and lesson["level_id"] else "",
             width=DIALOG_WIDTH,
         )

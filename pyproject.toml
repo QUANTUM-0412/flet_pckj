@@ -9,6 +9,7 @@ dependencies = [
     # 在干净环境里（比如 Ubuntu Server）会缺 flet-web 起不来
     "flet[web]>=1.0.3",
     "pillow>=11",  # 上传的照片自动压小（长边 1600、几百 KB），给家长看还清楚
+    "python-slugify>=9.1.2",  # 中文姓名转拼音，用来生成学生登录名
 ]
 
 [dependency-groups]

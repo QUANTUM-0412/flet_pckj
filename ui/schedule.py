@@ -226,11 +226,17 @@ class ScheduleMixin:
                     icon=ft.Icons.FACT_CHECK_OUTLINED,
                     on_click=lambda e: self._open_lesson_dialog(),
                 ),
-                ft.TextButton(
-                    "规范课程名",
-                    icon=ft.Icons.RULE,
-                    tooltip="按 年份-学期-等级-Cls-序号 统一改名",
-                    on_click=lambda e: self._normalize_course_names(),
+                *(
+                    [
+                        ft.TextButton(
+                            "规范课程名",
+                            icon=ft.Icons.RULE,
+                            tooltip="按 年份-学期-等级-类别-Cls-序号 统一改名",
+                            on_click=lambda e: self._normalize_course_names(),
+                        )
+                    ]
+                    if self.is_admin()
+                    else []
                 ),
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -506,12 +512,18 @@ class ScheduleMixin:
                         icon=ft.Icons.FACT_CHECK,
                         on_click=lambda e, tid=template["id"]: self._roll_call(tid),
                     ),
-                    ft.TextButton(
-                        "这天不上",
-                        tooltip="这天不算上课，从课表上去掉",
-                        on_click=lambda e, tid=template["id"]: self._skip_course_day(
-                            tid, self.schedule_date
-                        ),
+                    *(
+                        [
+                            ft.TextButton(
+                                "这天不上",
+                                tooltip="这天不算上课，从课表上去掉",
+                                on_click=lambda e, tid=template["id"]: self._skip_course_day(
+                                    tid, self.schedule_date
+                                ),
+                            )
+                        ]
+                        if self._can_manage_course(template)
+                        else []
                     ),
                 ],
                 spacing=4,
@@ -570,6 +582,7 @@ class ScheduleMixin:
         )
 
     def _template_row(self, template: dict) -> ft.Container:
+        can_manage = self._can_manage_course(template)
         bits = [
             db.weekday_time_text(template),
             db.lesson_label(template),
@@ -616,11 +629,6 @@ class ScheduleMixin:
                             ft.Text(" · ".join(bits), size=12, color=ft.Colors.GREY_600),
                             ft.Row(
                                 [
-                                    ft.TextButton(
-                                        "做海报",
-                                        icon=ft.Icons.AUTO_AWESOME,
-                                        on_click=lambda e, t=template: self._make_class_poster_for_template(t),
-                                    ),
                                     *(
                                         [
                                             ft.TextButton(
@@ -629,7 +637,7 @@ class ScheduleMixin:
                                                 on_click=lambda e, t=template: self._generate_semester(t),
                                             )
                                         ]
-                                        if self.is_admin()
+                                        if can_manage
                                         else []
                                     ),
                                 ],
@@ -639,11 +647,23 @@ class ScheduleMixin:
                         spacing=2,
                         expand=True,
                     ),
-                    ft.IconButton(
-                        ft.Icons.EDIT,
-                        tooltip="编辑",
-                        icon_size=18,
-                        on_click=lambda e, t=template: self._open_template_dialog(t),
+                    *(
+                        [
+                            ft.IconButton(
+                                ft.Icons.EDIT,
+                                tooltip="编辑",
+                                icon_size=18,
+                                on_click=lambda e, t=template: self._open_template_dialog(t),
+                            )
+                        ]
+                        if can_manage
+                        else [
+                            ft.Text(
+                                "只读",
+                                size=11,
+                                color=ft.Colors.GREY_500,
+                            )
+                        ]
                     ),
                     *(
                         [
@@ -660,7 +680,7 @@ class ScheduleMixin:
                                 ),
                             )
                         ]
-                        if self.is_admin()
+                        if can_manage
                         else []
                     ),
                 ],
@@ -692,6 +712,9 @@ class ScheduleMixin:
 
     def _generate_semester(self, template: dict) -> None:
         """一次把这个学期的课排出来（先排课，不点名、不扣课时）。"""
+        if not self._can_manage_course(template):
+            self._toast("这是其他老师的课程，只能查看")
+            return
         dates = db.template_dates(template)
         if not dates:
             if not db.template_weekdays(template):
@@ -770,6 +793,9 @@ class ScheduleMixin:
     def _skip_course_day(self, template_id: int, day: str) -> None:
         """某天的课不上了：那天从课表上去掉。"""
         template = db.get_template(template_id)
+        if template is None or not self._can_manage_course(template):
+            self._toast("这是其他老师的课程，只能查看")
+            return
         title = db.class_label(template) if template else "这门课"
         self._confirm(
             "这天不上课",
@@ -782,13 +808,20 @@ class ScheduleMixin:
         )
 
     def _restore_course_day(self, template_id: int, day: str) -> None:
+        template = db.get_template(template_id)
+        if template is None or not self._can_manage_course(template):
+            self._toast("这是其他老师的课程，只能查看")
+            return
         db.unskip_course_day(template_id, day)
         self.page.pop_dialog()
         self.render()
         self._toast(f"{_date_text(day)} 恢复上课")
 
     def _normalize_course_names(self) -> None:
-        """把现有课程名统一成 年份-学期-等级-Cls-序号。"""
+        """把现有课程名统一成 年份-学期-等级-类别-Cls-序号。"""
+        if not self.is_admin():
+            self._toast("统一课程名会影响所有老师，只有管理员能操作")
+            return
         count = db.normalize_course_names()
         self.render()
         self._toast(
@@ -797,15 +830,19 @@ class ScheduleMixin:
 
     def _open_template_dialog(self, template: dict | None = None) -> None:
         levels = db.list_levels(active_only=True)
-        class_types = db.list_class_types()
         editing = template is not None
+        if editing and not self._can_manage_course(template):
+            self._toast("这是其他老师的课程，只能查看")
+            return
+        admin = self.is_admin()
+        my_teacher_id = self._my_user_id()
         today = date.today()
 
         name = _tf(
             "课程名（自动生成，也可自己改）",
             template["name"] if editing else "",
             width=DIALOG_WIDTH,
-            hint_text="如 2026-2-STEM-Lvl-02-Cls-01",
+            hint_text="如 2026-2-STEM-Lvl-02-正课-Cls-01",
         )
         gen_year = _tf(
             "年份",
@@ -969,29 +1006,33 @@ class ScheduleMixin:
             width=DIALOG_WIDTH,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
-        type_dd = _dd(
-            "课型",
-            _opts([(c["id"], c["name"]) for c in class_types]),
-            value=str(template["class_type_id"]) if editing else None,
-            width=DIALOG_WIDTH,
-        )
         level_dd = _dd(
-            "等级（可不选）",
-            [ft.DropdownOption(key="", text="不指定")]
-            + _opts([(l["id"], db.level_full_name(l)) for l in levels]),
+            "等级 *",
+            _opts([(l["id"], db.level_display_name(l)) for l in levels]),
             value=str(template["level_id"]) if editing and template["level_id"] else "",
             width=DIALOG_WIDTH,
         )
         teacher_dd = _dd(
             "课程老师（这门课归谁）",
-            _teacher_opts("不指定"),
+            (
+                _teacher_opts("不指定")
+                if admin
+                else [
+                    ft.DropdownOption(
+                        key=str(my_teacher_id),
+                        text=self._whoami(),
+                    )
+                ]
+            ),
             value=(
                 str(template["teacher_id"])
                 if editing and template["teacher_id"]
-                else self._default_teacher_id()
+                else (self._default_teacher_id() if admin else str(my_teacher_id))
             ),
             width=DIALOG_WIDTH,
         )
+        if not admin:
+            teacher_dd.disabled = True
         note = _tf("备注", template["note"] if editing else "", width=DIALOG_WIDTH)
         start_date = _tf(
             "开班日",
@@ -1056,6 +1097,8 @@ class ScheduleMixin:
 
         def on_level(e):
             level_id = int(level_dd.value) if (level_dd.value or "").strip() else None
+            level_dd.error = None
+            level_dd.update()
             for l in levels:
                 if str(l["id"]) == level_dd.value:
                     minutes.value = str(l["default_minutes"])
@@ -1071,7 +1114,7 @@ class ScheduleMixin:
         def level_text() -> str:
             for l in levels:
                 if str(l["id"]) == (level_dd.value or ""):
-                    return db.level_full_name(l)
+                    return db.level_display_name(l)
             return ""
 
         name_touched = False
@@ -1158,8 +1201,9 @@ class ScheduleMixin:
                 name.error = "请填课程名（每门课的名字不能重复）"
                 name.update()
                 return
-            if not type_dd.value:
-                self._toast("请选课型")
+            if not (level_dd.value or "").strip():
+                level_dd.error = "请选择等级"
+                level_dd.update()
                 return
             for field, label in ((start_date, "开课日"), (end_date, "结课日")):
                 day = (field.value or "").strip()
@@ -1187,7 +1231,11 @@ class ScheduleMixin:
                 minutes.error = "时长要大于 0"
                 minutes.update()
                 return
-            level_id = int(level_dd.value) if (level_dd.value or "").strip() else None
+            level_id = int(level_dd.value)
+            class_type_id = db.class_type_id_for_level(level_id)
+            if not class_type_id:
+                self._toast("这个等级还没有对应的课型，请先到课程设置里检查")
+                return
             days = chosen_weekdays()
             day_times: dict[int, str] = {}
             for day in days:
@@ -1204,13 +1252,17 @@ class ScheduleMixin:
                 days,
                 first_time,
                 mins,
-                int(type_dd.value),
+                class_type_id,
                 level_id,
                 note.value or "",
                 first,
                 last,
             )
-            teacher_id = int(teacher_dd.value) if (teacher_dd.value or "").strip() else None
+            teacher_id = (
+                int(teacher_dd.value)
+                if admin and (teacher_dd.value or "").strip()
+                else my_teacher_id
+            )
             try:
                 seq_value = int((gen_seq.value or "0").strip() or 0) or None
             except ValueError:
@@ -1273,7 +1325,7 @@ class ScheduleMixin:
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         ft.Text(
-                            "课程名格式：年份-学期-等级-Cls-序号",
+                            "课程名格式：年份-学期-等级-类别-Cls-序号",
                             size=11,
                             color=ft.Colors.GREY_600,
                         ),
@@ -1286,7 +1338,6 @@ class ScheduleMixin:
         body = self._form_column(
             [
                 name,
-                type_dd,
                 level_dd,
                 teacher_dd,
                 ft.Divider(height=1),

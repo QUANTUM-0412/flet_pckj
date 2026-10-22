@@ -68,6 +68,9 @@ def walk(control):
     for attr in (
         "controls",
         "content",
+        "columns",
+        "rows",
+        "cells",
         "actions",
         "title",
         "subtitle",
@@ -194,6 +197,15 @@ ok(rules["竞赛"]["fallback_name"] == "正课", "竞赛课时不够补扣正课
 ok(rules["考级"]["fallback_name"] == "正课", "考级课时不够补扣正课")
 ok(rules["试听"]["deduct"] == 0, "试听不扣课时")
 ok(rules["替课"]["deduct"] == 1 and rules["替课"]["primary_name"] == "正课", "老师替课照扣正课课时")
+ok(
+    "社团" in rules and "校内社团" not in rules,
+    "社团课型统一显示为「社团」",
+)
+uav_level = next(l for l in db.list_levels() if l["level_type"] == "社团")
+ok(
+    db.class_type_id_for_level(uav_level["id"]) == rules["社团"]["id"],
+    "社团等级会自动匹配社团课型",
+)
 
 print("2. 搭界面（宽屏 / 手机）")
 page = StubPage(width=1200)
@@ -235,14 +247,30 @@ ok(find_text(page.controls[0], "还没有试听记录"), "点「试听」能切�
 app._goto(3)
 ok(find_text(page.controls[0], "还没有缴费记录"), "点「缴费」能切过去")
 app._goto(4)
-ok(find_text(page.controls[0], "课时不够要提醒的"), "点「报表」能切过去")
+ok(find_text(page.controls[0], "论坛悬赏"), "点「论坛」能切过去")
 app._goto(5)
+ok(find_text(page.controls[0], "课时不够要提醒的"), "点「报表」能切过去")
+app._goto(6)
+ok(find_text(page.controls[0], "竞技与考级"), "点「竞技」能切过去")
+app._goto(7)
 ok(find_text(page.controls[0], "课型与扣课时规则"), "点「课程设置」能切过去")
 app._goto(0)
 ok(find_text(page.controls[0], "还没有学员"), "点「学员」能切回来")
 
 menus = [label for _ic, _sic, label in app._nav_items()]
-ok(menus == ["学员", "课程", "试听", "缴费", "报表", "设置"], f"菜单是 {menus}")
+ok(
+    menus == [
+        "学员",
+        "课程",
+        "试听",
+        "缴费",
+        "论坛",
+        "报表",
+        "竞技",
+        "设置",
+    ],
+    f"菜单是 {menus}",
+)
 ok("上课记录" not in menus, "「上课记录」栏目并入「课程」了")
 ok("积分" not in menus, "积分不再单占一个菜单（挪进学员页和报表页了）")
 
@@ -271,8 +299,18 @@ app._goto(0)  # 看完缴费页记得回来，后面接着测学员
 print("3. 新增学员")
 app._open_new_student()
 dlg = top_dialog(page)
+ok(find_field(dlg, "出生日期") is not None, "新增学员可以填出生日期")
+ok(
+    not any(
+        isinstance(c, ft.Switch)
+        and "自动计算年级" in str(c.label or "")
+        for c in walk(dlg)
+    ),
+    "出生日期绑定后不再提供可选开关",
+)
 find_field(dlg, "姓名 *").value = "张晨希"
 find_dropdown(dlg, "年级").value = "六年级"
+find_field(dlg, "出生日期").value = "2014-10-10"
 type_school(dlg, "实验小学")
 find_field(dlg, "联系电话").value = "13800000000"
 find_dropdown(dlg, "性别").value = "女"
@@ -282,13 +320,54 @@ ok(len(students) == 1 and students[0]["name"] == "张晨希", "学员存进去�
 ok(students[0]["grade"] == "六年级", "年级存的是「六年级」这种写法，不是光秃秃的 6")
 ok(students[0]["school"] == "实验小学", "学校也存进去了")
 sid = students[0]["id"]
+auto_account = db.get_student_user(sid)
+ok(
+    auto_account is not None
+    and auto_account["role"] == db.ROLE_STUDENT
+    and auto_account["student_id"] == sid,
+    "新建正式学员后自动生成学生账号",
+)
+credentials_dlg = top_dialog(page)
+ok(find_text(credentials_dlg, "学生账号已生成"), "创建后显示学生初始账号密码")
+ok(find_text(credentials_dlg, "用户名：zhangchenxi"), "学生用户名使用姓名拼音")
+password_line = next(
+    c.value
+    for c in walk(credentials_dlg)
+    if isinstance(c, ft.Text) and str(c.value or "").startswith("初始密码：")
+)
+initial_password = str(password_line).split("：", 1)[1]
+ok(
+    len(initial_password) == 8 and initial_password.isdigit(),
+    "没有出生日期时生成 8 位随机数字密码",
+)
+ok(
+    db.verify_user("zhangchenxi", initial_password) is not None,
+    "自动生成的拼音用户名和初始密码能登录",
+)
+app._close()
 
 print("4. 学员详情页")
 app.open_student(sid)
 tree = page.controls[0]
 ok(find_text(tree, "张晨希"), "详情页显示姓名")
+ok(any(isinstance(c, ft.ResponsiveRow) for c in walk(tree)), "基本档案默认用横向信息卡显示")
+try:
+    find_field(tree, "姓名 *")
+    profile_form_by_default = True
+except AssertionError:
+    profile_form_by_default = False
+ok(not profile_form_by_default, "不编辑时不显示整排输入框")
 ok(find_text(tree, "课时账户"), "详情页有课时账户")
 ok(find_text(tree, "报名课程"), "详情页有报名课程")
+click(tree, "重设密码")
+dlg = top_dialog(page)
+find_field(dlg, "新密码").value = "kid-new-pass"
+find_field(dlg, "再输一遍新密码").value = "kid-new-pass"
+click(dlg, "保存")
+ok(
+    db.verify_user("zhangchenxi", "kid-new-pass") is not None,
+    "从学员档案里能修改学生登录密码",
+)
 
 print("4b. 学员列表上年级和学校都看得见")
 app.open_student(None)
@@ -298,11 +377,16 @@ ok(find_text(page.controls[0], "六年级"), "列表卡片上有年级")
 ok(find_text(page.controls[0], "实验小学"), "列表卡片上有哪所小学")
 
 print("5. 改档案")
+app.open_student(sid)
+tree = page.controls[0]
+find_button(tree, "编辑").on_click(None)
+tree = page.controls[0]
 save_btn = None
 for c in walk(tree):
     if isinstance(c, (ft.Button, ft.TextButton)) and c.content == "保存":
         save_btn = c
 find_dropdown(tree, "年级").value = "初一"
+find_field(tree, "出生日期").value = "2013-10-10"
 type_school(tree, "育才小学")
 save_btn.on_click(None)
 ok(db.get_student(sid)["grade"] == "初一", "档案改好了（年级）")
@@ -324,19 +408,26 @@ ok(len(enrollments) == 1, "报名记录建好了")
 ok(enrollments[0]["level_name"] == "Lvl-03", "报名绑定了等级")
 
 print("7. 课时充值与剩余")
-app._open_hours_dialog(sid, None)
-dlg = top_dialog(page)
-find_field(dlg, "数量（课时）").value = "24"
-find_field(dlg, "备注").value = "缴费 3000"
-click(dlg, "保存")
+accounts = {a["name"]: a for a in db.get_accounts(sid)}
+db.add_hours(
+    sid,
+    accounts["正课"]["hour_type_id"],
+    24,
+    kind="充值",
+    note="测试准备课时",
+    source_type="manual",
+)
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 24, "正课课时 +24")
 
-app._open_hours_dialog(sid, accounts["正课"]["hour_type_id"])
-dlg = top_dialog(page)
-find_dropdown(dlg, "类型").value = "扣减"
-find_field(dlg, "数量（课时）").value = "22"
-click(dlg, "保存")
+db.add_hours(
+    sid,
+    accounts["正课"]["hour_type_id"],
+    -22,
+    kind="扣减",
+    note="测试准备已用课时",
+    source_type="manual",
+)
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 2, "扣完剩 2 课时")
 ok(accounts["正课"]["charged"] == 24 and accounts["正课"]["used"] == 22, "总课时／已用分得清")
@@ -377,13 +468,20 @@ find_button(dlg, "保存").on_click(None)
 ok(len(db.list_class_types()) == 7, "课型规则能保存")
 
 print("10b. 学校字典（设置里加，填学员时直接挑）")
-app.tab = 5
+app.tab = 7
 app.render()
 tree = page.controls[0]
-ok(find_field(tree, "新学校名") is not None, "设置里有「学校」这一块，能加新学校")
+ok(
+    find_text(tree, "老师账号")
+    and not find_text(tree, "用户名 zhangchenxi"),
+    "老师账号列表不混入学生账号",
+)
 ok(find_text(tree, "育才小学"), "已经在用的学校也列在这儿")
-find_field(tree, "新学校名").value = "云山道小学"
-find_button(tree, "加进去").on_click(None)
+ok(find_button(tree, "新增学校") is not None, "学校默认只显示列表，新增时才打开输入框")
+find_button(tree, "新增学校").on_click(None)
+dlg = top_dialog(page)
+find_field(dlg, "新学校名").value = "云山道小学"
+click(dlg, "保存")
 ok("云山道小学" in db.list_schools(), "学校加进字典了")
 ok(find_text(page.controls[0], "还没有孩子填这个学校"), "卡片上注明还没人用")
 
@@ -450,20 +548,164 @@ ok(db.student_points(sid) == 0, "还没点名，积分也先不加")
 db.roll_call(lesson["id"])
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 22.5, "出勤自动扣了 1.5 课时")
-ok(db.student_points(sid) == 30, "出勤＋纪律＋表现 = 30 分")
+ok(db.student_points(sid) == 30, "出勤＋纪律＋学习 = 30 分")
 
-app._save_attendance_flag(rows[0]["id"], "attendance", 1, False)
+app._save_attendance_flag(rows[0]["id"], "attendance", False)
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 24, "改成请假，课时退回来")
 ok(db.student_points(sid) == 0, "请假不加分")
 
-app._save_attendance_flag(rows[0]["id"], "attendance", 0, True)
+app._save_attendance_flag(rows[0]["id"], "attendance", True)
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(accounts["正课"]["balance"] == 22.5, "改回出勤，课时又扣上")
-ok(db.student_points(sid) == 10, "请假时清掉的纪律和表现会重新勾，所以先只算 10 分")
+ok(db.student_points(sid) == 10, "纪律和学习不好时先按默认 0 分计算")
+
+app.open_lesson(lesson["id"])
+ok(find_checkbox(page.controls[0], "纪律").label == "纪律", "标题就是「纪律」")
+ok(find_checkbox(page.controls[0], "学习").label == "学习", "标题就是「学习」")
+performance_score = find_field(page.controls[0], "学习分（-10 < x < 10）")
+ok(performance_score.visible, "学习不好时显示老师填分框")
+performance_score.value = "10"
+performance_score.on_blur(Evt(performance_score))
+ok(
+    performance_score.error == "学习分必须大于 -10 且小于 10"
+    and float(db.get_attendance(rows[0]["id"])["performance_score"]) == 0,
+    "学习分等于 10 时拒绝保存",
+)
+performance_score.value = "-3.2"
+performance_score.on_blur(Evt(performance_score))
+ok(
+    abs(float(db.get_attendance(rows[0]["id"])["performance_score"]) + 3.2) < 1e-6,
+    "老师填写的学习分 -3.2 存下来了",
+)
+ok(abs(db.student_points(sid) - 6.8) < 1e-6, "学习分 -3.2 参与积分计算")
+
+discipline_score = find_field(page.controls[0], "纪律分（-10 < x < 10）")
+ok(discipline_score.visible, "纪律不好时显示老师填分框")
+discipline_score.value = "10"
+discipline_score.on_blur(Evt(discipline_score))
+ok(
+    discipline_score.error == "纪律分必须大于 -10 且小于 10"
+    and float(db.get_attendance(rows[0]["id"])["discipline_score"]) == 0,
+    "纪律分等于 10 时拒绝保存",
+)
+discipline_score.value = "-2.5"
+discipline_score.on_blur(Evt(discipline_score))
+ok(
+    abs(float(db.get_attendance(rows[0]["id"])["discipline_score"]) + 2.5) < 1e-6,
+    "老师填写的纪律分 -2.5 存下来了",
+)
+ok(abs(db.student_points(sid) - 4.3) < 1e-6, "纪律分也参与本次积分计算")
+for field, title in (
+    ("discipline_score", "纪律分"),
+    ("performance_score", "学习分"),
+):
+    for invalid_score in (-10, 10):
+        try:
+            db.update_attendance(
+                rows[0]["id"], **{field: invalid_score}
+            )
+            rejected = False
+        except ValueError:
+            rejected = True
+        ok(rejected, f"{title} {invalid_score} 不允许保存")
+
+poor_discipline_reason = find_field(page.controls[0], "纪律不好原因")
+ok(poor_discipline_reason.visible, "纪律不好时显示原因输入框")
+poor_discipline_reason.value = "多次打断课堂，影响其他同学"
+poor_discipline_reason.on_blur(Evt(poor_discipline_reason))
+ok(
+    db.get_attendance(rows[0]["id"])["poor_discipline_reason"]
+    == "多次打断课堂，影响其他同学",
+    "纪律不好的原因存下来了",
+)
+
+poor_reason = find_field(page.controls[0], "学习不好原因")
+ok(poor_reason.visible, "学习不好时显示原因输入框")
+poor_reason.value = "多次离座，没有按步骤完成"
+poor_reason.on_blur(Evt(poor_reason))
+ok(
+    db.get_attendance(rows[0]["id"])["poor_performance_reason"]
+    == "多次离座，没有按步骤完成",
+    "学习不好的原因存下来了",
+)
+ok(
+    "纪律不好（得分 -2.5）：多次打断课堂，影响其他同学"
+    in db.list_point_transactions(sid)[0]["note"],
+    "纪律不好的原因也写进积分明细",
+)
+ok(
+    "学习不好（得分 -3.2）：多次离座，没有按步骤完成"
+    in db.list_point_transactions(sid)[0]["note"],
+    "学习不好的原因也写进积分明细",
+)
+
+discipline_box = find_checkbox(page.controls[0], "纪律")
+discipline_box.value = True
+discipline_box.on_change(Evt(discipline_box))
+ok(
+    abs(db.student_points(sid) - 16.8) < 1e-6,
+    "重新勾上纪律时恢复满分 10 分",
+)
+ok(
+    not find_field(page.controls[0], "纪律分（-10 < x < 10）").visible
+    and not find_field(page.controls[0], "纪律不好原因").visible,
+    "勾上纪律后，纪律分和原因框立即隐藏",
+)
+discipline_row = db.get_attendance(rows[0]["id"])
+ok(
+    float(discipline_row["discipline_score"]) == -2.5
+    and discipline_row["poor_discipline_reason"] == "多次打断课堂，影响其他同学",
+    "重新勾上后，纪律填分和原因仍保留",
+)
+discipline_box.value = False
+discipline_box.on_change(Evt(discipline_box))
+ok(
+    abs(db.student_points(sid) - 4.3) < 1e-6,
+    "再次取消纪律时，恢复使用原来的纪律分",
+)
+learning_box = find_checkbox(page.controls[0], "学习")
+learning_box.value = True
+learning_box.on_change(Evt(learning_box))
+ok(
+    abs(db.student_points(sid) - 17.5) < 1e-6,
+    "重新勾上学习时也恢复满分 10 分",
+)
+ok(
+    not find_field(page.controls[0], "学习分（-10 < x < 10）").visible
+    and not find_field(page.controls[0], "学习不好原因").visible,
+    "勾上学习后，学习分和原因框立即隐藏",
+)
+learning_box.value = False
+learning_box.on_change(Evt(learning_box))
+ok(
+    abs(db.student_points(sid) - 4.3) < 1e-6,
+    "再次取消学习时，恢复使用原来的学习分",
+)
+lesson_points = [
+    t
+    for t in db.list_point_transactions(sid)
+    if t["source_type"] == "lesson" and t["source_id"] == lesson["id"]
+]
+ok(len(lesson_points) == 1, "反复切换纪律和学习不会重复生成积分")
 
 app._save_attendance_value(rows[0]["id"], "bonus", 0, "25")
-ok(db.student_points(sid) == 35, "突出发挥 25 分算进积分")
+ok(
+    abs(db.student_points(sid) - 29.3) < 1e-6,
+    "突出发挥 25 分在纪律分和学习分之后继续累加",
+)
+bonus_reason = find_field(page.controls[0], "突出发挥原因")
+ok(bonus_reason.visible, "突出发挥时显示原因输入框")
+bonus_reason.value = "主动帮助同学检查线路"
+bonus_reason.on_blur(Evt(bonus_reason))
+ok(
+    db.get_attendance(rows[0]["id"])["bonus_reason"] == "主动帮助同学检查线路",
+    "突出发挥的原因存下来了",
+)
+ok(
+    "突出发挥：主动帮助同学检查线路" in db.list_point_transactions(sid)[0]["note"],
+    "突出发挥的原因也写进积分明细",
+)
 
 app._open_lesson_dialog()
 dlg = top_dialog(page)
@@ -640,6 +882,7 @@ dd.on_select(None)
 ok(holder_of(dlg, find_field(dlg, "姓名 *")).visible, "切到「＋ 新建学员…」，填名字的地方就出来了")
 find_field(dlg, "姓名 *").value = "刚交钱的娃"
 find_dropdown(dlg, "年级").value = "三年级"
+find_field(dlg, "出生日期").value = "2017-10-10"
 # 学校是手打的
 type_school(dlg, "实验小学")
 find_field(dlg, "联系电话").value = "13700000000"
@@ -652,6 +895,12 @@ fresh = next(s for s in students_now if s["name"] == "刚交钱的娃")
 ok(fresh["grade"] == "三年级", "建档时年级记上了")
 ok(fresh["school"] == "实验小学", "手打进去的学校也存下来了")
 ok("实验小学" in db.list_schools(), "存过的学校进了候选名单")
+ok(
+    db.get_student_user(fresh["id"]) is not None,
+    "缴费时顺手新建的正式学员也会自动生成账号",
+)
+ok(find_text(top_dialog(page), "学生账号已生成"), "缴费建档后显示初始账号")
+app._close()
 
 # 下次再打开：填过的学校应该出现在下拉里，挑一下就能填进输入框
 app._open_new_student()
@@ -665,6 +914,7 @@ app._close()
 
 app.tab = 0
 app.open_student(fresh["id"])
+find_button(page.controls[0], "编辑").on_click(None)
 ok(find_field(page.controls[0], "学校").value == "实验小学", "学员档案里回显着学校")
 app.open_student(None)
 fresh_accounts = {a["name"]: a for a in db.get_accounts(fresh["id"])}
@@ -674,19 +924,79 @@ db.delete_payment(db.list_payments(student_id=fresh["id"])[0]["id"])
 db.delete_student(fresh["id"])
 ok(len(db.list_students()) == before_count, "清干净了")
 
-print("12c. 代金券：缴正课送券，下次缴费能抵一张")
+print("12c. 固定课包与代金券")
 vou_kid = db.create_student({"name": "券娃", "grade": "二年级"})
 zk_hour = next(h["id"] for h in db.list_hour_types() if h["name"] == "正课")
 js_hour = next(h["id"] for h in db.list_hour_types() if h["name"] == "竞赛")
-ok(db.voucher_plan(3000) == (300.0, 10), "3000 → 10 张 300 元")
-ok(db.voucher_plan(5200) == (520.0, 10), "5200 → 10 张 520 元")
+default_package = next(
+    p for p in db.list_course_packages() if p["name"] == "3000 元固定课包"
+)
+package_hours = {
+    item["hour_type_name"]: item["hours"] for item in default_package["items"]
+}
+ok(
+    default_package["price"] == 3000
+    and package_hours == {"正课": 24.0, "考级": 1.0, "竞赛": 1.0},
+    "预置课包是 3000 元：正课24＋考级1＋竞赛1",
+)
+ok(db.voucher_plan(3000) == (0.0, 0), "普通 3000 元缴费不送券")
+ok(
+    db.voucher_plan(3000, package_selected=True) == (300.0, 10),
+    "满 3000 元的固定课包送 10 张 300 元券",
+)
+ok(
+    db.voucher_plan(5200, package_selected=True) == (520.0, 10),
+    "5200 元固定课包送 10 张 520 元券",
+)
+ok(db.voucher_plan(720, package_selected=True) == (0.0, 0), "不满 3000 元不送券")
 ok(db.voucher_plan(0) == (0.0, 0), "没花钱就不送")
 
+small_kid = db.create_student({"name": "720 元学员", "grade": "二年级"})
+db.create_payment(
+    small_kid,
+    "2026-10-01",
+    [{"hour_type_id": zk_hour, "level_id": None, "hours": 6, "amount": 720}],
+)
+ok(db.list_vouchers(small_kid) == [], "普通 720 元缴费不再送代金券")
+for p in db.list_payments(student_id=small_kid):
+    db.delete_payment(p["id"])
+db.delete_student(small_kid)
+
+manual_3000 = db.create_payment(
+    vou_kid,
+    "2026-10-01",
+    [{"hour_type_id": zk_hour, "level_id": None, "hours": 24, "amount": 3000}],
+)
+ok(db.list_vouchers(vou_kid) == [], "没有选择固定课包，即使 3000 元也不送券")
+db.delete_payment(manual_3000)
+
+
+def package_items(package: dict) -> list[dict]:
+    return [
+        {
+            "hour_type_id": item["hour_type_id"],
+            "level_id": None,
+            "hours": item["hours"],
+            "amount": package["price"] if index == 0 else 0,
+            "package_item": True,
+        }
+        for index, item in enumerate(package["items"])
+    ]
+
+
 v_first = db.create_payment(
-    vou_kid, "2026-10-01", [{"hour_type_id": zk_hour, "level_id": None, "hours": 24, "amount": 3000}]
+    vou_kid,
+    "2026-10-01",
+    package_items(default_package),
+    package_id=default_package["id"],
 )
 batches = db.list_vouchers(vou_kid)
-ok(len(batches) == 1 and batches[0]["count"] == 10 and batches[0]["face"] == 300, "缴 3000 正课送了 10 张 300 的券")
+ok(
+    len(batches) == 1
+    and batches[0]["count"] == 10
+    and batches[0]["face"] == 300,
+    "选择 3000 元固定课包才送 10 张 300 元券",
+)
 ok(batches[0]["expires_on"] == "2028-10-01", "有效期 24 个月")
 ok(batches[0]["remain"] == 10, "刚发下来 10 张都能用")
 ok(db.get_payment(v_first)["amount"] == 3000, "送券不影响这一笔的实收")
@@ -745,12 +1055,61 @@ app.render()
 app._open_payment_dialog(None, vou_kid)
 dlg = top_dialog(page)
 ok(find_dropdown(dlg, "用代金券") is not None, "缴费框里有「用代金券」")
-ok(find_text(dlg, "面额 = 正课金额 ÷ 10"), "写明了送券规则（面额 = 正课金额 ÷ 10）")
-find_field(dlg, "金额（元）").value = "3000"
-find_field(dlg, "数量（课时）").value = "24"
-find_field(dlg, "金额（元）").on_change(Evt(find_field(dlg, "金额（元）")))
-ok(find_text(dlg, "送 10 张 300 元的代金券"), "填上正课金额，当场算出送券")
+ok(find_text(dlg, "普通缴费不送代金券"), "普通缴费明确提示不送券")
+package_dd = find_dropdown(dlg, "固定课包（可选）")
+package_dd.value = str(default_package["id"])
+package_dd.on_select(Evt(package_dd))
+ok(find_text(dlg, "送 10 张 300 元的代金券"), "选固定课包后当场显示送券")
+ok(any(isinstance(c, ft.DataTable) for c in walk(dlg)), "固定课包用简洁表格展示")
+try:
+    find_field(dlg, "数量（课时）")
+    has_package_input_rows = True
+except AssertionError:
+    has_package_input_rows = False
+ok(not has_package_input_rows, "固定课包不再显示不可编辑的整排输入框")
+ok(
+    find_button(dlg, "+ 额外赠送考级／比赛课时") is not None,
+    "固定课包仍可额外添加赠送课时",
+)
+find_button(dlg, "+ 额外赠送考级／比赛课时").on_click(None)
+gift_type = find_dropdown(dlg, "赠送课时类型")
+ok(
+    all(str(hour_id) != str(zk_hour) for hour_id in [o.key for o in gift_type.options]),
+    "额外赠送里不能选择正课",
+)
+gift_type.value = str(js_hour)
+find_field(dlg, "赠送数量").value = "1"
+click(dlg, "保存")
+ok(
+    find_field(top_dialog(page), "备注").error == "赠送课时必须写明原因",
+    "课包额外赠送也要先写备注原因",
+)
+find_field(top_dialog(page), "备注").value = "老师额外赠送比赛 1 课时"
+click(top_dialog(page), "保存")
+package_gift_payment = next(
+    p
+    for p in db.list_payments(vou_kid)
+    if p["note"] == "老师额外赠送比赛 1 课时"
+)
+ok(
+    package_gift_payment["amount"] == 3000
+    and any(
+        item["hour_type_name"] == "竞赛" and item["hours"] == 1
+        for item in db.list_payment_items(package_gift_payment["id"])
+    ),
+    "带备注的课包额外赠送可以保存",
+)
+
+app.tab = 7
+app.render()
+ok(find_text(page.controls[0], "固定课包"), "设置里能管理固定课包")
+ok(find_button(page.controls[0], "新增课包") is not None, "设置里有新增课包按钮")
+app._open_course_package_dialog(default_package)
+dlg = top_dialog(page)
+ok(find_field(dlg, "课包名称").value == "3000 元固定课包", "课包设置能打开编辑")
+ok(find_field(dlg, "课包价格（元）").value == "3000", "课包价格回显正确")
 app._close()
+
 app.tab = 0
 app.open_student(vou_kid)
 ok(find_text(page.controls[0], "代金券"), "学员页有代金券卡片")
@@ -771,10 +1130,14 @@ ok(
 p_new = db.create_payment(
     vou_kid,
     "2026-12-01",
-    [{"hour_type_id": zk_hour, "level_id": None, "hours": 20, "amount": 2000}],
+    package_items(default_package),
+    package_id=default_package["id"],
 )
 fresh_batch = next(v for v in db.list_vouchers(vou_kid) if v["payment_id"] == p_new)
-ok(fresh_batch["face"] == 200 and fresh_batch["count"] == 10, "2000 → 10 张 200 元的券")
+ok(
+    fresh_batch["face"] == 300 and fresh_batch["count"] == 10,
+    "固定课包再次缴费仍送 10 张 300 元券",
+)
 race_pay = db.create_payment(
     vou_kid,
     "2026-12-05",
@@ -783,7 +1146,10 @@ race_pay = db.create_payment(
     voucher_id=fresh_batch["id"],
 )
 race = db.get_payment(race_pay)
-ok(race["amount"] == 320 and race["voucher_amount"] == 200, "竞赛缴费也能用券抵 200")
+ok(
+    race["amount"] == 220 and race["voucher_amount"] == 300,
+    "竞赛缴费也能用 300 元固定课包券",
+)
 ok(
     [v for v in db.list_vouchers(vou_kid) if v["payment_id"] == race_pay] == [],
     "竞赛缴费本身不送券",
@@ -802,7 +1168,7 @@ lesson_id = db.create_lesson("2026-09-12", "10:30", 90, zhengke["id"], gpl3["id"
 db.add_attendance(lesson_id, sid)
 ok(db.student_points(sid) == 30, "上课赚了 30 分")
 
-app.tab = 4
+app.tab = 5
 app.render()
 ok(find_text(page.controls[0], "30 分"), "报表页显示孩子的积分")
 app._open_redemption_dialog(None, sid)
@@ -825,7 +1191,7 @@ app.open_student(sid)
 ok(find_text(page.controls[0], "积分明细（现在 25 分）"), "学员详情有积分明细")
 ok(find_text(page.controls[0], "小玩具"), "积分明细显示了兑换原因")
 
-app.tab = 4
+app.tab = 5
 app.render()
 ok(find_text(page.controls[0], "小玩具"), "报表页能看到兑换记录")
 db.delete_redemption(redemptions[0]["id"])
@@ -840,7 +1206,7 @@ att = db.add_attendance(lesson_id, sid)
 ok(zhengke_balance() == 22.5, "出勤先扣了 1.5 课时")
 ok(db.pending_makeup_count(sid) == 0, "出勤的时候没有待补课")
 
-app._save_attendance_flag(att, "attendance", 1, False)
+app._save_attendance_flag(att, "attendance", False)
 ok(zhengke_balance() == 24, "改成请假，课时退回来")
 ok(db.pending_makeup_count(sid) == 1, "请假自动生成一条待补课")
 
@@ -898,7 +1264,7 @@ app.render()
 ok(not find_text(page.controls[0], "待补课\n"), "学员列表上没有待补课标记了")
 lesson2 = db.create_lesson("2026-10-10", "10:30", 90, zhengke["id"], gpl3["id"])
 att2 = db.add_attendance(lesson2, sid)
-app._save_attendance_flag(att2, "attendance", 1, False)
+app._save_attendance_flag(att2, "attendance", False)
 ok(db.pending_makeup_count(sid) == 1, "又请了一次假")
 app.tab = 0
 app.open_student(sid)
@@ -909,9 +1275,9 @@ try:
 except AssertionError:
     can_arrange = False
 ok(can_arrange, "学员页上就能直接安排补课")
-app._save_attendance_flag(att2, "attendance", 0, True)
+app._save_attendance_flag(att2, "attendance", True)
 ok(db.pending_makeup_count(sid) == 0, "改回出勤，待补课自动撤掉")
-app._save_attendance_flag(att2, "attendance", 1, False)
+app._save_attendance_flag(att2, "attendance", False)
 db.cancel_makeup(db.list_makeups("待补", sid)[0]["id"], "家长不补了")
 ok(db.pending_makeup_count(sid) == 0, "标记「不补了」也能关掉")
 for l in db.list_lessons():
@@ -934,6 +1300,10 @@ find_field(dlg, "试听日期（可不填）").value = "2026-09-30"
 find_field(dlg, "备注（孩子情况、家长想法…）").value = "试过核桃，妈妈是老师"
 click(dlg, "保存")
 trials = db.list_trials()
+ok(
+    db.list_students(keyword="徐在贤") == [],
+    "纯试听记录不会生成正式学员或学生账号",
+)
 ok(len(trials) == 1 and trials[0]["name"] == "徐在贤", "试听记录建好了")
 ok(trials[0]["status"] == "待试听", "默认是待试听")
 ok(db.trial_counts()["待试听"] == 1, "按状态数得出来")
@@ -946,10 +1316,14 @@ ok(not find_text(page.controls[0], "试过核桃"), "按状态筛选能过滤")
 app._set_trial_filter("")
 
 student_count = len(db.list_students())
-new_sid = db.convert_trial_to_student(trial["id"])
+new_sid = app._convert_trial_with_account(trial)
+app.render()
 ok(len(db.list_students()) == student_count + 1, "转正式后多了一份学员档案")
 new_student = db.get_student(new_sid)
 ok(new_student["name"] == "徐在贤" and new_student["grade"] == "四年级", "档案信息带过去了")
+ok(db.get_student_user(new_sid) is not None, "试听转正式后自动生成学生账号")
+ok(find_text(top_dialog(page), "学生账号已生成"), "试听转正式后显示初始账号")
+app._close()
 ok(new_student["school"] == "育才小学", "学校也从试听记录带过去了")
 ok("朋友介绍" in new_student["note"] and "妈妈是老师" in new_student["note"], "来源和备注也带过去了")
 after = db.get_trial(trial["id"])
@@ -1102,8 +1476,16 @@ if _Image is not None:
                     fill="black",
                 )
     _qr_image.save(_qr_buf, "PNG")
-    app.tab = 5
+    app.tab = 7
     app.render()
+    ok(find_text(page.controls[0], "机构名"), "海报署名默认用摘要表格")
+    try:
+        find_field(page.controls[0], "机构名（海报上角）")
+        poster_form_by_default = True
+    except AssertionError:
+        poster_form_by_default = False
+    ok(not poster_form_by_default, "海报署名不编辑时不显示输入框")
+    click(page.controls[0], "编辑")
     click(page.controls[0], "上传二维码")
     app._on_files_picked(FakeEvent([FakeFile("联系二维码.png", _qr_buf.getvalue())]))
     _qr_stored = db.get_meta("poster_qr")
@@ -1222,7 +1604,7 @@ if _Image is not None:
     ok(_poster_data.student_name == "", "海报画面不出现孩子名字")
     ok(
         {mark.label for mark in _poster_data.point_marks if mark.earned}
-        == {"出勤", "纪律", "表现", "突出"},
+        == {"出勤", "纪律", "学习", "突出"},
         "海报积分拆成不同类别的星星",
     )
     ok(
@@ -1332,8 +1714,8 @@ if _Image is not None:
     _tags = _poster_data.tags
     ok(any(t.startswith("本次积分") for t in _tags), "海报上写着这次的积分")
     ok(
-        all(not t.startswith(("出勤", "纪律", "表现", "时长")) for t in _tags),
-        "每节都一样的出勤/纪律/时长不再占地方",
+        all(not t.startswith(("出勤", "纪律", "学习", "时长")) for t in _tags),
+        "每节都一样的出勤/纪律/学习/时长不再占地方",
     )
     _absent = app._poster_data(dict(_att, attendance=0), _lesson, [])
     ok("请假" in _absent.tags, "请假那节课的海报上标「请假」")
@@ -1422,18 +1804,26 @@ find_checkbox(dlg, "周日").value = True
 find_field(dlg, "周六时间").value = "10:30"
 find_field(dlg, "周日时间").value = "09:00"
 find_field(dlg, "时长（分钟）").value = "90"
-type_dd = find_dropdown(dlg, "课型")
-type_dd.value = str(zhengke["id"])
-level_dd = find_dropdown(dlg, "等级（可不选）")
+level_dd = find_dropdown(dlg, "等级 *")
+try:
+    find_dropdown(dlg, "课型")
+    course_type_visible = True
+except AssertionError:
+    course_type_visible = False
+ok(not course_type_visible, "新增课程不显示课型，直接按等级判断")
+click(dlg, "保存")
+ok(
+    level_dd.error == "请选择等级" and db.list_templates() == [],
+    "新增课程必须选择等级",
+)
 level_dd.value = str(gpl3["id"])
 level_dd.on_select(None)
 _form_order = list(walk(dlg))
 ok(
     _form_order.index(name_field)
-    < _form_order.index(type_dd)
     < _form_order.index(level_dd)
     < _form_order.index(_weekday_tile),
-    "手填的课程名和课型在前，等级之后才进入上课时间",
+    "课程名、必选等级在前，然后才是上课时间",
 )
 ok(listed_in(dlg, "张晨希"), "排课表：选了等级，本级别的孩子还在")
 ok(not listed_in(dlg, "别的级别娃"), "排课表：别的级别的孩子被筛掉")
@@ -1448,6 +1838,7 @@ templates = db.list_templates()
 ok(len(templates) == 1, "固定课表建好了")
 ok(
     templates[0]["start_time"] == "10:30"
+    and templates[0]["class_type_name"] == "正课"
     and templates[0]["student_count"] == 1
     and templates[0]["weekday"] == 5
     and templates[0]["weekdays"] == "5,6"
@@ -1560,18 +1951,12 @@ db.set_lesson_comment(after[1]["id"], "这周讲了变量和循环")
 app.open_schedule(True)
 app.schedule_date = "2026-09-12"
 app.render()
-ok(find_button(page.controls[0], "做海报") is not None, "班级列表上有「做海报」按钮")
-app._make_class_poster_for_template(db.get_template(sem_tid))
-_class_poster = top_dialog(page)
-ok(find_text(_class_poster, "班级课堂海报"), "班级海报弹窗打开了")
-ok(
-    any(
-        isinstance(c, ft.Image) and str(c.src).startswith("/posters/")
-        for c in walk(_class_poster)
-    ),
-    "班级海报图生成了",
-)
-app._close()
+try:
+    find_button(page.controls[0], "做海报")
+    course_has_poster = True
+except AssertionError:
+    course_has_poster = False
+ok(not course_has_poster, "课程列表不再显示「做海报」")
 
 db.delete_template(sem_tid)
 sem_enrollments = db.list_enrollments(sem_kid)
@@ -1609,29 +1994,43 @@ b = db.create_student({"name": "萱萱"})
 ok(a != b and len(db.list_students(keyword="萱萱")) == 2, "同名的两个孩子可以各自建档")
 ok(db.list_students(status="停课") == [], "按状态筛选能用")
 
-print("20. 课时明细能改能删（输错了能改回来）")
+print("20. 课时明细只读，课时统一走缴费")
 sid2 = db.create_student({"name": "课时测试", "grade": "三年级"})
 db.create_enrollment(sid2, gpl3["id"], zhengke["id"], 90)
 hour_id = next(a["hour_type_id"] for a in db.get_accounts(sid2) if a["name"] == "正课")
 def balance2():
     return {a["name"]: a for a in db.get_accounts(sid2)}["正课"]["balance"]
 
-tx = db.add_hours(sid2, hour_id, 10, kind="充值", note="一开始写错了", source_type="manual")
-ok(balance2() == 10, "先记了一笔 10 课时")
+tx = db.add_hours(sid2, hour_id, 10, kind="充值", note="历史手记课时", source_type="manual")
+ok(balance2() == 10, "历史手记课时仍然能正常显示")
 app.tab = 0
 app.open_student(sid2)
+try:
+    find_button(page.controls[0], "调整课时")
+    has_adjust = True
+except AssertionError:
+    has_adjust = False
+ok(not has_adjust, "学员账户不再显示调整课时")
 app._open_hour_ledger(sid2, hour_id)
 dlg = top_dialog(page)
-ok(find_text(dlg, "一开始写错了"), "明细里能看到这一笔")
+ok(find_text(dlg, "历史手记课时"), "明细里能看到历史手记")
 ok(find_text(dlg, "手记"), "手记的流水有标记")
-
-db.update_hour_transaction(tx, hour_id, 4, "2026-09-01", "其实只买了 4 课时")
-ok(balance2() == 4, "改成 4 课时，账户跟着变")
-row = db.get_hour_transaction(tx)
-ok(row["note"] == "其实只买了 4 课时" and row["happened_on"] == "2026-09-01", "日期和备注也改了")
-
+try:
+    find_button(dlg, "记一笔")
+    ledger_can_add = True
+except AssertionError:
+    ledger_can_add = False
+ok(not ledger_can_add, "课时明细里不再提供手记入口")
+ok(
+    not any(
+        isinstance(c, ft.IconButton)
+        and c.tooltip in ("改这一笔", "删这一笔")
+        for c in walk(dlg)
+    ),
+    "历史手记流水也不能在这里改删",
+)
 db.delete_hour_transaction(tx)
-ok(balance2() == 0, "删掉这一笔，课时回到 0")
+ok(balance2() == 0, "测试历史流水清理完成")
 
 pay_id = db.create_payment(sid2, "2026-09-05", [{"hour_type_id": hour_id, "hours": 24, "amount": 3000}])
 ok(balance2() == 24, "缴费后又加上了 24")
@@ -1668,6 +2067,12 @@ fields[1].value = "1"
 amounts = [f for f in walk(dlg) if isinstance(f, ft.TextField) and f.label == "金额（元）"]
 amounts[1].value = "0"
 click(dlg, "保存")
+ok(
+    find_field(top_dialog(page), "备注").error == "赠送课时必须写明原因",
+    "手动赠送考级课时没填备注时不予添加",
+)
+find_field(top_dialog(page), "备注").value = "老师赠送考级 1 课时"
+click(top_dialog(page), "保存")
 multi = db.list_payments(sid2)[0]
 items = db.list_payment_items(multi["id"])
 ok(len(items) == 2, "这笔缴费有两行课时")
@@ -1684,9 +2089,25 @@ accounts2 = {a["name"]: a for a in db.get_accounts(sid2)}
 ok(accounts2["正课"]["balance"] == 24 and accounts2["考级"]["balance"] == 1, "两个账户都加上了")
 ok(accounts2["正课"]["paid"] == 24 and accounts2["正课"]["manual"] == 0, "正课来源拆得清：缴费 24 ＋ 手工 0")
 ok(accounts2["考级"]["paid"] == 1, "考级的 1 课时也算在缴费来源里")
-gift_tx = [t for t in db.list_hour_transactions(sid2) if "赠送" in (t["note"] or "")]
+gift_tx = [
+    t
+    for t in db.list_hour_transactions(sid2, limit=100000)
+    if t["source_type"] == "payment_item"
+    and (t["note"] or "").startswith("赠送课时")
+]
 ok(len(gift_tx) == 1 and gift_tx[0]["hour_type_name"] == "考级", "流水上标着赠送")
 ok(db.income_total(student_id=sid2) == 3000, "收入还是 3000")
+try:
+    db.create_payment(
+        sid2,
+        "2026-09-06",
+        [{"hour_type_id": hour_id, "hours": 1, "amount": 0}],
+        "想赠送一节正课",
+    )
+    free_regular_allowed = True
+except ValueError:
+    free_regular_allowed = False
+ok(not free_regular_allowed, "正课不能作为赠送课时手动添加")
 
 app.tab = 3
 app.render()
@@ -1770,7 +2191,7 @@ ok(stats["income"] == 3000 and stats["payments"] == 1, "这个月收入对得上
 counts = db.month_lesson_counts(month)
 ok(counts and counts[0]["name"] == "报表测试" and counts[0]["times"] == 1, "月度上课次数排得出来")
 
-app.tab = 4
+app.tab = 5
 app.render()
 ok(find_text(page.controls[0], "报表"), "报表页能打开")
 ok(find_text(page.controls[0], "积分榜"), "报表里有积分榜")
@@ -1824,6 +2245,149 @@ app.user = {
     "role": db.ROLE_TEACHER,
 }
 ok(not app.is_admin(), "老师不是管理员")
+
+teacher2_id = db.create_user(
+    "wang_perm", "pw123456", "王老师（权限测试）", db.ROLE_TEACHER
+)
+other_level_id = db.create_level(
+    "权限测试", "别人等级", 30, default_teacher_id=teacher2_id
+)
+app.tab = 7
+app.render()
+ok(find_text(page.controls[0], "我的等级"), "普通老师能看到自己的等级入口")
+ok(find_button(page.controls[0], "新增等级"), "普通老师可以新增自己的等级")
+app._open_level_dialog(None)
+dlg = top_dialog(page)
+level_teacher = find_dropdown(dlg, "默认老师（报名时自动带出）")
+ok(
+    level_teacher.disabled and level_teacher.value == str(teacher_id),
+    "普通老师新建等级时，归属固定为自己",
+)
+find_field(dlg, "科目（如 GPL、STEM）").value = "权限测试"
+find_field(dlg, "等级／阶段（如 Lvl-01）").value = "我的等级"
+find_field(dlg, "默认时长（分钟）").value = "45"
+click(dlg, "保存")
+own_level = next(
+    l for l in db.list_levels() if db.level_full_name(l) == "权限测试-我的等级"
+)
+other_level = next(
+    l for l in db.list_levels() if l["id"] == other_level_id
+)
+ok(
+    own_level["default_teacher_id"] == teacher_id,
+    "普通老师新建的等级归自己",
+)
+ok(
+    app._can_manage_level(own_level)
+    and not app._can_manage_level(other_level),
+    "自己的等级能管理，别人的等级只读",
+)
+
+own_course = db.create_template(
+    5,
+    "08:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    name="老师自己的课程",
+    teacher_id=teacher_id,
+)
+other_course = db.create_template(
+    6,
+    "09:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    name="其他老师的课程",
+    teacher_id=teacher2_id,
+)
+own_course_row = db.get_template(own_course)
+other_course_row = db.get_template(other_course)
+ok(
+    app._can_manage_course(own_course_row)
+    and not app._can_manage_course(other_course_row),
+    "自己的课程能管理，别人的课程只读",
+)
+app._open_template_dialog(own_course_row)
+dlg = top_dialog(page)
+course_teacher = find_dropdown(dlg, "课程老师（这门课归谁）")
+ok(
+    course_teacher.disabled and course_teacher.value == str(teacher_id),
+    "普通老师只能把课程建在自己名下",
+)
+app._close()
+
+own_student = db.create_student(
+    {
+        "name": "李老师的学员",
+        "grade": "三年级",
+        "owner_teacher_id": teacher_id,
+        "owner_manual": True,
+    }
+)
+other_student = db.create_student(
+    {
+        "name": "王老师的学员",
+        "grade": "三年级",
+        "owner_teacher_id": teacher2_id,
+        "owner_manual": True,
+    }
+)
+ok(
+    app._can_manage_student(own_student)
+    and not app._can_manage_student(other_student),
+    "自己的学员能编辑，别人的学员只读",
+)
+app.tab = 0
+app.open_student(own_student)
+ok(find_text(page.controls[0], "基本档案"), "自己的学员档案默认表格展示")
+ok(find_button(page.controls[0], "编辑") is not None, "老师能进入自己学员的档案编辑")
+find_button(page.controls[0], "编辑").on_click(None)
+ok(not find_field(page.controls[0], "姓名 *").disabled, "老师能编辑自己的学员档案")
+ok(find_button(page.controls[0], "新增报名") is not None, "老师能给自己的学员新增报名")
+ok(find_button(page.controls[0], "记一笔") is not None, "老师能给自己学员新增缴费")
+app.open_student(other_student)
+other_student_tree = page.controls[0]
+try:
+    find_button(other_student_tree, "编辑")
+    other_profile_editable = True
+except AssertionError:
+    other_profile_editable = False
+ok(not other_profile_editable, "其他老师的学员档案没有编辑入口")
+try:
+    find_field(other_student_tree, "姓名 *")
+    other_profile_form = True
+except AssertionError:
+    other_profile_form = False
+ok(not other_profile_form, "其他老师的学员档案只读表格")
+try:
+    find_button(other_student_tree, "新增报名")
+    other_enroll_editable = True
+except AssertionError:
+    other_enroll_editable = False
+ok(not other_enroll_editable, "不能替其他老师的学员新增报名")
+try:
+    find_button(other_student_tree, "调整课时")
+    other_hours_editable = True
+except AssertionError:
+    other_hours_editable = False
+ok(not other_hours_editable, "不能调整其他老师的学员课时")
+try:
+    find_button(other_student_tree, "记一笔")
+    other_payable = True
+except AssertionError:
+    other_payable = False
+ok(not other_payable, "不能替其他老师的学员新增缴费")
+
+app._open_new_student()
+dlg = top_dialog(page)
+new_student_owner = find_dropdown(dlg, "归属老师（新学员归你）")
+ok(
+    new_student_owner.disabled and new_student_owner.value == str(teacher_id),
+    "普通老师新建学员自动归自己",
+)
+app._close()
+
 app.tab = 0
 app.open_student(sid2)
 ok(not find_text(page.controls[0], "删除学员"), "老师看不到删除学员")
@@ -1836,19 +2400,71 @@ except AssertionError:
 ok(not has_adjust, "老师看不到调整课时")
 app.tab = 3
 app.render()
+ok(find_button(page.controls[0], "记一笔") is not None, "普通老师可以新增缴费")
+app._open_payment_dialog(None, own_student)
+dlg = top_dialog(page)
+student_choices = find_dropdown(dlg, "孩子")
+ok(
+    str(other_student) not in {str(o.key) for o in student_choices.options},
+    "缴费时不能选择其他老师的学员",
+)
+owner_field = find_dropdown(dlg, "归属老师（算谁的客户）")
+ok(
+    owner_field.disabled and owner_field.value == str(teacher_id),
+    "普通老师新增缴费时归属固定为自己",
+)
+find_dropdown(dlg, "课时类型").value = str(zhengke["id"])
+find_dropdown(dlg, "报的等级").value = str(gpl3["id"])
+find_field(dlg, "数量（课时）").value = "12"
+find_field(dlg, "金额（元）").value = "1200"
+click(dlg, "保存")
+teacher_payments = db.list_payments(own_student)
+ok(len(teacher_payments) == 1, "普通老师给自己学员记的缴费保存成功")
+teacher_payment_items = db.list_payment_items(teacher_payments[0]["id"])
+ok(
+    teacher_payment_items[0]["owner_teacher_id"] == teacher_id,
+    "新增缴费归属自动记在当前老师名下",
+)
+ok(
+    {a["name"]: a["balance"] for a in db.get_accounts(own_student)}["正课"] == 12,
+    "普通老师新增缴费后课时正常加上了",
+)
+app.tab = 0
+app.open_student(own_student)
 try:
-    find_button(page.controls[0], "记一笔")
-    teacher_can_pay = True
+    find_button(page.controls[0], "调整课时")
+    own_adjust_visible = True
 except AssertionError:
-    teacher_can_pay = False
-ok(not teacher_can_pay, "老师不能自己记缴费")
+    own_adjust_visible = False
+ok(not own_adjust_visible, "自己学员的账户里也没有调整课时入口")
+ok(
+    find_text(page.controls[0], "需要增加课时请到「缴费」页记一笔"),
+    "学员账户明确提示课时统一走缴费",
+)
+app._open_hour_ledger(own_student, zhengke_hour_id)
+dlg = top_dialog(page)
+try:
+    find_button(dlg, "记一笔")
+    own_ledger_add_visible = True
+except AssertionError:
+    own_ledger_add_visible = False
+ok(not own_ledger_add_visible, "课时明细里也没有手记入口")
+app._close()
 app.tab = 1
 app.lesson_id = None
 app.show_schedule = False
 app.render()
-ok(find_text(page.controls[0], "记一节课"), "老师还能在「课程」里记一节课、点名")
+ok(find_button(page.controls[0], "记一节课") is not None, "老师还能在「课程」里记一节课、点名")
 
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+db.delete_payment(db.list_payments(own_student)[0]["id"])
+db.delete_student(own_student)
+db.delete_student(other_student)
+db.delete_template(own_course)
+db.delete_template(other_course)
+db.delete_level(own_level["id"], force=True)
+db.delete_level(other_level_id, force=True)
+db.delete_user(teacher2_id)
 db.delete_user(teacher_id)
 ok(len(db.list_users()) == 1, "老师账号能删掉")
 
@@ -2165,12 +2781,12 @@ ok(find_dropdown(dlg, "课程老师（这门课归谁）") is not None, "新增�
 app._close()
 app.show_schedule = False
 
-app.tab = 5
+app.tab = 7
 app.render()
 ok(find_text(page.controls[0], "老师账号"), "设置页有老师账号")
 ok(find_text(page.controls[0], "默认老师 王老师"), "课程设置里能看到默认老师")
 
-app.tab = 4
+app.tab = 5
 app.render()
 ok(find_text(page.controls[0], "按老师"), "报表里有「按老师」一栏")
 app.tab = 0
@@ -2508,6 +3124,8 @@ g_kid = db.create_student({"name": "监护娃", "grade": "二年级", "guardian"
 ok(db.get_student(g_kid)["guardian"] == "张爸爸", "学员档案能存监护人姓名")
 app.open_student(g_kid)
 tree = page.controls[0]
+find_button(tree, "编辑").on_click(None)
+tree = page.controls[0]
 ok(find_field(tree, "监护人姓名").value == "张爸爸", "学员档案上能看到监护人")
 profile_status = find_dropdown(tree, "状态")
 ok(
@@ -2555,7 +3173,7 @@ ok(
 
 app.tab = 0
 app.open_student(one_kid)
-ok(find_text(page.controls[0], "现在归属：王老师"), "档案里显示的归属是王老师")
+ok(find_text(page.controls[0], "王老师"), "档案里显示的归属是王老师")
 app.open_student(None)
 app.render()
 ok(find_text(page.controls[0], "归属老师：王老师"), "列表上显示的也是王老师（不再对不上）")
@@ -2568,7 +3186,7 @@ ok(
     "课程换了老师，学员档案上的归属跟着换",
 )
 app.open_student(one_kid)
-ok(find_text(page.controls[0], "现在归属：李老师"), "档案里也跟着变成李老师")
+ok(find_text(page.controls[0], "李老师"), "档案里也跟着变成李老师")
 
 app.tab = 1
 app.lesson_id = None
@@ -2646,7 +3264,11 @@ ok(
 
 app.tab = 0
 app.open_student(one_kid)
-ok(find_text(page.controls[0], "现在归属：王老师（按缴费）"), "学员档案上写明归属是按缴费算的")
+ok(
+    find_text(page.controls[0], "王老师")
+    and find_text(page.controls[0], "按缴费"),
+    "学员档案上写明归属是按缴费算的",
+)
 app.open_lesson(teach_lesson)
 ok(find_text(page.controls[0], "归属 王老师"), "课次详情里学员归属是王老师")
 ok(find_text(page.controls[0], "上课老师：李老师"), "课次详情里上课老师是李老师")
@@ -2657,9 +3279,14 @@ print("34. 学员档案里的归属老师可以看、可以改")
 app.tab = 0
 app.open_student(one_kid)
 tree = page.controls[0]
+find_button(tree, "编辑").on_click(None)
+tree = page.controls[0]
 owner_dd = find_dropdown(tree, "归属老师（可改）")
 ok(owner_dd.value == "auto", "默认是「跟缴费走（自动）」")
-ok(find_text(tree, "现在归属：王老师"), "档案上看得到现在算谁的")
+ok(
+    find_text(tree, "王老师") and find_text(tree, "按缴费"),
+    "档案上看得到现在算谁的",
+)
 
 owner_dd.value = str(t_b)
 for control in walk(tree):
@@ -2670,12 +3297,18 @@ ok(db.get_student(one_kid)["owner_manual"] == 1, "手动改了归属，就钉住
 ok(db.get_student(one_kid)["owner_teacher_id"] == t_b, "钉成了李老师")
 
 app.open_student(one_kid)
-ok(find_text(page.controls[0], "现在归属：李老师（手动指定）"), "档案上显示手动指定的李老师")
+ok(
+    find_text(page.controls[0], "李老师")
+    and find_text(page.controls[0], "手动指定"),
+    "档案上显示手动指定的李老师",
+)
 app.open_student(None)
 app.render()
 ok(find_text(page.controls[0], "归属老师：李老师"), "学员列表上也跟着显示李老师")
 
 app.open_student(one_kid)
+tree = page.controls[0]
+find_button(tree, "编辑").on_click(None)
 tree = page.controls[0]
 find_dropdown(tree, "归属老师（可改）").value = "auto"
 for control in walk(tree):
@@ -2683,7 +3316,11 @@ for control in walk(tree):
         control.on_click(None)
         break
 ok(db.get_student(one_kid)["owner_manual"] == 0, "选回「跟缴费走」，钉住取消")
-ok(find_text(page.controls[0], "现在归属：王老师（按缴费）"), "又回到按缴费算（王老师）")
+ok(
+    find_text(page.controls[0], "王老师")
+    and find_text(page.controls[0], "按缴费"),
+    "又回到按缴费算（王老师）",
+)
 
 print("35. 课程名唯一 / 周视图显示课程名")
 conn = sqlite3.connect(db.DB_PATH)
@@ -2734,28 +3371,29 @@ app.render()
 ok(find_text(page.controls[0], "GPL-03 周一班"), "课程表上显示课程名称")
 ok(find_text(page.controls[0], "老师：王老师"), "课程卡片上也带着老师")
 
-print("36. 课程名按规范生成（年份-学期-等级-Cls-序号）")
+print("36. 课程名按规范生成（年份-学期-等级-类别-Cls-序号）")
 ok(
-    db.make_course_name("2026", "2", "STEM-Lvl-02", 1)
-    == "2026-2-STEM-Lvl-02-Cls-01",
-    "课程名能按「年份-学期-等级-Cls-序号」拼出来",
+    db.make_course_name("2026", "2", "STEM-Lvl-02-正课", 1)
+    == "2026-2-STEM-Lvl-02-正课-Cls-01",
+    "课程名能按「年份-学期-等级-类别-Cls-序号」拼出来",
 )
-parsed_name = db.parse_course_name("2026-2-STEM-Lvl-02-Cls-03")
+parsed_name = db.parse_course_name("2026-2-STEM-Lvl-02-正课-Cls-03")
 ok(
     parsed_name.get("year") == "2026"
     and parsed_name.get("term") == "2"
+    and parsed_name.get("level_text") == "STEM-Lvl-02-正课"
     and parsed_name.get("seq") == 3,
     "规范课程名能拆回年份／学期／序号",
 )
-parsed_jingsai = db.parse_course_name("2026-2-GPL-竞赛-Zecode-小低组-Cls-03")
+parsed_jingsai = db.parse_course_name("2026-2-GPL-竞赛-Zecode-小低组-竞赛-Cls-03")
 ok(
-    parsed_jingsai.get("level_text") == "GPL-竞赛-Zecode-小低组"
+    parsed_jingsai.get("level_text") == "GPL-竞赛-Zecode-小低组-竞赛"
     and parsed_jingsai.get("seq") == 3,
     "等级里带横杠（竞赛）的名字也能拆对",
 )
 ok(
-    db.make_course_name("2026", "2", "GPL-竞赛-小低组", 1)
-    == "2026-2-GPL-竞赛-小低组-Cls-01",
+    db.make_course_name("2026", "2", "GPL-竞赛-小低组-竞赛", 1)
+    == "2026-2-GPL-竞赛-小低组-竞赛-Cls-01",
     "竞赛课的课程名按同样规则生成",
 )
 ok(
@@ -2768,7 +3406,7 @@ db.create_template(
     90,
     zhengke["id"],
     gpl3["id"],
-    name=db.make_course_name("2099", "1", db.level_full_name(gpl3), 1),
+    name=db.make_course_name("2099", "1", db.level_display_name(gpl3), 1),
     year="2099",
     term="1",
     seq=1,
@@ -2792,7 +3430,7 @@ old_style = db.create_template(
 db.normalize_course_names()
 ok(
     db.get_template(old_style)["name"]
-    == db.make_course_name("2027", "1", db.level_full_name(gpl3), 7),
+    == db.make_course_name("2027", "1", db.level_display_name(gpl3), 7),
     "老写法的课程名能规范成标准写法",
 )
 
@@ -2803,14 +3441,14 @@ app._open_template_dialog()
 dlg = top_dialog(page)
 find_field(dlg, "年份").value = "2098"
 find_dropdown(dlg, "学期").value = "2"
-level_dd_g = find_dropdown(dlg, "等级（可不选）")
+level_dd_g = find_dropdown(dlg, "等级 *")
 level_dd_g.value = str(gpl3["id"])
 level_dd_g.on_select(None)
 ok(find_field(dlg, "班级序号").value == "01", "选了年份／学期／等级，序号自动填 01")
 click(dlg, "生成课程名")
 ok(
     find_field(dlg, "课程名（自动生成，也可自己改）").value
-    == db.make_course_name("2098", "2", db.level_full_name(gpl3), 1),
+    == db.make_course_name("2098", "2", db.level_display_name(gpl3), 1),
     "点「生成课程名」按规范生成课程名",
 )
 app._close()
@@ -2823,12 +3461,12 @@ app._open_template_dialog()
 dlg = top_dialog(page)
 find_field(dlg, "年份").value = "2097"
 find_dropdown(dlg, "学期").value = "2"
-level_dd_auto = find_dropdown(dlg, "等级（可不选）")
+level_dd_auto = find_dropdown(dlg, "等级 *")
 level_dd_auto.value = str(gpl3["id"])
 level_dd_auto.on_select(None)
 ok(
     find_field(dlg, "课程名（自动生成，也可自己改）").value
-    == db.make_course_name("2097", "2", db.level_full_name(gpl3), 1),
+    == db.make_course_name("2097", "2", db.level_display_name(gpl3), 1),
     "选完等级，课程名自动填好，不用再点按钮",
 )
 app._close()
@@ -2987,7 +3625,7 @@ dlg = top_dialog(page)
 find_checkbox(dlg, "周六").value = False
 find_checkbox(dlg, "不指定").value = True
 find_field(dlg, "课程名（自动生成，也可自己改）").value = "2026-2-不定时界面班"
-find_dropdown(dlg, "课型").value = str(jingsai_ct["id"])
+find_dropdown(dlg, "等级 *").value = str(gpl3["id"])
 click(dlg, "保存")
 ui_free = [t for t in db.list_templates(active_only=False) if t["name"] == "2026-2-不定时界面班"]
 ok(
@@ -3244,7 +3882,7 @@ ok(
     "没人用的等级能正常删掉",
 )
 
-app.tab = 5
+app.tab = 7
 app.render()
 tree46 = page.controls[0]
 ok(find_text(tree46, "在用（删了会清空这些记录上的等级）"), "设置里写明删了会影响什么")
@@ -3267,5 +3905,711 @@ ok(
     "重启两次也不会把删掉的默认等级补回来",
 )
 ok(bool(db.list_levels()), "别的等级还在")
+
+print("48. 每年 9 月自动升年级")
+grade_kids = {
+    "一年级": db.create_student({"name": "自动升级一", "grade": "一年级"}),
+    "五年级": db.create_student({"name": "自动升级五", "grade": "五年级"}),
+    "六年级": db.create_student({"name": "自动升级六", "grade": "六年级"}),
+    "初三": db.create_student({"name": "自动升级初三", "grade": "初三"}),
+}
+db.advance_student_grades("2027-09-01")
+ok(db.get_student(grade_kids["一年级"])["grade"] == "二年级", "一年级升二年级")
+ok(db.get_student(grade_kids["五年级"])["grade"] == "六年级", "五年级升六年级")
+ok(db.get_student(grade_kids["六年级"])["grade"] == "初一", "六年级升初一")
+ok(db.get_student(grade_kids["初三"])["grade"] == "初三", "初三毕业后保持初三")
+ok(db.advance_student_grades("2027-09-01") == 0, "同一学年不会重复升级")
+db.advance_student_grades("2028-09-01")
+ok(db.get_student(grade_kids["六年级"])["grade"] == "初二", "初一升初二")
+
+auto_birth = db.create_student(
+    {
+        "name": "生日自动年级",
+        "grade": "一年级",
+        "birth_date": "2020-05-18",
+    }
+)
+ok(db.grade_from_birth_date("2020-05-18", "2026-09-01") == "一年级", "按生日推算当前年级")
+db.advance_student_grades("2027-09-01")
+ok(db.get_student(auto_birth)["grade"] == "二年级", "生日绑定的年级随后一学年升级")
+
+manual_grade = db.create_student({"name": "手动改年级", "grade": "四年级"})
+db.update_student(
+    manual_grade,
+    {
+        "name": "手动改年级",
+        "grade": "三年级",
+        "gender": "",
+        "school": "",
+        "phone": "",
+        "guardian": "",
+        "note": "",
+        "status": "在读",
+    },
+)
+db.advance_student_grades("2027-09-01")
+ok(
+    db.get_student(manual_grade)["grade"] == "四年级",
+    "手动改年级后，从新年级重新按学年升",
+)
+for kid in [*grade_kids.values(), auto_birth, manual_grade]:
+    db.delete_student(kid)
+
+print("49. 学生账号、学生门户和论坛悬赏")
+portal_teacher = db.create_user(
+    "portal_teacher", "pw123456", "门户老师", db.ROLE_TEACHER
+)
+portal_student = db.create_student(
+    {
+        "name": "学生门户娃",
+        "grade": "四年级",
+        "school": "门户小学",
+        "owner_teacher_id": portal_teacher,
+        "owner_manual": True,
+    }
+)
+portal_level = next(l for l in db.list_levels(active_only=True))
+portal_enrollment = db.create_enrollment(
+    portal_student,
+    portal_level["id"],
+    zhengke["id"],
+    90,
+    owner_teacher_id=portal_teacher,
+)
+portal_lesson = db.create_lesson(
+    "2026-10-20",
+    "16:00",
+    90,
+    zhengke["id"],
+    portal_level["id"],
+    "这节课学习循环嵌套",
+)
+db.set_lesson_plan(portal_lesson, "先复习循环，再完成嵌套练习")
+db.add_attendance(portal_lesson, portal_student)
+
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+app.tab = 0
+app.open_student(portal_student)
+ok(find_text(page.controls[0], "学生账号"), "管理员能在学员页管理学生账号")
+app._open_student_account_dialog(db.get_student(portal_student))
+dlg = top_dialog(page)
+find_field(dlg, "登录用户名 *").value = "student_portal"
+find_field(dlg, "初始密码 *").value = "kid12345"
+click(dlg, "保存")
+student_user = db.get_student_user(portal_student)
+ok(
+    student_user is not None
+    and student_user["role"] == db.ROLE_STUDENT
+    and student_user["student_id"] == portal_student,
+    "学生账号与学员档案一对一绑定",
+)
+student_nickname = student_user["forum_nickname"]
+ok(
+    student_nickname and student_nickname != "学生门户娃",
+    "学生账号自动获得不暴露姓名的论坛昵称",
+)
+
+student_login = db.verify_user("student_portal", "kid12345")
+ok(student_login is not None, "学生账号能正常登录")
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+menus = [label for _icon, _selected, label in app._nav_items()]
+ok(menus == ["我的", "课程", "论坛"], "学生登录后只有我的、课程、论坛")
+app.tab = 0
+app.render()
+ok(find_text(page.controls[0], "学生门户娃"), "学生能看到自己的信息")
+ok(find_text(page.controls[0], "当前积分"), "学生能看到自己的积分")
+ok(
+    not find_text(page.controls[0], "缴费记录")
+    and not find_text(page.controls[0], "课时账户")
+    and not find_text(page.controls[0], "代金券"),
+    "学生页面不展示课时余额、缴费或代金券",
+)
+app.tab = 1
+app.render()
+ok(find_text(page.controls[0], "这节课学习循环嵌套"), "学生能看自己的课评")
+ok(find_text(page.controls[0], "先复习循环，再完成嵌套练习"), "学生能看自己的教案")
+ok(not find_text(page.controls[0], "缴费"), "学生课程页不展示费用")
+
+app.tab = 2
+app.render()
+try:
+    db.create_forum_bounty(student_login["id"], "负数", "测试", -1)
+    negative_bounty_allowed = True
+except ValueError:
+    negative_bounty_allowed = False
+ok(not negative_bounty_allowed, "悬赏积分不能小于 0")
+try:
+    db.create_forum_bounty(student_login["id"], "超额", "测试", 31)
+    over_balance_allowed = True
+except ValueError:
+    over_balance_allowed = False
+ok(not over_balance_allowed, "悬赏积分不能超过自己的积分")
+
+app._open_forum_post_dialog()
+dlg = top_dialog(page)
+find_field(dlg, "悬赏标题 *").value = "循环题不会做"
+find_field(dlg, "问题内容 *").value = "嵌套循环的第二步看不懂。"
+find_field(dlg, "悬赏积分 *").value = "12"
+_forum_order = list(walk(dlg))
+ok(
+    _forum_order.index(find_field(dlg, "问题内容 *"))
+    < _forum_order.index(find_button(dlg, "添加内容图片"))
+    < _forum_order.index(find_field(dlg, "悬赏积分 *")),
+    "内容图片入口紧跟在问题内容下面",
+)
+find_button(dlg, "添加内容图片").on_click(None)
+app._files_callback(
+    [
+        FakeFile("题目截图.png", _qr_buf.getvalue()),
+        FakeFile("多余图片.png", _qr_buf.getvalue()),
+    ]
+)
+click(dlg, "发布")
+bounties = db.list_forum_bounties()
+ok(
+    len(bounties) == 1
+    and bounties[0]["status"] == "待解决"
+    and bounties[0]["target_user_id"] is None,
+    "学生能发布公开悬赏",
+)
+forum_images = db.list_files("forum_bounty", bounties[0]["id"], "图片")
+ok(
+    len(forum_images) == 1
+    and (db.UPLOAD_DIR / forum_images[0]["stored_name"]).is_file(),
+    "悬赏只能附带上传 1 张图片",
+)
+ok(
+    db.student_points(portal_student) == 18,
+    "发布悬赏后立即冻结 12 积分",
+)
+app.tab = 2
+app.render()
+ok(find_text(page.controls[0], "循环题不会做"), "论坛里能看到公开发布的悬赏")
+ok(find_text(page.controls[0], "12 积分"), "悬赏积分用醒目徽章单独显示")
+ok(
+    find_text(page.controls[0], student_nickname)
+    and not find_text(page.controls[0], "学生门户娃"),
+    "学生端只看到发布者昵称，看不到真名",
+)
+teacher_nickname = db.get_user(portal_teacher)["forum_nickname"]
+app._open_forum_post_dialog()
+dlg = top_dialog(page)
+student_targets = find_dropdown(dlg, "指定交易对象（可选）")
+ok(
+    student_targets.editable
+    and any(teacher_nickname in o.text for o in student_targets.options)
+    and not any(
+        "门户老师" in o.text or "老师" in o.text or "学生" in o.text
+        for o in student_targets.options
+        if o.key
+    ),
+    "学生选择交易对象时只看到昵称，不显示身份",
+)
+app._close()
+
+app.user = {
+    "id": portal_teacher,
+    "username": "portal_teacher",
+    "display_name": "门户老师",
+    "role": db.ROLE_TEACHER,
+}
+app.tab = 4
+app.render()
+ok(
+    find_text(page.controls[0], "学生门户娃")
+    and find_text(page.controls[0], student_nickname),
+    "老师端能看到学生真名和昵称",
+)
+app._open_forum_answer_dialog(bounties[0])
+dlg = top_dialog(page)
+find_field(dlg, "我的回答 *").value = "先看外层，再看内层。"
+click(dlg, "发布回答")
+answers = db.list_forum_answers(bounties[0]["id"])
+ok(len(answers) == 1, "老师能回答学生的悬赏")
+
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 2
+app.render()
+accept_button = find_button(page.controls[0], "采纳这个答案")
+accept_button.on_click(None)
+dlg = top_dialog(page)
+click(dlg, "采纳")
+ok(
+    db.list_forum_bounties()[0]["status"] == "已完成"
+    and db.forum_points_balance(portal_teacher) == 12,
+    "学生采纳后，悬赏积分转给老师",
+)
+
+app.user = {
+    "id": portal_teacher,
+    "username": "portal_teacher",
+    "display_name": "门户老师",
+    "role": db.ROLE_TEACHER,
+}
+app.tab = 4
+app.render()
+app._open_forum_post_dialog()
+dlg = top_dialog(page)
+find_field(dlg, "悬赏标题 *").value = "请教循环顺序"
+find_field(dlg, "问题内容 *").value = "想确认循环执行顺序。"
+find_field(dlg, "悬赏积分 *").value = "5"
+target_dd = find_dropdown(dlg, "指定交易对象（可选）")
+ok(
+    target_dd.enable_search
+    and target_dd.enable_filter
+    and target_dd.editable
+    and "1" not in {str(o.key) for o in target_dd.options},
+    "指定对象可搜索且不包含管理员",
+)
+ok(
+    any(
+        student_nickname in o.text and "学生门户娃" in o.text
+        for o in target_dd.options
+    ),
+    "老师指定交易对象时显示学生真名和昵称",
+)
+target_dd.value = str(student_login["id"])
+click(dlg, "发布")
+targeted = next(b for b in db.list_forum_bounties() if b["title"] == "请教循环顺序")
+ok(
+    targeted["target_user_id"] == student_login["id"]
+    and db.forum_points_balance(portal_teacher) == 7,
+    "老师能用自己的论坛积分发布指定悬赏",
+)
+
+try:
+    db.add_forum_answer(targeted["id"], 1, "管理员不能抢答")
+    outsider_allowed = True
+except ValueError:
+    outsider_allowed = False
+ok(not outsider_allowed, "指定悬赏不允许其他人回答")
+
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 2
+app.render()
+ok(
+    find_text(page.controls[0], f"指定给 {student_nickname}"),
+    "学生端只看到指定对象的昵称",
+)
+app._open_forum_answer_dialog(targeted)
+dlg = top_dialog(page)
+find_field(dlg, "我的回答 *").value = "按从上到下、从内到外执行。"
+click(dlg, "发布回答")
+targeted_answers = db.list_forum_answers(targeted["id"])
+ok(len(targeted_answers) == 1, "被指定的学生可以回答老师悬赏")
+
+app.user = {
+    "id": portal_teacher,
+    "username": "portal_teacher",
+    "display_name": "门户老师",
+    "role": db.ROLE_TEACHER,
+}
+app.tab = 4
+app.render()
+app._confirm(
+    "采纳答案",
+    "测试采纳",
+    lambda: db.accept_forum_answer(
+        targeted["id"], targeted_answers[0]["id"], portal_teacher
+    ),
+    ok_text="采纳",
+)
+click(top_dialog(page), "采纳")
+ok(
+    db.student_points(portal_student) == 23
+    and db.forum_points_balance(portal_teacher) == 7,
+    "老师采纳后，悬赏积分转给学生",
+)
+app.tab = 4
+app.render()
+click(page.controls[0], "积分流水")
+history_dlg = top_dialog(page)
+ok(
+    find_text(history_dlg, "悬赏收入")
+    and find_text(history_dlg, "悬赏支出"),
+    "老师能在论坛查看自己的积分流水",
+)
+app._close()
+
+try:
+    db.deduct_forum_bounty_points(
+        bounties[0]["id"], portal_teacher, 1, "老师没有扣分权限"
+    )
+    teacher_can_deduct = True
+except ValueError:
+    teacher_can_deduct = False
+ok(not teacher_can_deduct, "普通老师不能手动扣除论坛积分")
+
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+app.tab = 4
+app.render()
+ok(
+    find_button(page.controls[0], "管理员扣分") is not None,
+    "管理员能看到论坛扣分入口",
+)
+public_bounty = next(
+    row for row in db.list_forum_bounties() if row["title"] == "循环题不会做"
+)
+app._open_forum_penalty_dialog(public_bounty)
+dlg = top_dialog(page)
+find_field(dlg, "扣除积分 *").value = "3"
+find_field(dlg, "扣分原因 *").value = "发布内容包含不当言论"
+click(dlg, "确认扣分")
+penalized = next(
+    row for row in db.list_forum_bounties()
+    if row["title"] == "循环题不会做"
+)
+ok(
+    db.student_points(portal_student) == 20
+    and penalized["penalty_points"] == 3
+    and penalized["moderation_note"] == "发布内容包含不当言论",
+    "管理员扣分后学生积分和悬赏记录同步更新",
+)
+try:
+    db.mute_forum_user(
+        portal_student, portal_teacher, "2099-12-31 23:59", "老师不能禁言"
+    )
+    teacher_can_mute = True
+except ValueError:
+    teacher_can_mute = False
+ok(not teacher_can_mute, "普通老师不能执行论坛禁言")
+
+app._open_forum_mute_dialog(public_bounty)
+dlg = top_dialog(page)
+find_field(dlg, "禁言至 *").value = "2099-12-31 23:59"
+find_field(dlg, "禁言原因 *").value = "多次发布不友善言论"
+click(dlg, "确认禁言")
+mute_state = db.forum_mute_state(student_login["id"])
+ok(
+    mute_state["active"] and mute_state["reason"] == "多次发布不友善言论",
+    "管理员可以指定截止时间禁言并记录原因",
+)
+
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 2
+app.render()
+ok(find_text(page.controls[0], "你已被禁言至"), "被禁言学生能看到禁言提示")
+ok(find_button(page.controls[0], "发布悬赏").disabled, "禁言期间发布按钮不可用")
+open_bounty = db.create_forum_bounty(
+    portal_teacher, "禁言测试", "这个问题需要回答", 0
+)
+try:
+    db.add_forum_answer(open_bounty, student_login["id"], "尝试回答")
+    muted_can_answer = True
+except ValueError:
+    muted_can_answer = False
+ok(not muted_can_answer, "禁言期间不能回答悬赏")
+
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+app.tab = 4
+app.render()
+click(page.controls[0], "解除禁言")
+ok(not db.forum_mute_state(student_login["id"])["active"], "管理员可以提前解除禁言")
+
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 2
+app.render()
+click(page.controls[0], "修改昵称")
+dlg = top_dialog(page)
+find_field(dlg, "论坛昵称").value = "快乐小侦探"
+click(dlg, "保存")
+ok(
+    db.get_user(student_login["id"])["forum_nickname"] == "快乐小侦探",
+    "学生可以修改自己的论坛昵称",
+)
+for invalid_nickname, why in (
+    ("学生门户娃", "真实姓名"),
+    ("student_portal", "登录账号"),
+    ("垃圾用户", "不文明用语"),
+    ("13800000000", "联系方式"),
+    (teacher_nickname, "重复昵称"),
+):
+    try:
+        db.update_forum_nickname(
+            student_login["id"], invalid_nickname, student_login["id"]
+        )
+        rejected = False
+    except ValueError:
+        rejected = True
+    ok(rejected, f"昵称不能包含{why}")
+
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+app.tab = 0
+app.open_student(portal_student)
+click(page.controls[0], "修改昵称")
+dlg = top_dialog(page)
+find_field(dlg, "论坛昵称").value = "老师设置的新昵称"
+click(dlg, "保存")
+ok(
+    db.get_user(student_login["id"])["forum_nickname"] == "老师设置的新昵称",
+    "管理员可以从学员档案修改学生昵称",
+)
+
+app._open_level_dialog(None)
+dlg = top_dialog(page)
+find_field(dlg, "科目（如 GPL、STEM）").value = "徽章测试"
+find_field(dlg, "等级／阶段（如 Lvl-01）").value = "三级考级"
+find_field(dlg, "默认时长（分钟）").value = "60"
+ok(
+    find_dropdown(dlg, "类别").value == "正课"
+    and not find_dropdown(dlg, "考级级别").visible,
+    "新等级默认类型是正课，不自动关联徽章",
+)
+level_dialog_order = list(walk(dlg))
+ok(
+    level_dialog_order.index(find_field(dlg, "科目（如 GPL、STEM）"))
+    < level_dialog_order.index(find_dropdown(dlg, "类别"))
+    < level_dialog_order.index(find_field(dlg, "等级／阶段（如 Lvl-01）")),
+    "类别紧跟在科目下面",
+)
+level_category = find_dropdown(dlg, "类别")
+level_category.value = "考级"
+level_category.on_select(Evt(level_category))
+find_dropdown(dlg, "考级级别").value = "3级"
+click(dlg, "保存")
+configured_badge_level = next(
+    level
+    for level in db.list_levels()
+    if db.level_full_name(level) == "徽章测试-三级考级"
+)
+ok(
+    configured_badge_level["badge_category"] == "考级"
+    and configured_badge_level["badge_exam_level"] == "3级"
+    and configured_badge_level["level_type"] == "考级"
+    and db.level_display_name(configured_badge_level)
+    == "徽章测试-三级考级-考级",
+    "等级设置里可以配置考级徽章和 1～4 级，显示名称带类别",
+)
+
+app._open_badge_dialog(student_id=portal_student)
+dlg = top_dialog(page)
+find_field(dlg, "比赛／考级名称 *").value = "机器人创意赛"
+find_field(dlg, "竞赛组别").value = "小低组"
+find_field(dlg, "日期").value = "2026-08-15"
+click(dlg, "保存")
+app._open_badge_dialog(student_id=portal_student)
+dlg = top_dialog(page)
+exam_category = find_dropdown(dlg, "徽章类别")
+exam_category.value = "考级"
+exam_category.on_select(Evt(exam_category))
+find_field(dlg, "比赛／考级名称 *").value = "机器人技术等级考试"
+linked_level = find_dropdown(dlg, "关联等级（可选）")
+linked_level.value = str(configured_badge_level["id"])
+linked_level.on_select(Evt(linked_level))
+ok(
+    find_dropdown(dlg, "考级级别").value == "3级",
+    "选择关联考级等级后自动带出 3级",
+)
+find_dropdown(dlg, "结果").value = "优秀"
+find_field(dlg, "日期").value = "2026-09-20"
+click(dlg, "保存")
+badges = db.list_student_badges(portal_student)
+ok(
+    len(badges) == 2
+    and any(
+        badge["category"] == "竞赛"
+        and badge["result"] == "一等奖"
+        and badge["level_name"] == "小低组"
+        for badge in badges
+    )
+    and any(
+        badge["category"] == "考级"
+        and badge["result"] == "优秀"
+        and badge["level_name"] == "3级"
+        and badge["level_id"] == configured_badge_level["id"]
+        for badge in badges
+    ),
+    "学员可以记录竞赛奖项和 1～4 级考级徽章",
+)
+ok(
+    "参与" not in db.COMPETITION_RESULTS
+    and db.COMPETITION_RESULTS == ["一等奖", "二等奖", "三等奖"],
+    "竞赛只有一二三等奖，没有参与奖",
+)
+try:
+    db.save_student_badge(
+        portal_student,
+        "竞赛",
+        "不应成功",
+        "",
+        "参与",
+        "2026-10-01",
+    )
+    participation_badge_allowed = True
+except ValueError:
+    participation_badge_allowed = False
+ok(not participation_badge_allowed, "不能添加参与奖徽章")
+try:
+    db.save_student_badge(
+        portal_student,
+        "考级",
+        "不应成功",
+        "5级",
+        "通过",
+        "2026-10-01",
+    )
+    invalid_exam_level_allowed = True
+except ValueError:
+    invalid_exam_level_allowed = False
+ok(not invalid_exam_level_allowed, "考级级别只能是 1～4 级")
+
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 0
+app.render()
+ok(
+    find_text(page.controls[0], "机器人创意赛")
+    and find_text(page.controls[0], "机器人技术等级考试")
+    and find_text(page.controls[0], "3级"),
+    "学生能在我的页面看到自己的竞赛和考级徽章",
+)
+
+db.create_enrollment(
+    portal_student,
+    configured_badge_level["id"],
+    zhengke["id"],
+    60,
+    owner_teacher_id=portal_teacher,
+)
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+app.tab = 6
+app.render()
+ok(
+    find_text(page.controls[0], "竞技与考级")
+    and find_text(page.controls[0], "考级目录（1）")
+    and find_text(page.controls[0], "徽章测试-三级考级")
+    and find_text(page.controls[0], "学生门户娃"),
+    "竞技考级目录会列出关联级别和已关联学员",
+)
+app._open_level_award_dialog(configured_badge_level)
+dlg = top_dialog(page)
+find_field(dlg, "比赛／考级名称 *").value = "2026 机器人技术等级考试"
+find_field(dlg, "日期 *").value = "2026-10-22"
+student_award = find_checkbox(dlg, "学生门户娃")
+student_award.value = True
+award_result = find_dropdown(dlg, "学生门户娃的结果")
+award_result.value = "良好"
+click(dlg, "确认颁发")
+level_awards = [
+    badge
+    for badge in db.list_student_badges(portal_student)
+    if badge["title"] == "2026 机器人技术等级考试"
+]
+ok(
+    len(level_awards) == 1
+    and level_awards[0]["category"] == "考级"
+    and level_awards[0]["level_name"] == "3级"
+    and level_awards[0]["result"] == "良好",
+    "目录里可以一次为本场关联学员颁发结果",
+)
+db.save_badge_awards_for_level(
+    configured_badge_level["id"],
+    "2026 机器人技术等级考试",
+    {portal_student: "通过"},
+    "2026-10-22",
+)
+level_awards = [
+    badge
+    for badge in db.list_student_badges(portal_student)
+    if badge["title"] == "2026 机器人技术等级考试"
+]
+ok(
+    len(level_awards) == 1 and level_awards[0]["result"] == "通过",
+    "同一场结果重复提交会更新，不会生成两枚重复徽章",
+)
+unlinked_student = db.create_student({"name": "未关联学员", "grade": "三年级"})
+try:
+    db.save_badge_awards_for_level(
+        configured_badge_level["id"],
+        "不应颁发",
+        {unlinked_student: "通过"},
+        "2026-10-22",
+    )
+    unlinked_award_allowed = True
+except ValueError:
+    unlinked_award_allowed = False
+ok(not unlinked_award_allowed, "没有关联该级别的学员不能从目录批量颁发")
+db.delete_student(unlinked_student)
+
+db.delete_lesson(portal_lesson)
+db.delete_user(student_login["id"])
+db.delete_student(portal_student)
+db.delete_level(configured_badge_level["id"], force=True)
+db.delete_user(portal_teacher)
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+
+print("50. 批量生成学生账号")
+batch_birth = db.create_student(
+    {
+        "name": "拼音测试",
+        "grade": "三年级",
+        "birth_date": "2015-01-02",
+    }
+)
+batch_random = db.create_student({"name": "随机密码", "grade": "三年级"})
+batch_dup1 = db.create_student({"name": "重复名字", "grade": "三年级"})
+batch_dup2 = db.create_student({"name": "重复名字", "grade": "三年级"})
+created_accounts = db.create_missing_student_accounts()
+by_student = {item["student_id"]: item for item in created_accounts}
+ok(
+    by_student[batch_birth]["username"] == "pinyinceshi"
+    and by_student[batch_birth]["password"] == "20150102",
+    "有生日时用姓名拼音和 YYYYMMDD 生日作初始密码",
+)
+ok(
+    by_student[batch_random]["username"] == "suijimima"
+    and len(by_student[batch_random]["password"]) == 8
+    and by_student[batch_random]["password"].isdigit(),
+    "没生日时用姓名拼音和 8 位随机数字密码",
+)
+ok(
+    {
+        by_student[batch_dup1]["username"],
+        by_student[batch_dup2]["username"],
+    }
+    == {"zhongfumingzi", "zhongfumingzi2"},
+    "同名学生的拼音用户名自动加序号",
+)
+ok(
+    all(db.get_student_user(kid) is not None for kid in (batch_birth, batch_random, batch_dup1, batch_dup2)),
+    "批量补建后每个正式学员都有账号",
+)
+for kid in (batch_birth, batch_random, batch_dup1, batch_dup2):
+    db.delete_student(kid)
 
 print(f"\n全部通过：{checks} 项检查")

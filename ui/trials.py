@@ -136,7 +136,7 @@ class TrialsMixin:
                         "转成正式学员",
                         f"把「{row['name']}」转成正式学员？会建一份正式档案，"
                         "然后你可以去他的档案里报名课程、记缴费。",
-                        lambda: db.convert_trial_to_student(row["id"]),
+                        lambda: self._convert_trial_with_account(row),
                         ok_text="转正式",
                         done_text="已转成正式学员，去他的档案里报名和缴费",
                     ),
@@ -163,6 +163,13 @@ class TrialsMixin:
             )
         lines.append(ft.Row(buttons, spacing=4, wrap=True, alignment=ft.MainAxisAlignment.END))
         return self._card(ft.Column(lines, spacing=6))
+
+    def _convert_trial_with_account(self, trial: dict) -> int:
+        """试听本身不建账号；转成正式学员时建档并自动生成账号。"""
+        student_id = db.convert_trial_to_student(trial["id"])
+        account, password = db.ensure_student_account(student_id)
+        self._pending_student_credentials = (account, password)
+        return student_id
 
     def _goto_student(self, student_id: int) -> None:
         self.tab = 0

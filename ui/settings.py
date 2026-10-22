@@ -18,14 +18,17 @@ class SettingsMixin:
     def _settings_view(self) -> ft.Column:
         cards: list[ft.Control] = [self._account_card()]
         if self.is_admin():
+            cards.append(self._poster_card())
+        cards.append(self._levels_card())
+        if self.is_admin():
             cards += [
-                self._poster_card(),
-                self._levels_card(),
+                self._course_packages_card(),
                 self._class_types_card(),
                 self._schools_card(),
                 self._hour_types_card(),
                 self._recompute_card(),
                 self._users_card(),
+                self._student_accounts_card(),
             ]
         return ft.Column(
             [
@@ -43,28 +46,110 @@ class SettingsMixin:
 
     def _poster_card(self) -> ft.Container:
         """发给家长的海报上印什么：机构名 + 联系方式 + 二维码。"""
+        editing = self._poster_edit
+        brand_text = db.get_meta("poster_brand")
+        contact_text = db.get_meta("poster_contact")
+        qr_name = (db.get_meta("poster_qr") or "").strip()
+        qr_path = db.UPLOAD_DIR / Path(qr_name).name if qr_name else None
+        if qr_path is not None and not qr_path.is_file():
+            qr_path = None
+        logo_name = (db.get_meta("poster_logo") or "").strip()
+        logo_path = db.UPLOAD_DIR / Path(logo_name).name if logo_name else None
+        if logo_path is not None and not logo_path.is_file():
+            logo_path = None
+
+        if not editing:
+            summary = ft.ResponsiveRow(
+                [
+                    ft.Container(
+                        ft.Column(
+                            [
+                                ft.Text("机构名", size=11, color=ft.Colors.GREY_600),
+                                ft.Text(brand_text or "未设置", size=14),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        ),
+                        col={"xs": 12, "sm": 6, "md": 3},
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                    ft.Container(
+                        ft.Column(
+                            [
+                                ft.Text("联系方式", size=11, color=ft.Colors.GREY_600),
+                                ft.Text(contact_text or "未设置", size=14),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        ),
+                        col={"xs": 12, "sm": 6, "md": 3},
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                    ft.Container(
+                        ft.Column(
+                            [
+                                ft.Text("Logo", size=11, color=ft.Colors.GREY_600),
+                                ft.Text("已上传" if logo_path else "未上传", size=14),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        ),
+                        col={"xs": 12, "sm": 6, "md": 3},
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                    ft.Container(
+                        ft.Column(
+                            [
+                                ft.Text("二维码", size=11, color=ft.Colors.GREY_600),
+                                ft.Text("已上传" if qr_path else "未上传", size=14),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        ),
+                        col={"xs": 12, "sm": 6, "md": 3},
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                ],
+                spacing=8,
+                run_spacing=8,
+            )
+            return self._section(
+                "海报署名",
+                summary,
+                action=ft.TextButton(
+                    "编辑",
+                    icon=ft.Icons.EDIT,
+                    on_click=lambda e: self._start_poster_edit(),
+                ),
+            )
+
         brand = ft.TextField(
             label="机构名（海报上角）",
-            value=db.get_meta("poster_brand"),
+            value=brand_text,
             width=DIALOG_WIDTH,
             dense=True,
             hint_text="例如：拾光机器人编程",
         )
         contact = ft.TextField(
             label="联系方式（海报底部，可不填）",
-            value=db.get_meta("poster_contact"),
+            value=contact_text,
             width=DIALOG_WIDTH,
             dense=True,
             hint_text="例如：微信/电话 138-0000-0000",
         )
-        qr_name = (db.get_meta("poster_qr") or "").strip()
-        qr_path = db.UPLOAD_DIR / Path(qr_name).name if qr_name else None
-        if qr_path is not None and not qr_path.is_file():
-            qr_path = None
-
         def save(e) -> None:
             db.set_meta("poster_brand", (brand.value or "").strip())
             db.set_meta("poster_contact", (contact.value or "").strip())
+            self._poster_edit = False
+            self.render()
             self._toast("海报署名存好了")
 
         def save_poster_image(
@@ -191,10 +276,6 @@ class SettingsMixin:
             noun="二维码",
             height=150,
         )
-        logo_name = (db.get_meta("poster_logo") or "").strip()
-        logo_path = db.UPLOAD_DIR / Path(logo_name).name if logo_name else None
-        if logo_path is not None and not logo_path.is_file():
-            logo_path = None
         logo_controls = image_controls(
             logo_path,
             meta_key="poster_logo",
@@ -251,11 +332,27 @@ class SettingsMixin:
                     ),
                     *qr_controls,
                     qr_uploader,
-                    ft.Row([ft.Button("保存", icon=ft.Icons.SAVE, on_click=save)]),
+                    ft.Row(
+                        [
+                            ft.TextButton(
+                                "取消",
+                                on_click=lambda e: self._cancel_poster_edit(),
+                            ),
+                            ft.Button("保存", icon=ft.Icons.SAVE, on_click=save),
+                        ]
+                    ),
                 ],
                 spacing=10,
             ),
         )
+
+    def _start_poster_edit(self) -> None:
+        self._poster_edit = True
+        self.render()
+
+    def _cancel_poster_edit(self) -> None:
+        self._poster_edit = False
+        self.render()
 
     def _hour_types_card(self) -> ft.Container:
         rows = []
@@ -357,6 +454,8 @@ class SettingsMixin:
         rows = []
         teachers = 0
         for u in db.list_users():
+            if u.get("student_id"):
+                continue
             bits = [db.ROLE_NAMES.get(u["role"], u["role"])]
             if u["is_teacher"]:
                 teachers += 1
@@ -389,11 +488,17 @@ class SettingsMixin:
                                 icon_size=18,
                                 on_click=lambda e, uid=u["id"]: self._open_change_password(uid),
                             ),
-                            ft.IconButton(
-                                ft.Icons.EDIT,
-                                tooltip="编辑",
-                                icon_size=18,
-                                on_click=lambda e, row=u: self._open_user_dialog(row),
+                            *(
+                                []
+                                if u.get("student_id")
+                                else [
+                                    ft.IconButton(
+                                        ft.Icons.EDIT,
+                                        tooltip="编辑",
+                                        icon_size=18,
+                                        on_click=lambda e, row=u: self._open_user_dialog(row),
+                                    )
+                                ]
                             ),
                             ft.IconButton(
                                 ft.Icons.DELETE_OUTLINE,
@@ -422,7 +527,9 @@ class SettingsMixin:
                     ft.Text(
                         f"现在有 {teachers} 个上课老师。"
                         "老师能排课、点名、写教案课评、传照片、记积分兑换；"
-                        "改课时、改缴费、删记录、改学员档案只有管理员能做。",
+                        "课程、等级、学员档案和报名只能管理归自己的，其他老师只读；"
+                        "老师可以给自己学员新增缴费；修改课时统一走缴费，"
+                        "改删已有缴费、控制不限课时、删学员只有管理员能做。",
                         size=12,
                         color=ft.Colors.GREY_600,
                     ),
@@ -449,6 +556,97 @@ class SettingsMixin:
             action=ft.Button(
                 "新增老师", icon=ft.Icons.PERSON_ADD, on_click=lambda e: self._open_user_dialog()
             ),
+        )
+
+    def _student_accounts_card(self) -> ft.Container:
+        students = db.list_students()
+        linked = {
+            int(u["student_id"])
+            for u in db.list_users()
+            if u.get("student_id")
+        }
+        missing = [s for s in students if s["id"] not in linked]
+
+        def generate(e) -> None:
+            created = db.create_missing_student_accounts()
+            if not created:
+                self._toast("所有正式学员都已有账号")
+                return
+            self.render()
+            self._show_generated_student_accounts(created)
+
+        return self._section(
+            "学生账号生成",
+            ft.Column(
+                [
+                    ft.Text(
+                        f"正式学员 {len(students)} 人，已有账号 {len(students) - len(missing)} 人，"
+                        f"还缺 {len(missing)} 人。试听记录不会生成账号。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    ft.Text(
+                        "用户名取姓名拼音；密码取出生日期 YYYYMMDD，"
+                        "没有出生日期则生成 8 位随机数字。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                ],
+                spacing=4,
+            ),
+            action=ft.Button(
+                "补建缺失账号",
+                icon=ft.Icons.MANAGE_ACCOUNTS,
+                on_click=generate,
+                disabled=not missing,
+            ),
+        )
+
+    def _show_generated_student_accounts(self, created: list[dict]) -> None:
+        table = ft.DataTable(
+            columns=[
+                ft.DataColumn(ft.Text("学员", size=12)),
+                ft.DataColumn(ft.Text("用户名", size=12)),
+                ft.DataColumn(ft.Text("初始密码", size=12)),
+            ],
+            rows=[
+                ft.DataRow(
+                    cells=[
+                        ft.DataCell(ft.Text(item["name"], size=12)),
+                        ft.DataCell(ft.Text(item["username"], size=12, selectable=True)),
+                        ft.DataCell(ft.Text(item["password"], size=12, selectable=True)),
+                    ]
+                )
+                for item in created
+            ],
+            column_spacing=18,
+            horizontal_lines=ft.BorderSide(1, ft.Colors.GREY_200),
+            heading_row_height=34,
+            data_row_min_height=34,
+            data_row_max_height=40,
+        )
+        self._show(
+            self._dialog(
+                "学生账号已生成",
+                ft.Column(
+                    [
+                        ft.Text(
+                            "请妥善保存这份初始账号密码。密码只在这里显示一次；"
+                            "之后如遗忘，可从学员档案里重设。",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Container(
+                            ft.Row([table], scroll=ft.ScrollMode.AUTO),
+                            height=360,
+                            scroll=ft.ScrollMode.AUTO,
+                        ),
+                    ],
+                    spacing=8,
+                    tight=True,
+                ),
+                [ft.Button("知道了", on_click=self._close)],
+            )
         )
 
     def _ask_delete_account(self, row: dict) -> None:
@@ -580,13 +778,20 @@ class SettingsMixin:
         for l in levels:
             used = db.count_level_usage(l["id"])
             used_text = db.level_usage_text(l["id"])
+            can_edit = self._can_manage_level(l)
+            badge_text = ""
+            badge_category = db.badge_category_for_level(l)
+            if badge_category == "竞赛":
+                badge_text = " · 竞赛徽章"
+            elif badge_category == "考级":
+                badge_text = f" · 考级徽章 {l['badge_exam_level'] or ''}".rstrip()
             rows.append(
                 ft.Container(
                     content=ft.Row(
                         [
                             ft.Column(
                                 [
-                                    ft.Text(db.level_full_name(l), size=14, weight=ft.FontWeight.W_600),
+                                    ft.Text(db.level_display_name(l), size=14, weight=ft.FontWeight.W_600),
                                     ft.Text(
                                         f"默认 {l['default_minutes']} 分钟"
                                         + (
@@ -598,7 +803,8 @@ class SettingsMixin:
                                             f" · {used_text}在用（删了会清空这些记录上的等级）"
                                             if used_text
                                             else " · 还没人用"
-                                        ),
+                                        )
+                                        + badge_text,
                                         size=12,
                                         color=ft.Colors.GREY_600,
                                     ),
@@ -606,17 +812,29 @@ class SettingsMixin:
                                 spacing=2,
                                 expand=True,
                             ),
-                            ft.IconButton(
-                                ft.Icons.EDIT,
-                                tooltip="编辑",
-                                icon_size=18,
-                                on_click=lambda e, lv=l: self._open_level_dialog(lv),
-                            ),
-                            ft.IconButton(
-                                ft.Icons.DELETE_OUTLINE,
-                                tooltip="删除",
-                                icon_size=18,
-                                on_click=lambda e, lv=l: self._delete_level(lv),
+                            *(
+                                [
+                                    ft.IconButton(
+                                        ft.Icons.EDIT,
+                                        tooltip="编辑",
+                                        icon_size=18,
+                                        on_click=lambda e, lv=l: self._open_level_dialog(lv),
+                                    ),
+                                    ft.IconButton(
+                                        ft.Icons.DELETE_OUTLINE,
+                                        tooltip="删除",
+                                        icon_size=18,
+                                        on_click=lambda e, lv=l: self._delete_level(lv),
+                                    ),
+                                ]
+                                if can_edit
+                                else [
+                                    ft.Text(
+                                        "只读",
+                                        size=11,
+                                        color=ft.Colors.GREY_500,
+                                    )
+                                ]
                             ),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -628,9 +846,332 @@ class SettingsMixin:
             )
         action = ft.Button("新增等级", icon=ft.Icons.ADD, on_click=lambda e: self._open_level_dialog(None))
         return self._section(
-            "等级与默认时长",
-            ft.Column(rows or [ft.Text("还没有等级", size=12, color=ft.Colors.GREY_600)], spacing=10),
+            "等级与默认时长" if self.is_admin() else "我的等级",
+            ft.Column(
+                [
+                    ft.Text(
+                        "所有人可以查看等级；管理员可以管理全部，普通老师可以新增和"
+                        "管理归在自己名下的等级，其他老师的等级只读。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    *(
+                        rows
+                        or [
+                            ft.Text(
+                                "还没有等级",
+                                size=12,
+                                color=ft.Colors.GREY_600,
+                            )
+                        ]
+                    ),
+                ],
+                spacing=10,
+            ),
             action=action,
+        )
+
+    def _course_packages_card(self) -> ft.Container:
+        packages = db.list_course_packages(active_only=False)
+        rows = []
+        for package in packages:
+            included = " ＋ ".join(
+                f"{item['hour_type_name']} {db.num_text(item['hours'])} 节"
+                for item in package["items"]
+            )
+            face, count = db.voucher_plan(
+                float(package["price"] or 0), package_selected=True
+            )
+            voucher_text = (
+                f"送 {count} 张 {db.num_text(face)} 元代金券"
+                if count
+                else f"不送券（课包需满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元）"
+            )
+            rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        package["name"],
+                                        size=14,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                    ft.Text(
+                                        f"{db.num_text(package['price'])} 元 · "
+                                        f"{included} · {voucher_text}",
+                                        size=12,
+                                        color=ft.Colors.GREY_600,
+                                    ),
+                                    *(
+                                        [
+                                            ft.Text(
+                                                package["note"],
+                                                size=11,
+                                                color=ft.Colors.GREY_500,
+                                            )
+                                        ]
+                                        if package.get("note")
+                                        else []
+                                    ),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            ft.IconButton(
+                                ft.Icons.EDIT,
+                                tooltip="编辑",
+                                icon_size=18,
+                                on_click=lambda e, p=package: self._open_course_package_dialog(p),
+                            ),
+                            ft.IconButton(
+                                ft.Icons.DELETE_OUTLINE,
+                                tooltip="删除",
+                                icon_size=18,
+                                on_click=lambda e, p=package: self._confirm(
+                                    "删除课包",
+                                    f"确定删除「{p['name']}」吗？已经用它记过的缴费不受影响。",
+                                    lambda: db.delete_course_package(p["id"]),
+                                ),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=10,
+                    border_radius=10,
+                    bgcolor=ft.Colors.GREY_50,
+                )
+            )
+        return self._section(
+            "固定课包",
+            ft.Column(
+                [
+                    ft.Text(
+                        "固定课包用来快速填入一整套课时；只有选择了满 3000 元的课包，"
+                        "缴费时才送 10 张代金券。普通缴费不送券。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    *(
+                        rows
+                        or [
+                            ft.Text(
+                                "还没有固定课包",
+                                size=12,
+                                color=ft.Colors.GREY_600,
+                            )
+                        ]
+                    ),
+                ],
+                spacing=10,
+            ),
+            action=ft.Button(
+                "新增课包",
+                icon=ft.Icons.ADD,
+                on_click=lambda e: self._open_course_package_dialog(None),
+            ),
+        )
+
+    def _help_request_settings_card(self) -> ft.Container:
+        cost = db.help_request_cost()
+        return self._section(
+            "帮助请求",
+            ft.Text(
+                f"学生每提交一次帮助请求，消耗 {db.num_text(cost)} 积分。"
+                "老师拒绝时自动退回，完成后不退回。",
+                size=12,
+                color=ft.Colors.GREY_600,
+            ),
+            action=ft.TextButton(
+                "修改积分",
+                icon=ft.Icons.STARS,
+                on_click=lambda e: self._open_help_cost_dialog(),
+            ),
+        )
+
+    def _open_help_cost_dialog(self) -> None:
+        if not self.is_admin():
+            self._toast("只有管理员能修改帮助请求积分")
+            return
+        points = _tf(
+            "每次消耗积分",
+            db.num_text(db.help_request_cost()),
+            width=DIALOG_WIDTH,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+
+        def save(e):
+            try:
+                db.set_help_request_cost(float((points.value or "").strip()))
+            except ValueError:
+                points.error = "请填写不小于 0 的数字"
+                points.update()
+                return
+            self._finish("帮助请求积分已更新")
+
+        self._show(
+            self._dialog(
+                "帮助请求积分",
+                self._form_column([points]),
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("保存", on_click=save),
+                ],
+            )
+        )
+
+    def _open_course_package_dialog(self, package: dict | None = None) -> None:
+        if not self.is_admin():
+            self._toast("固定课包只有管理员能设置")
+            return
+        editing = package is not None
+        name = _tf(
+            "课包名称",
+            package["name"] if editing else "",
+            width=DIALOG_WIDTH,
+        )
+        price = _tf(
+            "课包价格（元）",
+            db.num_text(package["price"]) if editing else "",
+            width=DIALOG_WIDTH,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        note = _tf(
+            "说明（可不填）",
+            package["note"] if editing else "",
+            width=DIALOG_WIDTH,
+        )
+        hour_types = db.list_hour_types()
+        rows_holder = ft.Column(spacing=8, tight=True)
+        rows: list[dict] = []
+
+        def add_item(item: dict | None = None, update: bool = True):
+            item = item or {}
+            type_dd = _dd(
+                "课时类型",
+                _opts([(h["id"], h["name"]) for h in hour_types]),
+                value=(
+                    str(item["hour_type_id"])
+                    if item.get("hour_type_id")
+                    else str(hour_types[0]["id"])
+                ),
+                width=180,
+            )
+            hours = _tf(
+                "课时数",
+                db.num_text(item["hours"]) if item.get("hours") else "",
+                width=140,
+                keyboard_type=ft.KeyboardType.NUMBER,
+            )
+            row = {"type": type_dd, "hours": hours}
+
+            def remove(e=None):
+                if len(rows) <= 1:
+                    self._toast("课包至少留一行")
+                    return
+                rows.remove(row)
+                rows_holder.controls.remove(box)
+                rows_holder.update()
+
+            box = ft.Row(
+                [
+                    type_dd,
+                    hours,
+                    ft.IconButton(
+                        ft.Icons.CLOSE,
+                        tooltip="去掉这一行",
+                        icon_size=18,
+                        on_click=remove,
+                    ),
+                ],
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            rows.append(row)
+            rows_holder.controls.append(box)
+            if update:
+                rows_holder.update()
+            return row
+
+        if editing and package["items"]:
+            for item in package["items"]:
+                add_item(item, update=False)
+        else:
+            add_item(update=False)
+
+        def save(e):
+            if not self.is_admin():
+                self._toast("固定课包只有管理员能设置")
+                return
+            try:
+                price_value = float((price.value or "").strip())
+            except ValueError:
+                price.error = "请填数字"
+                price.update()
+                return
+            items = []
+            for row in rows:
+                try:
+                    count = float((row["hours"].value or "").strip())
+                except ValueError:
+                    row["hours"].error = "请填数字"
+                    row["hours"].update()
+                    return
+                if count > 0:
+                    items.append(
+                        {
+                            "hour_type_id": int(row["type"].value),
+                            "hours": count,
+                        }
+                    )
+            try:
+                db.save_course_package(
+                    package["id"] if editing else None,
+                    name.value or "",
+                    price_value,
+                    items,
+                    note.value or "",
+                )
+            except ValueError as err:
+                name.error = str(err)
+                name.update()
+                return
+            self._finish("课包已保存")
+
+        body = self._form_column(
+            [
+                name,
+                price,
+                note,
+                ft.Text(
+                    "课包里的金额不用逐行拆；保存缴费时全部记在第一行，"
+                    "其余项目按赠送课时记录。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+                rows_holder,
+                ft.Row(
+                    [
+                        ft.TextButton(
+                            "+ 加一种课时",
+                            icon=ft.Icons.ADD,
+                            on_click=lambda e: add_item(),
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.END,
+                ),
+            ]
+        )
+        self._show(
+            self._dialog(
+                "编辑课包" if editing else "新增课包",
+                body,
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("保存", on_click=save),
+                ],
+            )
         )
 
     def _schools_card(self) -> ft.Container:
@@ -675,7 +1216,22 @@ class SettingsMixin:
                 )
             )
 
-        new_name = _tf("新学校名", "", expand=True)
+        return self._section(
+            "学校",
+            ft.Column(
+                rows
+                or [ft.Text("还没有学校", size=12, color=ft.Colors.GREY_600)],
+                spacing=10,
+            ),
+            action=ft.Button(
+                "新增学校",
+                icon=ft.Icons.ADD,
+                on_click=lambda e: self._open_school_dialog(),
+            ),
+        )
+
+    def _open_school_dialog(self) -> None:
+        new_name = _tf("新学校名", "", width=DIALOG_WIDTH)
 
         def add(e):
             try:
@@ -684,25 +1240,17 @@ class SettingsMixin:
                 new_name.error = "请填学校名"
                 new_name.update()
                 return
-            self.render()
-            self._toast("学校加好了")
+            self._finish("学校加好了")
 
-        return self._section(
-            "学校",
-            ft.Column(
+        self._show(
+            self._dialog(
+                "新增学校",
+                self._form_column([new_name]),
                 [
-                    ft.Column(
-                        rows or [ft.Text("还没有学校", size=12, color=ft.Colors.GREY_600)],
-                        spacing=10,
-                    ),
-                    ft.Row(
-                        [new_name, ft.Button("加进去", icon=ft.Icons.ADD, on_click=add)],
-                        spacing=6,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("保存", on_click=add),
                 ],
-                spacing=12,
-            ),
+            )
         )
 
     def _class_types_card(self) -> ft.Container:
@@ -745,8 +1293,11 @@ class SettingsMixin:
 
     def _delete_level(self, level) -> None:
         """删等级。有记录在用的话，说清楚会清空那些记录上的等级，再删。"""
+        if not self._can_manage_level(level):
+            self._toast("这是其他老师的等级，只能查看")
+            return
         used = db.level_usage_text(level["id"])
-        name = db.level_full_name(level)
+        name = db.level_display_name(level)
 
         def ok(e):
             self.page.pop_dialog()
@@ -782,6 +1333,11 @@ class SettingsMixin:
 
     def _open_level_dialog(self, level) -> None:
         editing = level is not None
+        if editing and not self._can_manage_level(level):
+            self._toast("这是其他老师的等级，只能查看")
+            return
+        admin = self.is_admin()
+        teacher_id = self._my_user_id()
         subject = _tf("科目（如 GPL、STEM）", level["subject"] if editing else "", width=DIALOG_WIDTH)
         name = _tf("等级／阶段（如 Lvl-01）", level["name"] if editing else "", width=DIALOG_WIDTH)
         minutes = _tf(
@@ -792,14 +1348,48 @@ class SettingsMixin:
         )
         teacher = _dd(
             "默认老师（报名时自动带出）",
-            _teacher_opts("不指定"),
+            (
+                _teacher_opts("不指定")
+                if admin
+                else [
+                    ft.DropdownOption(
+                        key=str(teacher_id),
+                        text=self._whoami(),
+                    )
+                ]
+            ),
             value=(
                 str(level["default_teacher_id"])
                 if editing and level["default_teacher_id"]
-                else ""
+                else ("" if admin else str(teacher_id))
             ),
             width=DIALOG_WIDTH,
         )
+        if not admin:
+            teacher.disabled = True
+        level_type = _dd(
+            "类别",
+            _opts([(value, value) for value in db.LEVEL_TYPES]),
+            value=(level["level_type"] if editing else "正课"),
+            width=DIALOG_WIDTH,
+        )
+        badge_exam_level = _dd(
+            "考级级别",
+            _opts([(value, value) for value in db.EXAM_LEVELS]),
+            value=(
+                level["badge_exam_level"]
+                if editing and level["badge_exam_level"] in db.EXAM_LEVELS
+                else "1级"
+            ),
+            width=DIALOG_WIDTH,
+            visible=(level["level_type"] if editing else "正课") == "考级",
+        )
+
+        def on_level_type(e=None) -> None:
+            badge_exam_level.visible = level_type.value == "考级"
+            badge_exam_level.update()
+
+        level_type.on_select = on_level_type
 
         def save(e):
             if not (name.value or "").strip():
@@ -818,18 +1408,49 @@ class SettingsMixin:
                     subject.value or "",
                     name.value,
                     mins,
-                    int(teacher.value) if (teacher.value or "").strip() else None,
+                    (
+                        int(teacher.value)
+                        if admin and (teacher.value or "").strip()
+                        else teacher_id
+                    ),
+                    level_type.value if level_type.value in db.BADGE_CATEGORIES else "",
+                    (
+                        badge_exam_level.value or ""
+                        if level_type.value == "考级"
+                        else ""
+                    ),
+                    level_type.value or "正课",
                 )
             else:
                 db.create_level(
                     subject.value or "",
                     name.value,
                     mins,
-                    int(teacher.value) if (teacher.value or "").strip() else None,
+                    (
+                        int(teacher.value)
+                        if admin and (teacher.value or "").strip()
+                        else teacher_id
+                    ),
+                    level_type.value if level_type.value in db.BADGE_CATEGORIES else "",
+                    (
+                        badge_exam_level.value or ""
+                        if level_type.value == "考级"
+                        else ""
+                    ),
+                    level_type.value or "正课",
                 )
             self._finish("等级已保存")
 
-        body = self._form_column([subject, name, minutes, teacher])
+        body = self._form_column(
+            [
+                subject,
+                level_type,
+                name,
+                minutes,
+                teacher,
+                badge_exam_level,
+            ]
+        )
         self._show(
             self._dialog(
                 "编辑等级" if editing else "新增等级",

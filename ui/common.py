@@ -137,7 +137,11 @@ def _school_inputs(value: str = "", width=None) -> tuple[ft.Control, ft.TextFiel
 def _level_title(enrollment: dict) -> str:
     subject = (enrollment.get("subject") or "").strip()
     name = (enrollment.get("level_name") or "").strip()
-    return f"{subject}-{name}" if subject else name
+    title = f"{subject}-{name}" if subject else name
+    category = (enrollment.get("level_type") or "").strip()
+    if category and not title.endswith(f"-{category}"):
+        return f"{title}-{category}"
+    return title
 
 
 def _courses_text(enrollments) -> str:
@@ -232,10 +236,7 @@ def _attendance_calc(a: dict, lesson: dict) -> tuple[float, float]:
     present = int(a.get("attendance") or 0)
     if not present:
         return 0.0, 0.0
-    points = (
-        (present + int(a.get("discipline") or 0) + int(a.get("performance") or 0)) * 10
-        + float(a.get("bonus") or 0)
-    )
+    points = db.attendance_points(a)
     hours = float(a.get("minutes") or lesson.get("minutes") or 0) / 60
     if not lesson.get("class_type_deduct"):
         hours = 0.0

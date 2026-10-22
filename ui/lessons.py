@@ -325,6 +325,7 @@ class LessonsMixin:
     def _makeup_rows(self, makeups: list[dict]) -> list[ft.Control]:
         rows = []
         for m in makeups:
+            can_edit = self._can_manage_student(int(m.get("student_id") or 0))
             rows.append(
                 ft.Container(
                     content=ft.Column(
@@ -343,24 +344,34 @@ class LessonsMixin:
                                 color=ft.Colors.GREY_700,
                             ),
                             ft.Row(
-                                [
-                                    ft.Button(
-                                        "安排补课",
-                                        icon=ft.Icons.EVENT_AVAILABLE,
-                                        on_click=lambda e, row=m: self._open_arrange_makeup_dialog(row),
-                                    ),
-                                    ft.TextButton(
-                                        "不补了",
-                                        on_click=lambda e, row=m: self._confirm(
-                                            "不补了",
-                                            f"「{row['student_name']}」{_date_text(row['lesson_date'])}"
-                                            "这节课不补了？这条待办会关掉。",
-                                            lambda: db.cancel_makeup(row["id"], "不补了"),
-                                            ok_text="确定",
-                                            done_text="这条待补课关掉了",
+                                (
+                                    [
+                                        ft.Button(
+                                            "安排补课",
+                                            icon=ft.Icons.EVENT_AVAILABLE,
+                                            on_click=lambda e, row=m: self._open_arrange_makeup_dialog(row),
                                         ),
-                                    ),
-                                ],
+                                        ft.TextButton(
+                                            "不补了",
+                                            on_click=lambda e, row=m: self._confirm(
+                                                "不补了",
+                                                f"「{row['student_name']}」{_date_text(row['lesson_date'])}"
+                                                "这节课不补了？这条待办会关掉。",
+                                                lambda: db.cancel_makeup(row["id"], "不补了"),
+                                                ok_text="确定",
+                                                done_text="这条待补课关掉了",
+                                            ),
+                                        ),
+                                    ]
+                                    if can_edit
+                                    else [
+                                        ft.Text(
+                                            "只读",
+                                            size=11,
+                                            color=ft.Colors.GREY_500,
+                                        )
+                                    ]
+                                ),
                                 alignment=ft.MainAxisAlignment.END,
                                 spacing=6,
                             ),
@@ -401,6 +412,9 @@ class LessonsMixin:
         return self._section(title, ft.Column(body, spacing=10))
 
     def _open_arrange_makeup_dialog(self, makeup: dict) -> None:
+        if not self._can_manage_student(int(makeup.get("student_id") or 0)):
+            self._toast("这是其他老师的学员，只能查看")
+            return
         day = _tf("补课日期", date.today().isoformat(), width=DIALOG_WIDTH)
         start = _tf("开始时间", makeup["start_time"] or _now_time(), width=DIALOG_WIDTH)
         minutes = _tf(
