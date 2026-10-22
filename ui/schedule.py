@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 import flet as ft
@@ -570,7 +571,7 @@ class ScheduleMixin:
 
     def _template_row(self, template: dict) -> ft.Container:
         bits = [
-            f"{db.weekday_text(template)} {template['start_time']}",
+            db.weekday_time_text(template),
             db.lesson_label(template),
             f"{template['student_count']} 人",
         ]
@@ -652,8 +653,8 @@ class ScheduleMixin:
                                 icon_size=18,
                                 on_click=lambda e, t=template: self._confirm(
                                     "删除这个班级",
-                                    f"确定删除「{db.weekday_text(t)} "
-                                    f"{t['start_time']} {db.lesson_label(t)}」吗？"
+                                    f"确定删除「{db.weekday_time_text(t)} "
+                                    f"{db.lesson_label(t)}」吗？"
                                     "学员报名和已经排出来的课都会保留，只是不再挂在这个班下面。",
                                     lambda: db.delete_template(t["id"]),
                                 ),
@@ -707,7 +708,7 @@ class ScheduleMixin:
         body = ft.Column(
             [
                 ft.Text(
-                    f"{db.weekday_text(template)} {template['start_time']} · "
+                    f"{db.weekday_time_text(template)} · "
                     f"{db.lesson_label(template)}",
                     size=13,
                     weight=ft.FontWeight.W_600,
@@ -833,6 +834,9 @@ class ScheduleMixin:
             hint_text="自动",
         )
         selected_days = set(db.template_weekdays(template) if editing else (5,))
+        saved_times = db.template_day_times(template) if editing else {}
+        default_time = (template.get("start_time") or "").strip() if editing else "10:00"
+        default_time = default_time or "10:00"
         weekday_boxes = [
             ft.Checkbox(
                 label=WEEKDAYS[index],
@@ -846,6 +850,29 @@ class ScheduleMixin:
             value=not selected_days,
             width=220,
         )
+        time_fields = {
+            index: ft.TextField(
+                label=f"{WEEKDAYS[index]}时间",
+                value=saved_times.get(index, default_time),
+                width=122,
+                dense=True,
+                hint_text="HH:MM",
+                visible=index in selected_days,
+            )
+            for index in range(7)
+        }
+        weekday_time_rows = [
+            ft.Row(
+                [
+                    weekday_boxes[index],
+                    time_fields[index],
+                ],
+                spacing=8,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            for index in range(7)
+        ]
 
         def chosen_weekdays() -> tuple[int, ...]:
             return tuple(index for index, box in enumerate(weekday_boxes) if box.value)
@@ -867,12 +894,7 @@ class ScheduleMixin:
                             size=11,
                             color=ft.Colors.GREY_600,
                         ),
-                        ft.Row(
-                            weekday_boxes,
-                            spacing=2,
-                            run_spacing=0,
-                            wrap=True,
-                        ),
+                        *weekday_time_rows,
                         no_weekday,
                     ],
                     spacing=2,
@@ -883,8 +905,17 @@ class ScheduleMixin:
 
         def refresh_weekday_summary(update: bool = True) -> None:
             days = chosen_weekdays()
+            summary = db.weekday_time_text(
+                {
+                    "weekdays": days,
+                    "weekday_times": {
+                        day: time_fields[day].value for day in days
+                    },
+                    "start_time": default_time,
+                }
+            )
             weekday_tile.subtitle = ft.Text(
-                db.weekday_text(days),
+                summary,
                 size=12,
                 color=ft.Colors.GREY_600,
             )
@@ -898,6 +929,22 @@ class ScheduleMixin:
             elif not any(box.value for box in weekday_boxes):
                 no_weekday.value = True
                 no_weekday.update()
+            day = next(
+                (index for index, box in enumerate(weekday_boxes) if box is e.control),
+                None,
+            )
+            if day is not None:
+                if e.control.value and not (time_fields[day].value or "").strip():
+                    time_fields[day].value = next(
+                        (
+                            (time_fields[index].value or "").strip()
+                            for index, box in enumerate(weekday_boxes)
+                            if box.value and index != day and (time_fields[index].value or "").strip()
+                        ),
+                        default_time,
+                    )
+                time_fields[day].visible = bool(e.control.value)
+                time_fields[day].update()
             refresh_weekday_summary()
 
         def on_no_weekday_change(e) -> None:
@@ -905,17 +952,17 @@ class ScheduleMixin:
                 for box in weekday_boxes:
                     box.value = False
                     box.update()
+                for field in time_fields.values():
+                    field.visible = False
+                    field.update()
             refresh_weekday_summary()
 
         for box in weekday_boxes:
             box.on_change = on_weekday_change
+        for field in time_fields.values():
+            field.on_change = lambda e: refresh_weekday_summary()
         no_weekday.on_change = on_no_weekday_change
         refresh_weekday_summary(update=False)
-        start = _tf(
-            "开始时间",
-            template["start_time"] if editing else "10:00",
-            width=DIALOG_WIDTH,
-        )
         minutes = _tf(
             "时长（分钟）",
             template["minutes"] if editing else 90,
@@ -1142,9 +1189,20 @@ class ScheduleMixin:
                 return
             level_id = int(level_dd.value) if (level_dd.value or "").strip() else None
             days = chosen_weekdays()
+            day_times: dict[int, str] = {}
+            for day in days:
+                field = time_fields[day]
+                field.error = None
+                value = (field.value or "").strip()
+                if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+                    field.error = "写成 15:30 这样"
+                    field.update()
+                    return
+                day_times[day] = value
+            first_time = day_times[days[0]] if days else default_time
             args = (
                 days,
-                (start.value or "").strip(),
+                first_time,
                 mins,
                 int(type_dd.value),
                 level_id,
@@ -1162,6 +1220,7 @@ class ScheduleMixin:
                 "year": gen_year.value or "",
                 "term": gen_term.value or "",
                 "seq": seq_value,
+                "weekday_times": day_times,
             }
             try:
                 if editing:
@@ -1180,38 +1239,60 @@ class ScheduleMixin:
             db.set_template_students(template_id, [sid for sid, cb, _m in picked if cb.value])
             self._finish("课表存好了")
 
-        body = self._form_column(
-            [
-                ft.Text(
-                    "课程名 = 年份-学期-等级-Cls-序号（例：2026-2-STEM-Lvl-02-Cls-01）",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Row([gen_year, gen_term], spacing=8),
-                ft.Row(
+        name_rules_tile = ft.ExpansionTile(
+            title=ft.Text(
+                "自动命名规则",
+                size=14,
+                weight=ft.FontWeight.W_600,
+            ),
+            subtitle=ft.Text(
+                "默认按当前年份、学期和等级生成；需要特殊班级名时展开调整",
+                size=12,
+                color=ft.Colors.GREY_600,
+            ),
+            expanded=False,
+            dense=True,
+            min_tile_height=56,
+            collapsed_bgcolor=ft.Colors.GREY_50,
+            bgcolor=ft.Colors.GREY_50,
+            controls_padding=ft.Padding.only(left=8, right=8, bottom=8),
+            controls=[
+                ft.Column(
                     [
-                        gen_seq,
-                        ft.TextButton(
-                            "生成课程名",
-                            icon=ft.Icons.AUTO_FIX_HIGH,
-                            on_click=generate_name,
+                        ft.Row([gen_year, gen_term], spacing=8),
+                        ft.Row(
+                            [
+                                gen_seq,
+                                ft.TextButton(
+                                    "生成课程名",
+                                    icon=ft.Icons.AUTO_FIX_HIGH,
+                                    on_click=generate_name,
+                                ),
+                            ],
+                            spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Text(
+                            "课程名格式：年份-学期-等级-Cls-序号",
+                            size=11,
+                            color=ft.Colors.GREY_600,
                         ),
                     ],
-                    spacing=8,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                name,
-                weekday_tile,
-                start,
-                type_dd,
-                ft.Row(
-                    [level_dd, ft.TextButton("选中这个等级的孩子", on_click=select_by_level)],
                     spacing=6,
-                    wrap=True,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                minutes,
+                    tight=True,
+                )
+            ],
+        )
+        body = self._form_column(
+            [
+                name,
+                type_dd,
+                level_dd,
                 teacher_dd,
+                ft.Divider(height=1),
+                ft.Text("上课安排", size=15, weight=ft.FontWeight.W_600),
+                weekday_tile,
+                minutes,
                 ft.Row([start_date, end_date], spacing=10),
                 ft.Text(
                     "填了开班日和结课日：① 到了结课日，这门课自动变「已结课」，"
@@ -1226,8 +1307,19 @@ class ScheduleMixin:
                     size=12,
                     color=ft.Colors.GREY_600,
                 ),
+                ft.Row(
+                    [
+                        ft.TextButton(
+                            "选中这个等级的孩子",
+                            icon=ft.Icons.CHECKLIST,
+                            on_click=select_by_level,
+                        )
+                    ],
+                    tight=True,
+                ),
                 holder,
                 show_all,
+                name_rules_tile,
                 *(
                     [
                         ft.Column(

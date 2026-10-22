@@ -1378,15 +1378,26 @@ app._open_template_dialog()
 dlg = top_dialog(page)
 _weekday_tile = next(c for c in walk(dlg) if isinstance(c, ft.ExpansionTile))
 ok(not _weekday_tile.expanded, "上课日平时折叠，不占大块空间")
-find_field(dlg, "课程名（自动生成，也可自己改）").value = "自检班"
+name_field = find_field(dlg, "课程名（自动生成，也可自己改）")
+name_field.value = "自检班"
 find_checkbox(dlg, "周六").value = True
 find_checkbox(dlg, "周日").value = True
-find_field(dlg, "开始时间").value = "10:30"
+find_field(dlg, "周六时间").value = "10:30"
+find_field(dlg, "周日时间").value = "09:00"
 find_field(dlg, "时长（分钟）").value = "90"
-find_dropdown(dlg, "课型").value = str(zhengke["id"])
+type_dd = find_dropdown(dlg, "课型")
+type_dd.value = str(zhengke["id"])
 level_dd = find_dropdown(dlg, "等级（可不选）")
 level_dd.value = str(gpl3["id"])
 level_dd.on_select(None)
+_form_order = list(walk(dlg))
+ok(
+    _form_order.index(name_field)
+    < _form_order.index(type_dd)
+    < _form_order.index(level_dd)
+    < _form_order.index(_weekday_tile),
+    "手填的课程名和课型在前，等级之后才进入上课时间",
+)
 ok(listed_in(dlg, "张晨希"), "排课表：选了等级，本级别的孩子还在")
 ok(not listed_in(dlg, "别的级别娃"), "排课表：别的级别的孩子被筛掉")
 find_checkbox(dlg, "也显示别的级别的孩子").value = True
@@ -1402,7 +1413,8 @@ ok(
     templates[0]["start_time"] == "10:30"
     and templates[0]["student_count"] == 1
     and templates[0]["weekday"] == 5
-    and templates[0]["weekdays"] == "5,6",
+    and templates[0]["weekdays"] == "5,6"
+    and db.template_day_times(templates[0]) == {5: "10:30", 6: "09:00"},
     "记下了多个上课日、时间和人数",
 )
 ok(db.template_student_ids(templates[0]["id"]) == [sid], "记住了固定来的孩子")
@@ -1436,7 +1448,11 @@ try:
 except AssertionError:
     rolled = False
 ok(rolled, "排好的课显示「去点名」")
-ok(find_text(page.controls[0], "每周六"), "固定课表里写着每周六")
+ok(
+    find_text(page.controls[0], "周六 10:30")
+    and find_text(page.controls[0], "周日 09:00"),
+    "固定课表里逐天写着各自时间",
+)
 
 db.delete_template(templates[0]["id"])
 ok(db.list_templates() == [], "课表能删掉")
@@ -2862,7 +2878,7 @@ ok(block_semester, "不定时的课不能「排整学期」，会提示用「记
 
 multi_cls = db.create_template(
     (0, 2),
-    "19:00",
+    "17:30",
     90,
     jingsai_ct["id"],
     js_level["id"],
@@ -2873,12 +2889,18 @@ multi_cls = db.create_template(
     teacher_id=t_a,
     start_date="2026-09-01",
     end_date="2026-09-14",
+    weekday_times={0: "17:30", 2: "19:00"},
 )
 multi = db.get_template(multi_cls)
 ok(
     db.template_weekdays(multi) == (0, 2)
     and db.weekday_text(multi) == "每周一、周三",
     "课程能同时保存周一和周三",
+)
+ok(
+    db.template_day_times(multi) == {0: "17:30", 2: "19:00"}
+    and db.weekday_time_text(multi) == "周一 17:30、周三 19:00",
+    "同一课程不同上课日能保存不同时间",
 )
 ok(
     db.template_dates(multi) == ["2026-09-02", "2026-09-07", "2026-09-09", "2026-09-14"],
@@ -2888,6 +2910,22 @@ ok(
     multi_cls in {t["id"] for t in db.templates_on("2026-09-07")}
     and multi_cls in {t["id"] for t in db.templates_on("2026-09-09")},
     "多日课程在周一周三的课表里都会出现",
+)
+ok(
+    next(t for t in db.templates_on("2026-09-07") if t["id"] == multi_cls)["start_time"]
+    == "17:30"
+    and next(t for t in db.templates_on("2026-09-09") if t["id"] == multi_cls)[
+        "start_time"
+    ]
+    == "19:00",
+    "课表按当天所属星期显示对应时间",
+)
+_mon_lesson = db.create_lesson_from_template(multi_cls, "2026-09-07")
+_wed_lesson = db.create_lesson_from_template(multi_cls, "2026-09-09")
+ok(
+    db.get_lesson(_mon_lesson)["start_time"] == "17:30"
+    and db.get_lesson(_wed_lesson)["start_time"] == "19:00",
+    "自动建课次也使用当天自己的时间",
 )
 
 free_lesson = db.create_lesson(
