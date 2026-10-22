@@ -819,7 +819,7 @@ def _photo_layout(count: int) -> tuple[int, int, list[tuple[int, int, int, int]]
     return box, box, boxes
 
 
-def _draw_work_overlay(
+def _draw_work_row(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
     works: list[Image.Image],
@@ -828,33 +828,21 @@ def _draw_work_overlay(
     width: int,
     height: int,
 ) -> int:
-    """把作品照片缩成无白边的相片叠在主照片左下角。"""
+    """把作品照片无边框地横向摆在海报左下角。"""
     if not works:
         return y
     count = min(3, len(works))
-    # 多张作品只露出一小段相片边，主图本身不留白色相框。
-    for offset in range(count - 1, -1, -1):
-        card_x = x + offset * 11
-        card_y = y - offset * 10
-        image = _cover(works[offset], width, height)
-        if offset == 0:
-            draw.rounded_rectangle(
-                (card_x + 4, card_y + 7, card_x + width + 4, card_y + height + 7),
-                radius=20,
-                fill=(18, 26, 35, 72),
-            )
-        canvas.paste(_rounded(image, 20), (card_x, card_y))
-    # 只给“作品”放一小块半透明标签，不再用整张白色卡片衬底。
-    label_font = _font(True, 24)
-    caption = "作品" if len(works) == 1 else f"作品 · {len(works)} 张"
-    label_w = int(draw.textlength(caption, font=label_font)) + 30
-    draw.rounded_rectangle(
-        (x + 13, y + 13, x + 13 + label_w, y + 51),
-        radius=19,
-        fill=(18, 28, 40, 190),
-    )
-    draw.text((x + 28, y + 20), caption, font=label_font, fill=(255, 255, 255))
-    return max(y + height + 8, y)
+    gap = 12
+    for index, item in enumerate(works[:count]):
+        card_x = x + index * (width + gap)
+        draw.rounded_rectangle(
+            (card_x + 4, y + 7, card_x + width + 4, y + height + 7),
+            radius=18,
+            fill=(18, 26, 35, 62),
+        )
+        image = _cover(item, width, height)
+        canvas.paste(_rounded(image, 18), (card_x, y))
+    return y + height
 
 
 def _tag_colors(tag: str, theme: Theme) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -969,15 +957,14 @@ def build_poster(data: PosterData) -> bytes:
     header_pad = 40
     name_font = _font(True, 76)
     meta_font = _font(False, 34)
-    brand_font = _font(True, 44)
     logo_image = _decode_photo(data.logo) if data.logo else None
     qr_image = _decode_photo(data.qr_code) if data.qr_code else None
-    brand_row_h = 64 if logo_image else 58
+    brand_row_h = 64 if logo_image is not None else 0
 
     meta_line = " · ".join(x for x in (data.date_line, data.class_line) if x)
     # 留出右边一片给装饰和科目牌子，日期那行不往那边压
     meta_lines = _wrap(meta_line, meta_font, inner - 300) if meta_line else []
-    header_height = header_pad + brand_row_h + 12 + 100
+    header_height = header_pad + brand_row_h + (12 if brand_row_h else 0) + 100
     header_height += int(meta_font.size * 1.52) * len(meta_lines)
     header_height += 44
 
@@ -991,18 +978,10 @@ def build_poster(data: PosterData) -> bytes:
     canvas.alpha_composite(header, (0, header_top))
 
     text_y = header_top + header_pad
-    brand_x = margin
     if logo_image is not None:
         logo = _fit_on_white(logo_image, 58, 58)
         canvas.paste(_rounded(logo, 12), (margin, text_y))
-        brand_x += 72
-    draw.text(
-        (brand_x, text_y + 2),
-        data.brand or "课堂分享",
-        font=brand_font,
-        fill=_lighten(theme.header_bottom, 0.86),
-    )
-    text_y += brand_row_h + 12
+        text_y += brand_row_h + 12
     draw.text(
         (margin, text_y),
         data.student_name or "课堂分享",
@@ -1025,43 +1004,10 @@ def build_poster(data: PosterData) -> bytes:
         # 白底要够实：花纹（齿轮、无人机的桨）从底下透出来会显得脏
         bdraw.rounded_rectangle((0, 0, badge_w - 1, 61), radius=31, fill=(255, 255, 255, 242))
         bdraw.text((24, 11), subject, font=badge_font, fill=theme.accent_dark + (255,))
-        badge_y = (
-            header_top + 190
-            if qr_image is not None
-            else header_top + header_pad - 8
+        canvas.alpha_composite(
+            badge,
+            (WIDTH - margin - badge_w, header_top + header_pad - 8),
         )
-        canvas.alpha_composite(badge, (WIDTH - margin - badge_w, badge_y))
-
-    # —— 联系二维码固定在右上角，和主照片、页脚内容互不遮挡
-    if qr_image is not None:
-        qr_card = 152
-        qr_x = WIDTH - margin - qr_card
-        qr_y = header_top + 20
-        draw.rounded_rectangle(
-            (qr_x + 4, qr_y + 7, qr_x + qr_card + 4, qr_y + qr_card + 7),
-            radius=18,
-            fill=(18, 35, 54, 70),
-        )
-        draw.rounded_rectangle(
-            (qr_x, qr_y, qr_x + qr_card, qr_y + qr_card),
-            radius=18,
-            fill=(255, 255, 255, 246),
-            outline=(255, 255, 255),
-            width=2,
-        )
-        qr = _fit_on_white(qr_image, 106, 106)
-        canvas.paste(qr, (qr_x + 23, qr_y + 7))
-        qr_font = _font(False, 16)
-        qr_label = (data.brand or "扫码联系").strip()
-        qr_lines = _wrap(qr_label, qr_font, qr_card - 16)[:2]
-        for line_index, line in enumerate(qr_lines):
-            line_w = int(draw.textlength(line, font=qr_font))
-            draw.text(
-                (qr_x + (qr_card - line_w) / 2, qr_y + 116 + line_index * 19),
-                line,
-                font=qr_font,
-                fill=theme.accent_dark,
-            )
 
     y = header_top + header_height + 40
 
@@ -1178,42 +1124,19 @@ def build_poster(data: PosterData) -> bytes:
             cx += tag_width + 16
         y = cy + 58 + 30
 
-    # —— 页脚左侧放作品，老师／联系方式放在它右边
+    # —— 页脚：老师／联系方式居中，上方；作品左下，二维码右下
     footer_bits = [
         bit
         for bit in (
-            data.teacher_name and f"上课老师 {data.teacher_name}",
+            data.teacher_name and f"上课老师 {data.teacher_name}"
+            if qr_image is None
+            else "",
             data.contact,
         )
         if bit
     ]
     footer_end = y + 6
-    if works:
-        work_y = y + 10
-        _draw_work_overlay(
-            canvas,
-            draw,
-            works,
-            margin,
-            work_y,
-            310,
-            250,
-        )
-        footer_end = max(footer_end, work_y + 250)
-        if footer_bits:
-            footer_font = _font(False, 30)
-            footer_x = margin + 350
-            footer_width = WIDTH - margin - footer_x
-            _draw_paragraph(
-                draw,
-                " · ".join(footer_bits),
-                footer_font,
-                GREY,
-                footer_x,
-                work_y + 54,
-                footer_width,
-            )
-    elif footer_bits:
+    if footer_bits:
         footer_font = _font(False, 30)
         footer_lines = _wrap(" · ".join(footer_bits), footer_font, inner)
         footer_y = y + 6
@@ -1227,6 +1150,68 @@ def build_poster(data: PosterData) -> bytes:
             )
             footer_y += int(footer_font.size * 1.52)
         footer_end = footer_y
+    row_y = footer_end + 16
+    row_bottom = row_y
+    if works:
+        row_bottom = _draw_work_row(
+            canvas,
+            draw,
+            works,
+            margin,
+            row_y,
+            176,
+            160,
+        )
+    if qr_image is not None:
+        qr_card = 160
+        qr_x = WIDTH - margin - qr_card
+        if data.teacher_name:
+            teacher_label_font = _font(False, 20)
+            teacher_name_font = _font(True, 30)
+            teacher_right = qr_x - 26
+            label = "上课老师"
+            name = data.teacher_name
+            label_w = int(draw.textlength(label, font=teacher_label_font))
+            name_w = int(draw.textlength(name, font=teacher_name_font))
+            draw.text(
+                (teacher_right - label_w, row_y + 43),
+                label,
+                font=teacher_label_font,
+                fill=GREY,
+            )
+            draw.text(
+                (teacher_right - name_w, row_y + 70),
+                name,
+                font=teacher_name_font,
+                fill=INK,
+            )
+        draw.rounded_rectangle(
+            (qr_x + 4, row_y + 7, qr_x + qr_card + 4, row_y + qr_card + 7),
+            radius=16,
+            fill=(225, 232, 239),
+        )
+        draw.rounded_rectangle(
+            (qr_x, row_y, qr_x + qr_card, row_y + qr_card),
+            radius=16,
+            fill=PAGE,
+            outline=LINE,
+            width=2,
+        )
+        qr = _fit_on_white(qr_image, 108, 108)
+        canvas.paste(qr, (qr_x + 26, row_y + 8))
+        qr_font = _font(False, 16)
+        qr_label = (data.brand or "扫码联系").strip()
+        qr_lines = _wrap(qr_label, qr_font, qr_card - 16)[:2]
+        for line_index, line in enumerate(qr_lines):
+            line_w = int(draw.textlength(line, font=qr_font))
+            draw.text(
+                (qr_x + (qr_card - line_w) / 2, row_y + 116 + line_index * 19),
+                line,
+                font=qr_font,
+                fill=theme.accent_dark,
+            )
+        row_bottom = max(row_bottom, row_y + qr_card)
+    footer_end = row_bottom
     y = footer_end + 8
 
     used = max(600, min(height_guess, y + margin))
