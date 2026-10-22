@@ -303,6 +303,7 @@ CREATE TABLE IF NOT EXISTS schedule_templates (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT    NOT NULL DEFAULT '',
     weekday       INTEGER NOT NULL DEFAULT 0,
+    weekdays      TEXT    NOT NULL DEFAULT '',
     start_time    TEXT    NOT NULL DEFAULT '',
     minutes       INTEGER NOT NULL DEFAULT 90,
     class_type_id INTEGER NOT NULL REFERENCES class_types(id),
@@ -400,6 +401,14 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE lessons ADD COLUMN rolled INTEGER NOT NULL DEFAULT 1")
     hour_columns = {r["name"] for r in con.execute("PRAGMA table_info(hour_types)")}
     template_columns = {r["name"] for r in con.execute("PRAGMA table_info(schedule_templates)")}
+    if "weekdays" not in template_columns:
+        con.execute("ALTER TABLE schedule_templates ADD COLUMN weekdays TEXT NOT NULL DEFAULT ''")
+    # 老课程只有一个 weekday；补成同样的多选日期。没定日期的课程保持空。
+    con.execute(
+        """UPDATE schedule_templates
+              SET weekdays = CAST(weekday AS TEXT)
+            WHERE weekdays = '' AND weekday BETWEEN 0 AND 6"""
+    )
     if "start_date" not in template_columns:
         con.execute("ALTER TABLE schedule_templates ADD COLUMN start_date TEXT NOT NULL DEFAULT ''")
     if "end_date" not in template_columns:
@@ -767,14 +776,49 @@ def normalize_course_names() -> int:
     return changed
 
 
-def weekday_text(weekday) -> str:
-    """星期几的文字：0-6 是周一到周日，-1（或空的）是"时间不定"。"""
-    try:
-        w = int(weekday)
-    except (TypeError, ValueError):
-        return "时间不定"
-    if 0 <= w <= 6:
-        return f"每{WEEKDAY_NAMES[w]}"
+def normalize_weekdays(value) -> tuple[int, ...]:
+    """把单选、多选或 ``"0,2,5"`` 统一成有序且不重复的上课日。"""
+    if value is None:
+        return ()
+    if isinstance(value, sqlite3.Row):
+        value = dict(value)
+    if isinstance(value, dict):
+        if (value.get("weekdays") or "").strip():
+            value = value.get("weekdays")
+        else:
+            value = value.get("weekday")
+    if isinstance(value, str):
+        raw = [part for part in value.replace("，", ",").split(",") if part.strip()]
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw = list(value)
+    else:
+        raw = [value]
+    days: set[int] = set()
+    for part in raw:
+        try:
+            day = int(part)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6:
+            days.add(day)
+    return tuple(sorted(days))
+
+
+def template_weekdays(template: dict | sqlite3.Row) -> tuple[int, ...]:
+    """课程实际选的星期；兼容只带旧 weekday 字段的老数据。"""
+    return normalize_weekdays(template)
+
+
+def weekdays_value(days) -> str:
+    """数据库里存多选星期用的紧凑格式：0,2,5。"""
+    return ",".join(str(day) for day in normalize_weekdays(days))
+
+
+def weekday_text(value) -> str:
+    """星期几的文字；多选用顿号隔开，一个都没选就是「时间不定」。"""
+    days = normalize_weekdays(value)
+    if days:
+        return "每" + "、".join(WEEKDAY_NAMES[day] for day in days)
     return "时间不定"
 
 
@@ -785,9 +829,9 @@ def class_label(row: dict | sqlite3.Row) -> str:
     if name:
         return name
     bits = []
-    weekday = data.get("weekday")
-    if weekday is not None and 0 <= int(weekday) <= 6:
-        bits.append(WEEKDAY_NAMES[int(weekday)])
+    days = template_weekdays(data)
+    if days:
+        bits.append("、".join(WEEKDAY_NAMES[day] for day in days))
     if (data.get("start_time") or "").strip():
         bits.append(data["start_time"].strip())
     subject = (data.get("subject") or "").strip()
@@ -848,6 +892,7 @@ def enrollment_class_label(enrollment: dict) -> str:
         {
             "name": enrollment.get("class_name"),
             "weekday": enrollment.get("class_weekday"),
+            "weekdays": enrollment.get("class_weekdays"),
             "start_time": enrollment.get("class_start_time"),
             "subject": enrollment.get("subject"),
             "level_name": enrollment.get("level_name"),
@@ -928,6 +973,7 @@ def lesson_class_label(lesson: dict) -> str:
         {
             "name": lesson.get("class_name"),
             "weekday": lesson.get("class_weekday"),
+            "weekdays": lesson.get("class_weekdays"),
             "start_time": lesson.get("class_start_time"),
             "subject": lesson.get("subject"),
             "level_name": lesson.get("level_name"),
@@ -1739,6 +1785,7 @@ def list_enrollments(student_id: int) -> list[dict]:
                       ct.name AS class_type_name,
                       u.display_name AS owner_teacher_name,
                       t.name AS class_name, t.weekday AS class_weekday,
+                      t.weekdays AS class_weekdays,
                       t.start_time AS class_start_time,
                       t.teacher_id AS class_teacher_id,
                       tu.display_name AS class_teacher_name
@@ -2224,6 +2271,7 @@ _LESSON_SELECT = """
            lv.subject AS subject,
            lv.name    AS level_name,
            t.name AS class_name, t.weekday AS class_weekday,
+           t.weekdays AS class_weekdays,
            t.start_time AS class_start_time,
            u.display_name AS teacher_name,
            (SELECT GROUP_CONCAT(DISTINCT COALESCE(u2.display_name, u2.username))
@@ -2396,7 +2444,8 @@ def get_enrollment(enrollment_id: int) -> dict | None:
                       l.default_minutes,
                       u.display_name AS owner_teacher_name,
                       t.name AS class_name, t.teacher_id AS class_teacher_id,
-                      t.weekday AS class_weekday, t.start_time AS class_start_time
+                      t.weekday AS class_weekday, t.weekdays AS class_weekdays,
+                      t.start_time AS class_start_time
                  FROM enrollments e
                  LEFT JOIN levels l ON l.id = e.level_id
                  LEFT JOIN users u ON u.id = e.owner_teacher_id
@@ -3062,9 +3111,12 @@ def list_templates(weekday: int | None = None, active_only: bool = True) -> list
     if active_only:
         sql += " AND t.active = 1"
     if weekday is not None:
-        sql += " AND t.weekday = ?"
-        args.append(int(weekday))
-    sql += " ORDER BY t.weekday, t.start_time, t.id"
+        sql += (
+            " AND (instr(',' || t.weekdays || ',', ',' || ? || ',') > 0"
+            " OR (t.weekdays = '' AND t.weekday = ?))"
+        )
+        args.extend((int(weekday), int(weekday)))
+    sql += " ORDER BY t.weekdays, t.start_time, t.id"
     with _connect() as con:
         rows = con.execute(sql, args).fetchall()
     return [dict(r) for r in rows]
@@ -3090,7 +3142,7 @@ def latest_lesson_for_template(template_id: int) -> dict | None:
 
 
 def create_template(
-    weekday: int,
+    weekday: int | tuple[int, ...] | list[int] | str,
     start_time: str,
     minutes: int,
     class_type_id: int,
@@ -3107,6 +3159,8 @@ def create_template(
     name = (name or "").strip()
     if not name:
         raise ValueError("课程名不能为空")
+    days = normalize_weekdays(weekday)
+    anchor = days[0] if days else -1
     with _connect() as con:
         exists = con.execute(
             "SELECT id FROM schedule_templates WHERE name = ?", (name,)
@@ -3115,16 +3169,17 @@ def create_template(
             raise ValueError(f"已经有叫「{name}」的课程了，换个名字")
         cur = con.execute(
             """INSERT INTO schedule_templates
-                   (name, year, term, seq, weekday, start_time, minutes,
+                   (name, year, term, seq, weekday, weekdays, start_time, minutes,
                     class_type_id, level_id, note,
                     start_date, end_date, teacher_id, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name,
                 (year or "").strip(),
                 (term or "").strip(),
                 int(seq or 0),
-                int(weekday),
+                anchor,
+                weekdays_value(days),
                 start_time,
                 int(minutes),
                 class_type_id,
@@ -3141,7 +3196,7 @@ def create_template(
 
 def update_template(
     template_id: int,
-    weekday: int,
+    weekday: int | tuple[int, ...] | list[int] | str,
     start_time: str,
     minutes: int,
     class_type_id: int,
@@ -3158,6 +3213,8 @@ def update_template(
     name = (name or "").strip()
     if not name:
         raise ValueError("课程名不能为空")
+    days = normalize_weekdays(weekday)
+    anchor = days[0] if days else -1
     with _connect() as con:
         exists = con.execute(
             "SELECT id FROM schedule_templates WHERE name = ? AND id <> ?",
@@ -3167,7 +3224,7 @@ def update_template(
             raise ValueError(f"已经有叫「{name}」的课程了，换个名字")
         con.execute(
             """UPDATE schedule_templates
-                  SET name = ?, year = ?, term = ?, seq = ?, weekday = ?,
+                  SET name = ?, year = ?, term = ?, seq = ?, weekday = ?, weekdays = ?,
                       start_time = ?, minutes = ?, class_type_id = ?,
                       level_id = ?, note = ?, start_date = ?, end_date = ?, teacher_id = ?
                 WHERE id = ?""",
@@ -3176,7 +3233,8 @@ def update_template(
                 (year or "").strip(),
                 (term or "").strip(),
                 int(seq or 0),
-                int(weekday),
+                anchor,
+                weekdays_value(days),
                 start_time,
                 int(minutes),
                 class_type_id,
@@ -3410,32 +3468,29 @@ def is_course_skipped(template_id: int, day: str) -> bool:
 
 
 def template_dates(template: dict, start: str | None = None, end: str | None = None) -> list[str]:
-    """课表区间里，逢"周几"的那些日子。"""
+    """课表区间里，逢所选上课日的那些日子。"""
     first = (start if start is not None else template.get("start_date") or "").strip()
     last = (end if end is not None else template.get("end_date") or "").strip()
     if not first or not last:
         return []
-    try:
-        weekday = int(template["weekday"])
-    except (KeyError, TypeError, ValueError):
-        return []
-    if not (0 <= weekday <= 6):
+    weekdays = template_weekdays(template)
+    if not weekdays:
         # 没定星期几的课程，算不出每周的日期
         return []
     try:
-        day = date.fromisoformat(first)
+        first_day = date.fromisoformat(first)
         stop = date.fromisoformat(last)
     except ValueError:
         return []
-    if stop < day:
+    if stop < first_day:
         return []
-    step = (weekday - day.weekday()) % 7
-    day += timedelta(days=step)
-    out = []
-    while day <= stop:
-        out.append(day.isoformat())
-        day += timedelta(days=7)
-    return out
+    dates: set[str] = set()
+    for weekday in weekdays:
+        day = first_day + timedelta(days=(weekday - first_day.weekday()) % 7)
+        while day <= stop:
+            dates.add(day.isoformat())
+            day += timedelta(days=7)
+    return sorted(dates)
 
 
 def template_lessons(template_id: int) -> list[dict]:
@@ -3459,11 +3514,7 @@ def generate_template_lessons(template_id: int) -> dict:
         raise ValueError("这张课表不存在")
     dates = template_dates(template)
     if not dates:
-        try:
-            weekday = int(template["weekday"])
-        except (TypeError, ValueError):
-            weekday = -1
-        if not (0 <= weekday <= 6):
+        if not template_weekdays(template):
             raise ValueError(
                 "这门课程没定星期几（时间不定），不能用「排整学期」；用「记一节课」一次一次记"
             )
@@ -4159,7 +4210,7 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
                     course_status(t),
                     t["start_date"],
                     t["end_date"],
-                    weekday_text(t["weekday"]),
+                    weekday_text(t),
                     t["start_time"],
                     t["minutes"],
                     _level_text(t),
@@ -4677,6 +4728,7 @@ def list_payment_items(payment_id: int) -> list[dict]:
                       u.display_name AS owner_teacher_name,
                       e.class_id AS class_id,
                       t.name AS class_name, t.weekday AS class_weekday,
+                      t.weekdays AS class_weekdays,
                       t.start_time AS class_start_time
                  FROM payment_items pi
                  LEFT JOIN hour_types ht ON ht.id = pi.hour_type_id
@@ -4702,6 +4754,7 @@ def items_by_payment(payment_ids: list[int]) -> dict[int, list[dict]]:
                        u.display_name AS owner_teacher_name,
                        e.class_id AS class_id,
                        t.name AS class_name, t.weekday AS class_weekday,
+                       t.weekdays AS class_weekdays,
                        t.start_time AS class_start_time
                   FROM payment_items pi
                   LEFT JOIN hour_types ht ON ht.id = pi.hour_type_id

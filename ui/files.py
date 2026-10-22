@@ -530,6 +530,15 @@ class FilesMixin:
         # posters 就放在 assets 目录下面，浏览器直接就能打开
         return f"/{path.parent.name}/{path.name}"
 
+    def _poster_qr_bytes(self) -> bytes:
+        stored = (db.get_meta("poster_qr") or "").strip()
+        if not stored:
+            return b""
+        try:
+            return (db.UPLOAD_DIR / Path(stored).name).read_bytes()
+        except OSError:
+            return b""
+
     def _poster_data(self, a: dict, lesson: dict, photos: list[dict]) -> poster.PosterData:
         hours, points = _attendance_calc(a, lesson)
         present = int(a.get("attendance") or 0)
@@ -559,12 +568,34 @@ class FilesMixin:
                 f"下次课 {_date_text(upcoming['lesson_date'])} {upcoming['start_time']}"
             )
 
-        raw_photos = []
-        for row in photos[:4]:
+        selected = photos[:4]
+        loaded: list[tuple[int, dict, bytes]] = []
+        for index, row in enumerate(selected):
             try:
-                raw_photos.append((db.UPLOAD_DIR / row["stored_name"]).read_bytes())
+                loaded.append(
+                    (
+                        index,
+                        row,
+                        (db.UPLOAD_DIR / row["stored_name"]).read_bytes(),
+                    )
+                )
             except OSError:
                 continue
+        portrait_index = next(
+            (
+                index
+                for index, row in enumerate(selected)
+                if row.get("owner_type") == "attendance"
+            ),
+            0 if selected else None,
+        )
+        portrait_photo = b""
+        work_photos: list[bytes] = []
+        for index, _row, raw in loaded:
+            if index == portrait_index:
+                portrait_photo = raw
+            else:
+                work_photos.append(raw)
 
         class_bits = [
             db.lesson_class_label(lesson),
@@ -595,6 +626,7 @@ class FilesMixin:
             subject=lesson.get("subject") or "",
             brand=db.get_meta("poster_brand"),
             contact=db.get_meta("poster_contact"),
+            qr_code=self._poster_qr_bytes(),
             lesson_comment=lesson.get("comment") or "",
             student_comment=a.get("comment") or "",
             keywords=tuple(
@@ -606,7 +638,30 @@ class FilesMixin:
                 lesson.get("teacher_name") or a.get("owner_teacher_name") or ""
             ),
             tags=tuple(tags),
-            photos=tuple(raw_photos),
+            portrait_photo=portrait_photo,
+            work_photos=tuple(work_photos),
+            points_text=next(
+                (tag for tag in tags if tag.startswith("本次积分")),
+                "",
+            ),
+            point_marks=(
+                poster.PointMark("出勤", bool(present), 10 if present else 0),
+                poster.PointMark(
+                    "纪律",
+                    bool(int(a.get("discipline") or 0)),
+                    10 if int(a.get("discipline") or 0) else 0,
+                ),
+                poster.PointMark(
+                    "表现",
+                    bool(int(a.get("performance") or 0)),
+                    10 if int(a.get("performance") or 0) else 0,
+                ),
+                poster.PointMark(
+                    "突出",
+                    float(a.get("bonus") or 0) > 0,
+                    float(a.get("bonus") or 0),
+                ),
+            ),
             seed=seed,
         )
 
@@ -737,6 +792,7 @@ class FilesMixin:
             subject=lesson.get("subject") or template.get("subject") or "",
             brand=db.get_meta("poster_brand"),
             contact=db.get_meta("poster_contact"),
+            qr_code=self._poster_qr_bytes(),
             lesson_comment=lesson.get("comment") or "",
             student_comment="",
             teacher_name=poster.teacher_label(
@@ -828,7 +884,7 @@ class FilesMixin:
         picked: list[tuple[ft.Checkbox, dict]] = []
         cards = []
         for index, row in enumerate(photos):
-            tag = "课堂" if row.get("owner_type") == "lesson" else "孩子"
+            tag = "作品／课堂" if row.get("owner_type") == "lesson" else "孩子人像"
             box = ft.Checkbox(label=tag, value=index < 4)
             picked.append((box, row))
             cards.append(
@@ -876,7 +932,8 @@ class FilesMixin:
                 ft.Column(
                     [
                         ft.Text(
-                            "最多选 4 张；一张都不选也可以，海报会只用课评。",
+                            "最多选 4 张；一张都不选也可以，海报会只用课评。"
+                            "做孩子海报时，人像铺底，其他照片叠在人像右下角。",
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),

@@ -570,7 +570,7 @@ class ScheduleMixin:
 
     def _template_row(self, template: dict) -> ft.Container:
         bits = [
-            f"{db.weekday_text(template['weekday'])} {template['start_time']}",
+            f"{db.weekday_text(template)} {template['start_time']}",
             db.lesson_label(template),
             f"{template['student_count']} 人",
         ]
@@ -652,7 +652,7 @@ class ScheduleMixin:
                                 icon_size=18,
                                 on_click=lambda e, t=template: self._confirm(
                                     "删除这个班级",
-                                    f"确定删除「每{WEEKDAYS[int(t['weekday'])]} "
+                                    f"确定删除「{db.weekday_text(t)} "
                                     f"{t['start_time']} {db.lesson_label(t)}」吗？"
                                     "学员报名和已经排出来的课都会保留，只是不再挂在这个班下面。",
                                     lambda: db.delete_template(t["id"]),
@@ -693,11 +693,7 @@ class ScheduleMixin:
         """一次把这个学期的课排出来（先排课，不点名、不扣课时）。"""
         dates = db.template_dates(template)
         if not dates:
-            try:
-                weekday = int(template["weekday"])
-            except (TypeError, ValueError):
-                weekday = -1
-            if not (0 <= weekday <= 6):
+            if not db.template_weekdays(template):
                 self._toast(
                     "这门课程没定星期几（时间不定），不能用「排整学期」；"
                     "用「记一节课」一次一次记"
@@ -711,7 +707,7 @@ class ScheduleMixin:
         body = ft.Column(
             [
                 ft.Text(
-                    f"{db.weekday_text(template['weekday'])} {template['start_time']} · "
+                    f"{db.weekday_text(template)} {template['start_time']} · "
                     f"{db.lesson_label(template)}",
                     size=13,
                     weight=ft.FontWeight.W_600,
@@ -836,13 +832,85 @@ class ScheduleMixin:
             width=90,
             hint_text="自动",
         )
-        weekday = _dd(
-            "星期几（选填）",
-            [ft.DropdownOption(key="-1", text="不指定（时间不定）")]
-            + _opts([(i, f"每{WEEKDAYS[i]}") for i in range(7)]),
-            value=str(template["weekday"]) if editing else "5",
-            width=DIALOG_WIDTH,
+        selected_days = set(db.template_weekdays(template) if editing else (5,))
+        weekday_boxes = [
+            ft.Checkbox(
+                label=WEEKDAYS[index],
+                value=index in selected_days,
+                width=88,
+            )
+            for index in range(7)
+        ]
+        no_weekday = ft.Checkbox(
+            label="不指定（时间不定）",
+            value=not selected_days,
+            width=220,
         )
+
+        def chosen_weekdays() -> tuple[int, ...]:
+            return tuple(index for index, box in enumerate(weekday_boxes) if box.value)
+
+        weekday_tile = ft.ExpansionTile(
+            title=ft.Text("上课日", size=14, weight=ft.FontWeight.W_600),
+            subtitle=ft.Text("", size=12, color=ft.Colors.GREY_600),
+            expanded=False,
+            dense=True,
+            min_tile_height=56,
+            collapsed_bgcolor=ft.Colors.GREY_50,
+            bgcolor=ft.Colors.GREY_50,
+            controls_padding=ft.Padding.only(left=8, right=8, bottom=8),
+            controls=[
+                ft.Column(
+                    [
+                        ft.Text(
+                            "可多选；都不选就是时间不定",
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Row(
+                            weekday_boxes,
+                            spacing=2,
+                            run_spacing=0,
+                            wrap=True,
+                        ),
+                        no_weekday,
+                    ],
+                    spacing=2,
+                    tight=True,
+                )
+            ],
+        )
+
+        def refresh_weekday_summary(update: bool = True) -> None:
+            days = chosen_weekdays()
+            weekday_tile.subtitle = ft.Text(
+                db.weekday_text(days),
+                size=12,
+                color=ft.Colors.GREY_600,
+            )
+            if update:
+                weekday_tile.update()
+
+        def on_weekday_change(e) -> None:
+            if e.control.value:
+                no_weekday.value = False
+                no_weekday.update()
+            elif not any(box.value for box in weekday_boxes):
+                no_weekday.value = True
+                no_weekday.update()
+            refresh_weekday_summary()
+
+        def on_no_weekday_change(e) -> None:
+            if e.control.value:
+                for box in weekday_boxes:
+                    box.value = False
+                    box.update()
+            refresh_weekday_summary()
+
+        for box in weekday_boxes:
+            box.on_change = on_weekday_change
+        no_weekday.on_change = on_no_weekday_change
+        refresh_weekday_summary(update=False)
         start = _tf(
             "开始时间",
             template["start_time"] if editing else "10:00",
@@ -1073,8 +1141,9 @@ class ScheduleMixin:
                 minutes.update()
                 return
             level_id = int(level_dd.value) if (level_dd.value or "").strip() else None
+            days = chosen_weekdays()
             args = (
-                int(weekday.value) if (weekday.value or "").strip() else -1,
+                days,
                 (start.value or "").strip(),
                 mins,
                 int(type_dd.value),
@@ -1132,7 +1201,7 @@ class ScheduleMixin:
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 name,
-                weekday,
+                weekday_tile,
                 start,
                 type_dd,
                 ft.Row(

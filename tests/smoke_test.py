@@ -1056,6 +1056,7 @@ ok(find_button(page.controls[0], "上传 Markdown") is not None, "详情页能�
 # 手机原图自动压小：长边 1600、几百 KB，给家长看还看得清
 try:
     from PIL import Image as _Image
+    from PIL import ImageDraw as _ImageDraw
 except ImportError:
     _Image = None
 if _Image is not None:
@@ -1090,6 +1091,28 @@ if _Image is not None:
     db.set_meta("poster_brand", "拾光机器人")
     db.set_meta("poster_contact", "微信 138-0000-0000")
     ok(db.get_meta("poster_brand") == "拾光机器人", "海报署名存得住")
+    _qr_buf = _io.BytesIO()
+    _qr_image = _Image.new("RGB", (360, 360), "white")
+    _qr_draw = _ImageDraw.Draw(_qr_image)
+    for _qy in range(8):
+        for _qx in range(8):
+            if (_qx * 3 + _qy * 5) % 4 in (0, 1):
+                _qr_draw.rectangle(
+                    (18 + _qx * 40, 18 + _qy * 40, 50 + _qx * 40, 50 + _qy * 40),
+                    fill="black",
+                )
+    _qr_image.save(_qr_buf, "PNG")
+    app.tab = 5
+    app.render()
+    click(page.controls[0], "上传二维码")
+    app._on_files_picked(FakeEvent([FakeFile("联系二维码.png", _qr_buf.getvalue())]))
+    _qr_stored = db.get_meta("poster_qr")
+    ok(
+        _qr_stored.startswith("poster_qr_")
+        and (db.UPLOAD_DIR / _qr_stored).is_file(),
+        "设置里能上传并保存海报二维码",
+    )
+    app.tab = 1
     db.update_attendance(
         att_photo,
         attendance=1,
@@ -1176,6 +1199,50 @@ if _Image is not None:
     _poster_data = app._poster_data(_att, _lesson, [])
     ok(_poster_data.subject == "GPL", "海报带上了科目（背景按科目配色）")
     ok(_poster_data.student_name == "", "海报画面不出现孩子名字")
+    ok(
+        {mark.label for mark in _poster_data.point_marks if mark.earned}
+        == {"出勤", "纪律", "表现", "突出"},
+        "海报积分拆成不同类别的星星",
+    )
+    ok(
+        _poster_data.qr_code
+        and _poster_data.qr_code == (db.UPLOAD_DIR / _qr_stored).read_bytes(),
+        "海报数据带上二维码",
+    )
+
+    def _poster_photo(color):
+        buf = _io.BytesIO()
+        _Image.new("RGB", (700, 900), color).save(buf, "JPEG", quality=90)
+        return buf.getvalue()
+
+    _portrait_blob = _poster_photo((190, 225, 245))
+    _work_blob = _poster_photo((255, 178, 86))
+    _portrait_only = _poster_mod.build_poster(
+        _poster_mod.PosterData(
+            student_name="",
+            date_line="2026-10-17 10:30",
+            subject="GPL",
+            portrait_photo=_portrait_blob,
+            seed="portrait-only",
+        )
+    )
+    _with_work_and_points = _poster_mod.build_poster(
+        _poster_mod.PosterData(
+            student_name="",
+            date_line="2026-10-17 10:30",
+            subject="GPL",
+            portrait_photo=_portrait_blob,
+            work_photos=(_work_blob,),
+            points_text="本次积分 +40",
+            seed="portrait-only",
+        )
+    )
+    ok(
+        _Image.open(_io.BytesIO(_portrait_only)).height
+        == _Image.open(_io.BytesIO(_with_work_and_points)).height,
+        "作品照叠在人像右下角，不再另起一排把海报撑长",
+    )
+    ok(_portrait_only != _with_work_and_points, "作品和积分确实画进了孩子海报")
 
     # 海报背景跟着科目走：科创／图形化／无人机……不能张张一样
     _theme_keys = {
@@ -1309,8 +1376,11 @@ db.create_enrollment(bystander, py_level_t["id"], zhengke["id"], 60)
 
 app._open_template_dialog()
 dlg = top_dialog(page)
+_weekday_tile = next(c for c in walk(dlg) if isinstance(c, ft.ExpansionTile))
+ok(not _weekday_tile.expanded, "上课日平时折叠，不占大块空间")
 find_field(dlg, "课程名（自动生成，也可自己改）").value = "自检班"
-find_dropdown(dlg, "星期几（选填）").value = "5"  # 周六
+find_checkbox(dlg, "周六").value = True
+find_checkbox(dlg, "周日").value = True
 find_field(dlg, "开始时间").value = "10:30"
 find_field(dlg, "时长（分钟）").value = "90"
 find_dropdown(dlg, "课型").value = str(zhengke["id"])
@@ -1331,8 +1401,9 @@ ok(len(templates) == 1, "固定课表建好了")
 ok(
     templates[0]["start_time"] == "10:30"
     and templates[0]["student_count"] == 1
-    and templates[0]["weekday"] == 5,
-    "记下了星期几、时间和人数",
+    and templates[0]["weekday"] == 5
+    and templates[0]["weekdays"] == "5,6",
+    "记下了多个上课日、时间和人数",
 )
 ok(db.template_student_ids(templates[0]["id"]) == [sid], "记住了固定来的孩子")
 
@@ -2758,7 +2829,7 @@ ok(
     "开班内的那天，「这天的课」里有这个课程",
 )
 
-print("38. 星期几可以选填（时间不定）")
+print("38. 星期几可以多选，也可以选填（时间不定）")
 jingsai_ct = next(c for c in db.list_class_types() if c["name"] == "竞赛")
 js_level = next(l for l in db.list_levels() if db.level_full_name(l) == "GPL-竞赛-小低组")
 free_cls = db.create_template(
@@ -2789,6 +2860,36 @@ except ValueError as err:
     block_semester = "时间不定" in str(err)
 ok(block_semester, "不定时的课不能「排整学期」，会提示用「记一节课」")
 
+multi_cls = db.create_template(
+    (0, 2),
+    "19:00",
+    90,
+    jingsai_ct["id"],
+    js_level["id"],
+    name="2026-2-GPL-多日班-Cls-01",
+    year="2026",
+    term="2",
+    seq=1,
+    teacher_id=t_a,
+    start_date="2026-09-01",
+    end_date="2026-09-14",
+)
+multi = db.get_template(multi_cls)
+ok(
+    db.template_weekdays(multi) == (0, 2)
+    and db.weekday_text(multi) == "每周一、周三",
+    "课程能同时保存周一和周三",
+)
+ok(
+    db.template_dates(multi) == ["2026-09-02", "2026-09-07", "2026-09-09", "2026-09-14"],
+    "排整学期会合并两天的日期",
+)
+ok(
+    multi_cls in {t["id"] for t in db.templates_on("2026-09-07")}
+    and multi_cls in {t["id"] for t in db.templates_on("2026-09-09")},
+    "多日课程在周一周三的课表里都会出现",
+)
+
 free_lesson = db.create_lesson(
     "2026-10-06",
     "18:00",
@@ -2808,14 +2909,16 @@ app.lesson_id = None
 app.render()
 app._open_template_dialog()
 dlg = top_dialog(page)
-weekday_dd = find_dropdown(dlg, "星期几（选填）")
-ok(any(o.key == "-1" for o in weekday_dd.options), "星期几下拉里有「不指定（时间不定）」")
-weekday_dd.value = "-1"
+find_checkbox(dlg, "周六").value = False
+find_checkbox(dlg, "不指定").value = True
 find_field(dlg, "课程名（自动生成，也可自己改）").value = "2026-2-不定时界面班"
 find_dropdown(dlg, "课型").value = str(jingsai_ct["id"])
 click(dlg, "保存")
 ui_free = [t for t in db.list_templates(active_only=False) if t["name"] == "2026-2-不定时界面班"]
-ok(ui_free and ui_free[0]["weekday"] == -1, "界面上选「不指定」，存下来就是时间不定")
+ok(
+    ui_free and ui_free[0]["weekday"] == -1 and ui_free[0]["weekdays"] == "",
+    "界面上选「不指定」，存下来就是时间不定",
+)
 app.schedule_date = "2026-10-05"
 app.render()
 ok(find_text(page.controls[0], "时间不定"), "课程列表上写着「时间不定」")

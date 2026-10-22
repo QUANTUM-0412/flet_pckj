@@ -89,6 +89,7 @@ class PosterData:
     subject: str = ""
     brand: str = ""
     contact: str = ""
+    qr_code: bytes = b""
     lesson_comment: str = ""
     student_comment: str = ""
     teacher_name: str = ""
@@ -96,8 +97,30 @@ class PosterData:
     keywords: tuple[str, ...] = ()
     photos: tuple[bytes, ...] = ()
     photo_labels: tuple[str, ...] = field(default=())
+    # 孩子的海报：人像铺底，作品照片作为一张叠放卡片压在右下角。
+    portrait_photo: bytes = b""
+    work_photos: tuple[bytes, ...] = ()
+    points_text: str = ""
+    point_marks: tuple["PointMark", ...] = ()
     # 同一节课做出来的海报要一样，不同课次要不一样：这里塞课次信息当随机种子
     seed: str = ""
+
+
+@dataclass(frozen=True)
+class PointMark:
+    """海报上的一颗积分星：类别、是否拿到，以及这一项多少分。"""
+
+    label: str
+    earned: bool
+    value: float = 0
+
+
+POINT_STAR_COLORS = {
+    "出勤": (244, 174, 45),
+    "纪律": (63, 135, 226),
+    "表现": (224, 82, 157),
+    "突出": (241, 112, 44),
+}
 
 
 _font_cache: dict[tuple[bool, int], ImageFont.FreeTypeFont] = {}
@@ -213,6 +236,14 @@ def _rounded(image: Image.Image, radius: int) -> Image.Image:
     mask = mask.resize(image.size, Image.LANCZOS)
     out = Image.new("RGB", image.size, PAGE)
     out.paste(image, (0, 0), mask)
+    return out
+
+
+def _fit_on_white(image: Image.Image, width: int, height: int) -> Image.Image:
+    """完整放进框里，不裁切；二维码尤其不能为了铺满而切掉边角。"""
+    fitted = ImageOps.contain(image, (width, height), Image.LANCZOS)
+    out = Image.new("RGB", (width, height), PAGE)
+    out.paste(fitted, ((width - fitted.width) // 2, (height - fitted.height) // 2))
     return out
 
 
@@ -787,6 +818,68 @@ def _photo_layout(count: int) -> tuple[int, int, list[tuple[int, int, int, int]]
     return box, box, boxes
 
 
+def _draw_work_overlay(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    works: list[Image.Image],
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    theme: Theme,
+) -> int:
+    """把作品照片叠在人像右下角；多张时像一叠相片，不平铺成并排图。"""
+    if not works:
+        return y
+    count = min(3, len(works))
+    # 后面露出的纸边体现还有别的作品，同时不让照片铺满整张人像。
+    for offset in range(count - 1, 0, -1):
+        back = (
+            x + offset * 12,
+            y + offset * 12,
+            x + width + offset * 12,
+            y + height + offset * 12,
+        )
+        draw.rounded_rectangle(
+            back,
+            radius=22,
+            fill=_lighten(theme.accent, 0.72),
+            outline=(255, 255, 255),
+            width=4,
+        )
+    draw.rounded_rectangle(
+        (x + 5, y + 8, x + width + 5, y + height + 8),
+        radius=22,
+        fill=(18, 26, 35, 85),
+    )
+    draw.rounded_rectangle(
+        (x, y, x + width, y + height),
+        radius=22,
+        fill=(255, 255, 255),
+        outline=(255, 255, 255),
+        width=3,
+    )
+    label_font = _font(True, 28)
+    caption = "作品" if len(works) == 1 else f"作品 · {len(works)} 张"
+    draw.text((x + 22, y + 15), caption, font=label_font, fill=theme.accent_dark)
+    image_box = (x + 16, y + 58, width - 32, height - 76)
+    extras = works[1:]
+    if extras:
+        thumb_h = min(72, max(44, (image_box[3] - 150) // len(extras) - 6))
+        main_h = image_box[3] - len(extras) * (thumb_h + 6)
+    else:
+        thumb_h = 0
+        main_h = image_box[3]
+    image = _cover(works[0], image_box[2], main_h)
+    canvas.paste(_rounded(image, 16), (image_box[0], image_box[1]))
+    thumb_y = image_box[1] + main_h + 6
+    for item in extras:
+        thumb = _cover(item, image_box[2] - 24, thumb_h)
+        canvas.paste(_rounded(thumb, 12), (image_box[0] + 12, thumb_y))
+        thumb_y += thumb_h + 6
+    return max(y + height + (count - 1) * 12, y)
+
+
 def _tag_colors(tag: str, theme: Theme) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """小标签按内容配色，比一水儿蓝的活泼些。"""
     if tag.startswith("出勤"):
@@ -808,6 +901,77 @@ def _tag_colors(tag: str, theme: Theme) -> tuple[tuple[int, int, int], tuple[int
     if tag.startswith("时长"):
         return (241, 243, 245), (74, 85, 97)
     return theme.soft, theme.accent_dark
+
+
+def _draw_star(
+    draw: ImageDraw.ImageDraw,
+    cx: float,
+    cy: float,
+    radius: float,
+    color: tuple[int, int, int],
+) -> None:
+    """画一颗实心五角星；外圈留一点白边，压在人像上也清楚。"""
+    points = []
+    for index in range(10):
+        angle = -math.pi / 2 + index * math.pi / 5
+        length = radius if index % 2 == 0 else radius * 0.44
+        points.append(
+            (
+                cx + math.cos(angle) * length,
+                cy + math.sin(angle) * length,
+            )
+        )
+    draw.polygon(points, fill=color, outline=(255, 255, 255))
+
+
+def _draw_points_stars(
+    draw: ImageDraw.ImageDraw,
+    marks: list[PointMark],
+    total_text: str,
+    right: int,
+    y: int,
+    theme: Theme,
+) -> None:
+    """把积分画成一行彩色星星，右侧或左侧不再堆一大排文字标签。"""
+    total_font = _font(True, 27)
+    label_font = _font(True, 23)
+    pad_x = 22
+    gap = 23
+    total_w = int(draw.textlength(total_text, font=total_font))
+    items = [
+        (mark, POINT_STAR_COLORS.get(mark.label, theme.accent))
+        for mark in marks
+        if mark.earned
+    ]
+    label_widths = [
+        int(draw.textlength(mark.label, font=label_font)) for mark, _color in items
+    ]
+    card_w = (
+        pad_x * 2
+        + total_w
+        + gap
+        + sum(26 + width + gap for width in label_widths)
+    )
+    x = right - card_w
+    card_h = 78
+    draw.rounded_rectangle(
+        (x + 4, y + 7, x + card_w + 4, y + card_h + 7),
+        radius=30,
+        fill=(21, 30, 42, 62),
+    )
+    draw.rounded_rectangle(
+        (x, y, x + card_w, y + card_h),
+        radius=30,
+        fill=(255, 255, 255, 244),
+        outline=(255, 255, 255),
+        width=2,
+    )
+    draw.text((x + pad_x, y + 20), total_text, font=total_font, fill=theme.accent_dark)
+    cursor = x + pad_x + total_w + gap
+    for (mark, color), label_w in zip(items, label_widths):
+        _draw_star(draw, cursor + 11, y + 39, 13, color)
+        draw.text((cursor + 27, y + 26), mark.label, font=label_font, fill=INK)
+        cursor += 26 + label_w + gap
 
 
 def build_poster(data: PosterData) -> bytes:
@@ -882,7 +1046,60 @@ def build_poster(data: PosterData) -> bytes:
 
     # —— 照片
     photos = [p for p in (_decode_photo(raw) for raw in data.photos) if p is not None][:4]
-    if photos:
+    portrait = _decode_photo(data.portrait_photo) if data.portrait_photo else None
+    works = [
+        image
+        for image in (_decode_photo(raw) for raw in data.work_photos)
+        if image is not None
+    ][:3]
+    earned_marks = [mark for mark in data.point_marks if mark.earned]
+    if portrait:
+        hero_h = 680
+        canvas.paste(
+            _rounded(_cover(portrait, inner, hero_h), PHOTO_RADIUS),
+            (margin, y),
+        )
+        if earned_marks:
+            total = sum(mark.value for mark in earned_marks)
+            total_text = f"本次 +{math.floor(total) if total == int(total) else total:g}"
+            _draw_points_stars(
+                draw,
+                earned_marks,
+                total_text,
+                WIDTH - margin - 22,
+                y + 22,
+                theme,
+            )
+        elif data.points_text:
+            points_font = _font(True, 34)
+            label = data.points_text
+            label_w = int(draw.textlength(label, font=points_font)) + 42
+            draw.rounded_rectangle(
+                (WIDTH - margin - label_w - 22, y + 22, WIDTH - margin - 22, y + 82),
+                radius=30,
+                fill=theme.accent,
+                outline=(255, 255, 255),
+                width=3,
+            )
+            draw.text(
+                (WIDTH - margin - label_w - 1, y + 32),
+                label,
+                font=points_font,
+                fill=(255, 255, 255),
+            )
+        if works:
+            _draw_work_overlay(
+                canvas,
+                draw,
+                works,
+                WIDTH - margin - 430,
+                y + 300,
+                430,
+                350,
+                theme,
+            )
+        y += hero_h + 40
+    elif photos:
         _, _, boxes = _photo_layout(len(photos))
         for image, (bx, by, bw, bh) in zip(photos, boxes):
             canvas.paste(_rounded(_cover(image, bw, bh), PHOTO_RADIUS), (bx, y + by))
@@ -924,6 +1141,8 @@ def build_poster(data: PosterData) -> bytes:
     # —— 小标签：本次积分、本月出勤、下次课，加上从课评里认出的知识点
     chips: list[tuple[str, tuple[int, int, int], tuple[int, int, int], tuple[int, int, int] | None]] = []
     for tag in data.tags:
+        if portrait and earned_marks and tag.startswith(("本次积分", "突出发挥")):
+            continue  # 已经做成彩色星星压在人像上，不再重复占一行
         fill, ink = _tag_colors(tag, theme)
         chips.append((tag, fill, ink, None))
     for word in data.keywords:
@@ -949,7 +1168,7 @@ def build_poster(data: PosterData) -> bytes:
             cx += tag_width + 16
         y = cy + 58 + 30
 
-    # —— 页脚
+    # —— 页脚：老师／联系方式在左，二维码在右
     footer_bits = [
         bit
         for bit in (
@@ -958,10 +1177,41 @@ def build_poster(data: PosterData) -> bytes:
         )
         if bit
     ]
+    qr_image = _decode_photo(data.qr_code) if data.qr_code else None
+    footer_end = y + 6
+    footer_width = inner - (246 if qr_image else 0)
     if footer_bits:
         footer_font = _font(False, 30)
-        draw.text((margin, y + 6), " · ".join(footer_bits), font=footer_font, fill=GREY)
-        y += 50
+        footer_end = _draw_paragraph(
+            draw,
+            " · ".join(footer_bits),
+            footer_font,
+            GREY,
+            margin,
+            y + 6,
+            footer_width,
+        )
+    if qr_image:
+        card_size = 206
+        card_x = WIDTH - margin - card_size
+        draw.rounded_rectangle(
+            (card_x + 4, y + 10, card_x + card_size + 4, y + card_size + 10),
+            radius=18,
+            fill=(225, 232, 239),
+        )
+        draw.rounded_rectangle(
+            (card_x, y, card_x + card_size, y + card_size),
+            radius=18,
+            fill=PAGE,
+            outline=LINE,
+            width=2,
+        )
+        qr = _fit_on_white(qr_image, 160, 160)
+        canvas.paste(qr, (card_x + 23, y + 14))
+        qr_font = _font(False, 24)
+        draw.text((card_x + 59, y + 172), "扫码联系", font=qr_font, fill=theme.accent_dark)
+        footer_end = max(footer_end, y + card_size + 14)
+    y = footer_end + 8
 
     used = max(600, min(height_guess, y + margin))
     page = Image.new("RGBA", (WIDTH, used), PAGE + (255,))

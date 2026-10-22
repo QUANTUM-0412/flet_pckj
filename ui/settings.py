@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
+
 import flet as ft
+from PIL import Image, ImageOps
 
 import db
-from .common import DIALOG_WIDTH, _dd, _opts, _teacher_opts, _tf
+from .common import DIALOG_WIDTH, _dd, _opts, _stored_name, _teacher_opts, _tf
 
 
 class SettingsMixin:
@@ -38,7 +42,7 @@ class SettingsMixin:
         )
 
     def _poster_card(self) -> ft.Container:
-        """发给家长的海报上印什么：机构名 + 联系方式。"""
+        """发给家长的海报上印什么：机构名 + 联系方式 + 二维码。"""
         brand = ft.TextField(
             label="机构名（海报上角）",
             value=db.get_meta("poster_brand"),
@@ -53,24 +57,133 @@ class SettingsMixin:
             dense=True,
             hint_text="例如：微信/电话 138-0000-0000",
         )
+        qr_name = (db.get_meta("poster_qr") or "").strip()
+        qr_path = db.UPLOAD_DIR / Path(qr_name).name if qr_name else None
+        if qr_path is not None and not qr_path.is_file():
+            qr_path = None
 
         def save(e) -> None:
             db.set_meta("poster_brand", (brand.value or "").strip())
             db.set_meta("poster_contact", (contact.value or "").strip())
             self._toast("海报署名存好了")
 
+        def save_qr(files: list) -> None:
+            source = next(
+                (
+                    item
+                    for item in files
+                    if getattr(item, "bytes", None)
+                    and (getattr(item, "name", "") or "").lower().endswith(
+                        (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+                    )
+                ),
+                None,
+            )
+            if source is None:
+                self._toast("请选一张二维码图片")
+                return
+            try:
+                image = Image.open(io.BytesIO(bytes(source.bytes)))
+                image.load()
+                image = ImageOps.exif_transpose(image)
+                if image.mode not in ("RGB", "RGBA"):
+                    image = image.convert("RGB")
+                image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+                out = io.BytesIO()
+                image.save(out, "PNG", optimize=True)
+            except Exception:
+                self._toast("这张图片读不出来，换一张 PNG 或 JPG 二维码")
+                return
+            stored = _stored_name(
+                getattr(source, "name", "") or "poster-qr.png",
+                suffix=".png",
+                prefix="poster_qr",
+            )
+            target = db.UPLOAD_DIR / stored
+            try:
+                target.write_bytes(out.getvalue())
+            except OSError:
+                self._toast("二维码存不下来，检查 data 文件夹权限")
+                return
+            old_name = (db.get_meta("poster_qr") or "").strip()
+            db.set_meta("poster_qr", stored)
+            if old_name and Path(old_name).name != stored:
+                try:
+                    (db.UPLOAD_DIR / Path(old_name).name).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.render()
+            self._toast("海报二维码换好了")
+
+        def choose_qr(e) -> None:
+            self._files_callback = save_qr
+
+        def remove_qr(e) -> None:
+            old_name = (db.get_meta("poster_qr") or "").strip()
+            if old_name:
+                try:
+                    (db.UPLOAD_DIR / Path(old_name).name).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            db.set_meta("poster_qr", "")
+            self.render()
+            self._toast("海报二维码已移除")
+
+        qr_controls: list[ft.Control] = []
+        if qr_path is not None:
+            qr_controls.extend(
+                [
+                    ft.Container(
+                        content=ft.Image(
+                            src=f"/{qr_path.name}",
+                            width=150,
+                            height=150,
+                            fit=ft.BoxFit.CONTAIN,
+                        ),
+                        padding=8,
+                        border_radius=12,
+                        bgcolor=ft.Colors.WHITE,
+                        border=ft.Border.all(1, ft.Colors.GREY_300),
+                    ),
+                    ft.TextButton(
+                        "移除二维码",
+                        icon=ft.Icons.DELETE_OUTLINE,
+                        on_click=remove_qr,
+                    ),
+                ]
+            )
+        qr_uploader = ft.Button(
+            "更换二维码" if qr_path is not None else "上传二维码",
+            icon=ft.Icons.QR_CODE_2,
+            on_click=choose_qr,
+            action=ft.PickFiles(
+                self.picker,
+                allow_multiple=False,
+                with_data=True,
+                compression_quality=0,
+                file_type=ft.FilePickerFileType.IMAGE,
+            ),
+        )
+
         return self._section(
             "海报署名",
             ft.Column(
                 [
                     ft.Text(
-                        "给家长的课堂海报（课次详情里每个孩子「做海报」）会印上这两行；"
-                        "不填就只有孩子的名字。",
+                        "给家长的课堂海报会印上机构名、联系方式，并把二维码放在页脚；"
+                        "二维码可不上传。",
                         size=12,
                         color=ft.Colors.GREY_600,
                     ),
                     brand,
                     contact,
+                    ft.Text(
+                        "联系二维码（建议用清晰的方形 PNG，海报里保留完整二维码区）",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    *qr_controls,
+                    qr_uploader,
                     ft.Row([ft.Button("保存", icon=ft.Icons.SAVE, on_click=save)]),
                 ],
                 spacing=10,
