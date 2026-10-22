@@ -744,8 +744,7 @@ class FilesMixin:
                             fit=ft.BoxFit.CONTAIN,
                         ),
                         ft.Text(
-                            "手机上长按图片就能存进相册；电脑上点「下载图片」，"
-                            "会保存到浏览器下载目录或弹出保存位置。",
+                            "手机上可长按图片保存；电脑上可用「在新窗口打开」后保存。",
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),
@@ -756,13 +755,6 @@ class FilesMixin:
                 width=width,
             ),
             actions=[
-                ft.TextButton(
-                    "下载图片",
-                    icon=ft.Icons.DOWNLOAD,
-                    on_click=lambda e: self.page.run_task(
-                        self._save_poster_to_desktop, path
-                    ),
-                ),
                 ft.TextButton(
                     "在新窗口打开",
                     icon=ft.Icons.OPEN_IN_NEW,
@@ -1069,39 +1061,3 @@ class FilesMixin:
 
     async def _open_url(self, url: str) -> None:
         await self.launcher.launch_url(url, web_only_window_name="_blank")
-
-    async def _save_poster_to_desktop(self, path: Path) -> None:
-        """网页里触发浏览器下载；原生桌面里弹出系统保存位置。"""
-        try:
-            data = path.read_bytes()
-        except OSError:
-            self._toast(f"海报文件找不到了：{path.name}")
-            return
-        desktop = Path.home() / "Desktop"
-        try:
-            await self.picker.save_file(
-                dialog_title="保存海报",
-                file_name=path.name,
-                initial_directory=str(desktop) if desktop.is_dir() else None,
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["jpg", "jpeg"],
-                src_bytes=data,
-            )
-            self._toast(
-                "已经开始下载，请到浏览器下载目录查看"
-                if getattr(self.page, "web", False)
-                else "海报已保存"
-            )
-            return
-        except Exception:
-            pass
-        # 极端情况下文件选择服务不可用，仍尝试放进桌面或下载目录。
-        downloads = Path.home() / "Downloads"
-        target_dir = desktop if desktop.is_dir() else downloads
-        target = target_dir / path.name
-        try:
-            shutil.copyfile(path, target)
-        except OSError:
-            self._toast(f"自动保存失败，海报文件在：{path}")
-            return
-        self._toast(f"已复制到：{target}")

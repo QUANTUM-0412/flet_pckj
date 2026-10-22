@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import pathlib
 import sqlite3
@@ -1203,27 +1202,19 @@ if _Image is not None:
         None,
     )
     ok(_poster_img is not None, "海报弹窗里显示这张图")
+    ok(
+        not any(
+            isinstance(c, (ft.Button, ft.TextButton)) and c.content == "下载图片"
+            for c in walk(_dlg)
+        ),
+        "海报弹窗不再显示无法使用的下载按钮",
+    )
     _poster_files = sorted((db.UPLOAD_DIR / "posters").glob("poster_s*.jpg"))
     ok(len(_poster_files) == 1, "海报存到 data/files/posters 里")
     _poster = _Image.open(_poster_files[0])
     ok(_poster.width == 1080 and _poster.height > 900, "海报是 1080 宽的长图")
     ok(_poster_files[0].stat().st_size > 30 * 1024, "海报画质够看（不是几十 KB 的糊图）")
 
-    class _SavePicker:
-        async def save_file(self, **kwargs):
-            self.kwargs = kwargs
-            return kwargs["file_name"]
-
-    _old_picker = app.picker
-    _save_picker = _SavePicker()
-    app.picker = _save_picker
-    asyncio.run(app._save_poster_to_desktop(_poster_files[0]))
-    app.picker = _old_picker
-    ok(
-        _save_picker.kwargs["src_bytes"] == _poster_files[0].read_bytes()
-        and _save_picker.kwargs["file_name"] == _poster_files[0].name,
-        "下载海报会把完整图片交给浏览器下载或系统保存框",
-    )
     _att = db.get_attendance(att_photo)
     _lesson = db.get_lesson(lesson_file)
     _poster_data = app._poster_data(_att, _lesson, [])
@@ -1284,9 +1275,9 @@ if _Image is not None:
         )
     )
     ok(
-        _Image.open(_io.BytesIO(_portrait_only)).height
-        == _Image.open(_io.BytesIO(_with_work_and_points)).height,
-        "作品照叠在人像右下角，不再另起一排把海报撑长",
+        _Image.open(_io.BytesIO(_portrait_only)).width
+        == _Image.open(_io.BytesIO(_with_work_and_points)).width,
+        "作品照放在海报左下角，海报仍是 1080 宽长图",
     )
     ok(_portrait_only != _with_work_and_points, "作品和积分确实画进了孩子海报")
 

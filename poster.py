@@ -971,6 +971,7 @@ def build_poster(data: PosterData) -> bytes:
     meta_font = _font(False, 34)
     brand_font = _font(True, 44)
     logo_image = _decode_photo(data.logo) if data.logo else None
+    qr_image = _decode_photo(data.qr_code) if data.qr_code else None
     brand_row_h = 64 if logo_image else 58
 
     meta_line = " · ".join(x for x in (data.date_line, data.class_line) if x)
@@ -1024,7 +1025,43 @@ def build_poster(data: PosterData) -> bytes:
         # 白底要够实：花纹（齿轮、无人机的桨）从底下透出来会显得脏
         bdraw.rounded_rectangle((0, 0, badge_w - 1, 61), radius=31, fill=(255, 255, 255, 242))
         bdraw.text((24, 11), subject, font=badge_font, fill=theme.accent_dark + (255,))
-        canvas.alpha_composite(badge, (WIDTH - margin - badge_w, header_top + header_pad - 8))
+        badge_y = (
+            header_top + 190
+            if qr_image is not None
+            else header_top + header_pad - 8
+        )
+        canvas.alpha_composite(badge, (WIDTH - margin - badge_w, badge_y))
+
+    # —— 联系二维码固定在右上角，和主照片、页脚内容互不遮挡
+    if qr_image is not None:
+        qr_card = 152
+        qr_x = WIDTH - margin - qr_card
+        qr_y = header_top + 20
+        draw.rounded_rectangle(
+            (qr_x + 4, qr_y + 7, qr_x + qr_card + 4, qr_y + qr_card + 7),
+            radius=18,
+            fill=(18, 35, 54, 70),
+        )
+        draw.rounded_rectangle(
+            (qr_x, qr_y, qr_x + qr_card, qr_y + qr_card),
+            radius=18,
+            fill=(255, 255, 255, 246),
+            outline=(255, 255, 255),
+            width=2,
+        )
+        qr = _fit_on_white(qr_image, 106, 106)
+        canvas.paste(qr, (qr_x + 23, qr_y + 7))
+        qr_font = _font(False, 16)
+        qr_label = (data.brand or "扫码联系").strip()
+        qr_lines = _wrap(qr_label, qr_font, qr_card - 16)[:2]
+        for line_index, line in enumerate(qr_lines):
+            line_w = int(draw.textlength(line, font=qr_font))
+            draw.text(
+                (qr_x + (qr_card - line_w) / 2, qr_y + 116 + line_index * 19),
+                line,
+                font=qr_font,
+                fill=theme.accent_dark,
+            )
 
     y = header_top + header_height + 40
 
@@ -1070,16 +1107,6 @@ def build_poster(data: PosterData) -> bytes:
                 label,
                 font=points_font,
                 fill=(255, 255, 255),
-            )
-        if works:
-            _draw_work_overlay(
-                canvas,
-                draw,
-                works,
-                margin + 24,
-                y + hero_h - 274,
-                310,
-                250,
             )
         y += hero_h + 40
     elif photos:
@@ -1151,7 +1178,7 @@ def build_poster(data: PosterData) -> bytes:
             cx += tag_width + 16
         y = cy + 58 + 30
 
-    # —— 页脚：老师／联系方式在上，二维码居中放在最底部，避开右下花纹
+    # —— 页脚左侧放作品，老师／联系方式放在它右边
     footer_bits = [
         bit
         for bit in (
@@ -1160,9 +1187,33 @@ def build_poster(data: PosterData) -> bytes:
         )
         if bit
     ]
-    qr_image = _decode_photo(data.qr_code) if data.qr_code else None
     footer_end = y + 6
-    if footer_bits:
+    if works:
+        work_y = y + 10
+        _draw_work_overlay(
+            canvas,
+            draw,
+            works,
+            margin,
+            work_y,
+            310,
+            250,
+        )
+        footer_end = max(footer_end, work_y + 250)
+        if footer_bits:
+            footer_font = _font(False, 30)
+            footer_x = margin + 350
+            footer_width = WIDTH - margin - footer_x
+            _draw_paragraph(
+                draw,
+                " · ".join(footer_bits),
+                footer_font,
+                GREY,
+                footer_x,
+                work_y + 54,
+                footer_width,
+            )
+    elif footer_bits:
         footer_font = _font(False, 30)
         footer_lines = _wrap(" · ".join(footer_bits), footer_font, inner)
         footer_y = y + 6
@@ -1176,32 +1227,6 @@ def build_poster(data: PosterData) -> bytes:
             )
             footer_y += int(footer_font.size * 1.52)
         footer_end = footer_y
-    if qr_image:
-        card_size = 206
-        card_y = footer_end + 16
-        card_x = (WIDTH - card_size) // 2
-        draw.rounded_rectangle(
-            (card_x + 4, card_y + 7, card_x + card_size + 4, card_y + card_size + 7),
-            radius=18,
-            fill=(225, 232, 239),
-        )
-        draw.rounded_rectangle(
-            (card_x, card_y, card_x + card_size, card_y + card_size),
-            radius=18,
-            fill=PAGE,
-            outline=LINE,
-            width=2,
-        )
-        qr = _fit_on_white(qr_image, 160, 160)
-        canvas.paste(qr, (card_x + 23, card_y + 14))
-        qr_font = _font(False, 24)
-        draw.text(
-            (card_x + 59, card_y + 172),
-            "扫码联系",
-            font=qr_font,
-            fill=theme.accent_dark,
-        )
-        footer_end = card_y + card_size + 14
     y = footer_end + 8
 
     used = max(600, min(height_guess, y + margin))
