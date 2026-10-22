@@ -553,7 +553,7 @@ class FilesMixin:
         photos: list[dict],
         main_photo_id: int | None = None,
     ) -> tuple[bytes, tuple[bytes, ...]]:
-        """按老师选的主照片拆成「主图」和叠在右下角的作品照片。"""
+        """按老师选的主照片拆成「主图」和叠在左下角的作品照片。"""
         selected = photos[:4]
         loaded: list[tuple[dict, bytes]] = []
         for row in selected:
@@ -744,7 +744,8 @@ class FilesMixin:
                             fit=ft.BoxFit.CONTAIN,
                         ),
                         ft.Text(
-                            "手机上长按图片就能存进相册、发给家长；电脑上按「存到桌面」再发。",
+                            "手机上长按图片就能存进相册；电脑上点「下载图片」，"
+                            "会保存到浏览器下载目录或弹出保存位置。",
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),
@@ -756,9 +757,11 @@ class FilesMixin:
             ),
             actions=[
                 ft.TextButton(
-                    "存到桌面",
-                    icon=ft.Icons.SAVE_ALT,
-                    on_click=lambda e: self._save_poster_to_desktop(path),
+                    "下载图片",
+                    icon=ft.Icons.DOWNLOAD,
+                    on_click=lambda e: self.page.run_task(
+                        self._save_poster_to_desktop, path
+                    ),
                 ),
                 ft.TextButton(
                     "在新窗口打开",
@@ -1038,7 +1041,7 @@ class FilesMixin:
                     [
                         ft.Text(
                             "最多选 4 张；一张都不选也可以，海报会只用课评。"
-                            "主照片会铺满大图，其他照片作为作品叠在右下角。",
+                            "主照片会铺满大图，其他照片作为作品叠在左下角。",
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),
@@ -1067,20 +1070,38 @@ class FilesMixin:
     async def _open_url(self, url: str) -> None:
         await self.launcher.launch_url(url, web_only_window_name="_blank")
 
-    def _save_poster_to_desktop(self, path: Path) -> None:
-        """把海报复制一份到桌面，方便直接拖进微信。
-
-        Linux / WSL 上一般没有「桌面」这个文件夹（服务器就更没有了），
-        就退回 data/files/posters，提示语也跟着说清楚存哪儿了。
-        """
+    async def _save_poster_to_desktop(self, path: Path) -> None:
+        """网页里触发浏览器下载；原生桌面里弹出系统保存位置。"""
+        try:
+            data = path.read_bytes()
+        except OSError:
+            self._toast(f"海报文件找不到了：{path.name}")
+            return
         desktop = Path.home() / "Desktop"
-        target_dir, where = (
-            (desktop, "桌面") if desktop.is_dir() else (db.UPLOAD_DIR / "posters", "海报文件夹")
-        )
+        try:
+            await self.picker.save_file(
+                dialog_title="保存海报",
+                file_name=path.name,
+                initial_directory=str(desktop) if desktop.is_dir() else None,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["jpg", "jpeg"],
+                src_bytes=data,
+            )
+            self._toast(
+                "已经开始下载，请到浏览器下载目录查看"
+                if getattr(self.page, "web", False)
+                else "海报已保存"
+            )
+            return
+        except Exception:
+            pass
+        # 极端情况下文件选择服务不可用，仍尝试放进桌面或下载目录。
+        downloads = Path.home() / "Downloads"
+        target_dir = desktop if desktop.is_dir() else downloads
         target = target_dir / path.name
         try:
             shutil.copyfile(path, target)
         except OSError:
-            self._toast(f"复制不过去，海报在这里：{path}")
+            self._toast(f"自动保存失败，海报文件在：{path}")
             return
-        self._toast(f"存到{where}了：{target.name}")
+        self._toast(f"已复制到：{target}")

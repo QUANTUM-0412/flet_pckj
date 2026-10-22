@@ -827,58 +827,34 @@ def _draw_work_overlay(
     y: int,
     width: int,
     height: int,
-    theme: Theme,
 ) -> int:
-    """把作品照片叠在人像右下角；多张时像一叠相片，不平铺成并排图。"""
+    """把作品照片缩成无白边的相片叠在主照片左下角。"""
     if not works:
         return y
     count = min(3, len(works))
-    # 后面露出的纸边体现还有别的作品，同时不让照片铺满整张人像。
-    for offset in range(count - 1, 0, -1):
-        back = (
-            x + offset * 12,
-            y + offset * 12,
-            x + width + offset * 12,
-            y + height + offset * 12,
-        )
-        draw.rounded_rectangle(
-            back,
-            radius=22,
-            fill=_lighten(theme.accent, 0.72),
-            outline=(255, 255, 255),
-            width=4,
-        )
-    draw.rounded_rectangle(
-        (x + 5, y + 8, x + width + 5, y + height + 8),
-        radius=22,
-        fill=(18, 26, 35, 85),
-    )
-    draw.rounded_rectangle(
-        (x, y, x + width, y + height),
-        radius=22,
-        fill=(255, 255, 255),
-        outline=(255, 255, 255),
-        width=3,
-    )
-    label_font = _font(True, 28)
+    # 多张作品只露出一小段相片边，主图本身不留白色相框。
+    for offset in range(count - 1, -1, -1):
+        card_x = x + offset * 11
+        card_y = y - offset * 10
+        image = _cover(works[offset], width, height)
+        if offset == 0:
+            draw.rounded_rectangle(
+                (card_x + 4, card_y + 7, card_x + width + 4, card_y + height + 7),
+                radius=20,
+                fill=(18, 26, 35, 72),
+            )
+        canvas.paste(_rounded(image, 20), (card_x, card_y))
+    # 只给“作品”放一小块半透明标签，不再用整张白色卡片衬底。
+    label_font = _font(True, 24)
     caption = "作品" if len(works) == 1 else f"作品 · {len(works)} 张"
-    draw.text((x + 22, y + 15), caption, font=label_font, fill=theme.accent_dark)
-    image_box = (x + 16, y + 58, width - 32, height - 76)
-    extras = works[1:]
-    if extras:
-        thumb_h = min(72, max(44, (image_box[3] - 150) // len(extras) - 6))
-        main_h = image_box[3] - len(extras) * (thumb_h + 6)
-    else:
-        thumb_h = 0
-        main_h = image_box[3]
-    image = _cover(works[0], image_box[2], main_h)
-    canvas.paste(_rounded(image, 16), (image_box[0], image_box[1]))
-    thumb_y = image_box[1] + main_h + 6
-    for item in extras:
-        thumb = _cover(item, image_box[2] - 24, thumb_h)
-        canvas.paste(_rounded(thumb, 12), (image_box[0] + 12, thumb_y))
-        thumb_y += thumb_h + 6
-    return max(y + height + (count - 1) * 12, y)
+    label_w = int(draw.textlength(caption, font=label_font)) + 30
+    draw.rounded_rectangle(
+        (x + 13, y + 13, x + 13 + label_w, y + 51),
+        radius=19,
+        fill=(18, 28, 40, 190),
+    )
+    draw.text((x + 28, y + 20), caption, font=label_font, fill=(255, 255, 255))
+    return max(y + height + 8, y)
 
 
 def _tag_colors(tag: str, theme: Theme) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -1100,11 +1076,10 @@ def build_poster(data: PosterData) -> bytes:
                 canvas,
                 draw,
                 works,
-                WIDTH - margin - 430,
-                y + 300,
-                430,
-                350,
-                theme,
+                margin + 24,
+                y + hero_h - 274,
+                310,
+                250,
             )
         y += hero_h + 40
     elif photos:
