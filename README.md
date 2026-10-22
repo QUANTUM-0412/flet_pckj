@@ -40,6 +40,9 @@ uv run flet run --web main.py
 - **Ubuntu Server / Linux**：`./start.sh`，第一次会自己 `uv sync`；
   做成开机自启的常驻服务：`sudo ./scripts/install-service.sh`，
   完整步骤见 [docs/UbuntuServer-deploy.md](docs/UbuntuServer-deploy.md)
+- **从 Windows WSL 迁到树莓派**：按
+  [docs/RaspberryPi-from-WSL.md](docs/RaspberryPi-from-WSL.md) 先备份数据，
+  再在树莓派上装代码、导入 `data/`，最后配置开机自启
 - **Windows（WSL）后台静默跑**：`./scripts/wsl-silent-start.sh`，
   不弹窗口、开机自动起：见 [docs/WSL-silent-run.md](docs/WSL-silent-run.md)
 
