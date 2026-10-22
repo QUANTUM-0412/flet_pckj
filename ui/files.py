@@ -539,7 +539,59 @@ class FilesMixin:
         except OSError:
             return b""
 
-    def _poster_data(self, a: dict, lesson: dict, photos: list[dict]) -> poster.PosterData:
+    def _poster_logo_bytes(self) -> bytes:
+        stored = (db.get_meta("poster_logo") or "").strip()
+        if not stored:
+            return b""
+        try:
+            return (db.UPLOAD_DIR / Path(stored).name).read_bytes()
+        except OSError:
+            return b""
+
+    def _poster_photo_parts(
+        self,
+        photos: list[dict],
+        main_photo_id: int | None = None,
+    ) -> tuple[bytes, tuple[bytes, ...]]:
+        """按老师选的主照片拆成「主图」和叠在右下角的作品照片。"""
+        selected = photos[:4]
+        loaded: list[tuple[dict, bytes]] = []
+        for row in selected:
+            try:
+                loaded.append((row, (db.UPLOAD_DIR / row["stored_name"]).read_bytes()))
+            except OSError:
+                continue
+        if not loaded:
+            return b"", ()
+        main_row = next(
+            (
+                row
+                for row, _raw in loaded
+                if main_photo_id is not None
+                and int(row.get("id") or 0) == int(main_photo_id)
+            ),
+            None,
+        )
+        if main_row is None:
+            main_row = next(
+                (
+                    row
+                    for row, _raw in loaded
+                    if row.get("owner_type") == "attendance"
+                ),
+                loaded[0][0],
+            )
+        main = next(raw for row, raw in loaded if row is main_row)
+        works = tuple(raw for row, raw in loaded if row is not main_row)
+        return main, works
+
+    def _poster_data(
+        self,
+        a: dict,
+        lesson: dict,
+        photos: list[dict],
+        main_photo_id: int | None = None,
+    ) -> poster.PosterData:
         hours, points = _attendance_calc(a, lesson)
         present = int(a.get("attendance") or 0)
         # 这一行只放「每次会变、家长又关心」的东西：
@@ -568,34 +620,9 @@ class FilesMixin:
                 f"下次课 {_date_text(upcoming['lesson_date'])} {upcoming['start_time']}"
             )
 
-        selected = photos[:4]
-        loaded: list[tuple[int, dict, bytes]] = []
-        for index, row in enumerate(selected):
-            try:
-                loaded.append(
-                    (
-                        index,
-                        row,
-                        (db.UPLOAD_DIR / row["stored_name"]).read_bytes(),
-                    )
-                )
-            except OSError:
-                continue
-        portrait_index = next(
-            (
-                index
-                for index, row in enumerate(selected)
-                if row.get("owner_type") == "attendance"
-            ),
-            0 if selected else None,
+        portrait_photo, work_photos = self._poster_photo_parts(
+            photos, main_photo_id
         )
-        portrait_photo = b""
-        work_photos: list[bytes] = []
-        for index, _row, raw in loaded:
-            if index == portrait_index:
-                portrait_photo = raw
-            else:
-                work_photos.append(raw)
 
         class_bits = [
             db.lesson_class_label(lesson),
@@ -625,6 +652,7 @@ class FilesMixin:
             class_line=" · ".join(x for x in class_bits if x),
             subject=lesson.get("subject") or "",
             brand=db.get_meta("poster_brand"),
+            logo=self._poster_logo_bytes(),
             contact=db.get_meta("poster_contact"),
             qr_code=self._poster_qr_bytes(),
             lesson_comment=lesson.get("comment") or "",
@@ -665,9 +693,15 @@ class FilesMixin:
             seed=seed,
         )
 
-    def _make_poster(self, a: dict, lesson: dict, photos: list[dict]) -> Path:
+    def _make_poster(
+        self,
+        a: dict,
+        lesson: dict,
+        photos: list[dict],
+        main_photo_id: int | None = None,
+    ) -> Path:
         """做一张这个孩子的课堂海报，存到 data/files/posters 下面。"""
-        data = self._poster_data(a, lesson, photos)
+        data = self._poster_data(a, lesson, photos, main_photo_id)
         blob = poster.build_poster(data)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = (
@@ -678,9 +712,15 @@ class FilesMixin:
         path.write_bytes(blob)
         return path
 
-    def _open_poster(self, a: dict, lesson: dict, photos: list[dict]) -> None:
+    def _open_poster(
+        self,
+        a: dict,
+        lesson: dict,
+        photos: list[dict],
+        main_photo_id: int | None = None,
+    ) -> None:
         try:
-            path = self._make_poster(a, lesson, photos)
+            path = self._make_poster(a, lesson, photos, main_photo_id)
         except poster.PosterError as err:
             self._toast(str(err))
             return
@@ -746,21 +786,26 @@ class FilesMixin:
         if len(photos) > 1:
             self._choose_poster_photos(
                 photos,
-                lambda chosen: self._open_poster(a, lesson, chosen),
+                lambda chosen, main_id: self._open_poster(
+                    a, lesson, chosen, main_id
+                ),
             )
             return
-        self._open_poster(a, lesson, photos)
+        self._open_poster(
+            a, lesson, photos, int(photos[0]["id"]) if photos else None
+        )
 
     def _class_poster_data(
-        self, template: dict, lesson: dict, photos: list[dict]
+        self,
+        template: dict,
+        lesson: dict,
+        photos: list[dict],
+        main_photo_id: int | None = None,
     ) -> poster.PosterData:
         """班级海报：整班共用课评和课堂照片，不带某个孩子的点评."""
-        raw_photos = []
-        for row in photos[:4]:
-            try:
-                raw_photos.append((db.UPLOAD_DIR / row["stored_name"]).read_bytes())
-            except OSError:
-                continue
+        portrait_photo, work_photos = self._poster_photo_parts(
+            photos, main_photo_id
+        )
 
         class_name = db.class_label(template)
         if re.search(r"-Cls-\d+$", class_name or ""):
@@ -791,6 +836,7 @@ class FilesMixin:
             class_line=" · ".join(x for x in class_bits if x),
             subject=lesson.get("subject") or template.get("subject") or "",
             brand=db.get_meta("poster_brand"),
+            logo=self._poster_logo_bytes(),
             contact=db.get_meta("poster_contact"),
             qr_code=self._poster_qr_bytes(),
             lesson_comment=lesson.get("comment") or "",
@@ -799,14 +845,21 @@ class FilesMixin:
                 lesson.get("teacher_name") or template.get("teacher_name") or ""
             ),
             keywords=tuple(keywords.extract_keywords(lesson.get("comment") or "")),
-            photos=tuple(raw_photos),
+            portrait_photo=portrait_photo,
+            work_photos=work_photos,
             seed=seed,
         )
 
     def _make_class_poster(
-        self, template: dict, lesson: dict, photos: list[dict]
+        self,
+        template: dict,
+        lesson: dict,
+        photos: list[dict],
+        main_photo_id: int | None = None,
     ) -> Path:
-        data = self._class_poster_data(template, lesson, photos)
+        data = self._class_poster_data(
+            template, lesson, photos, main_photo_id
+        )
         blob = poster.build_poster(data)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = (
@@ -817,10 +870,16 @@ class FilesMixin:
         return path
 
     def _open_class_poster(
-        self, template: dict, lesson: dict, photos: list[dict]
+        self,
+        template: dict,
+        lesson: dict,
+        photos: list[dict],
+        main_photo_id: int | None = None,
     ) -> None:
         try:
-            path = self._make_class_poster(template, lesson, photos)
+            path = self._make_class_poster(
+                template, lesson, photos, main_photo_id
+            )
         except poster.PosterError as err:
             self._toast(str(err))
             return
@@ -874,19 +933,30 @@ class FilesMixin:
         if len(photos) > 1:
             self._choose_poster_photos(
                 photos,
-                lambda chosen: self._open_class_poster(template, lesson, chosen),
+                lambda chosen, main_id: self._open_class_poster(
+                    template, lesson, chosen, main_id
+                ),
             )
             return
-        self._open_class_poster(template, lesson, photos)
+        self._open_class_poster(
+            template, lesson, photos, int(photos[0]["id"]) if photos else None
+        )
 
     def _choose_poster_photos(self, photos: list[dict], on_confirm) -> None:
         """照片不止一张时，先让老师挑这次海报用哪几张。"""
         picked: list[tuple[ft.Checkbox, dict]] = []
+        photo_options: list[ft.DropdownOption] = []
         cards = []
         for index, row in enumerate(photos):
             tag = "作品／课堂" if row.get("owner_type") == "lesson" else "孩子人像"
             box = ft.Checkbox(label=tag, value=index < 4)
             picked.append((box, row))
+            photo_options.append(
+                ft.DropdownOption(
+                    key=str(row["id"]),
+                    text=f"{index + 1}. {row['filename'] or '照片'}",
+                )
+            )
             cards.append(
                 ft.Column(
                     [
@@ -913,14 +983,49 @@ class FilesMixin:
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
+        main_dd = ft.Dropdown(
+            label="主照片（铺满大图）",
+            options=photo_options[:4],
+            value=str(photos[0]["id"]) if photos else None,
+            width=420,
+            dense=True,
+        )
+
+        def selected_rows() -> list[dict]:
+            return [row for box, row in picked if box.value]
+
+        def refresh_main_options(e=None) -> None:
+            rows = selected_rows()
+            main_dd.options = [
+                ft.DropdownOption(
+                    key=str(row["id"]),
+                    text=f"{next(i + 1 for i, r in enumerate(photos) if r is row)}. "
+                    f"{row['filename'] or '照片'}",
+                )
+                for row in rows
+            ]
+            ids = {str(row["id"]) for row in rows}
+            if main_dd.value not in ids:
+                main_dd.value = str(rows[0]["id"]) if rows else None
+            if e is not None:
+                main_dd.update()
+
+        for box, _row in picked:
+            box.on_change = refresh_main_options
 
         def make_poster(e) -> None:
-            selected = [row for box, row in picked if box.value]
+            selected = selected_rows()
             if len(selected) > 4:
                 self._toast("海报最多放 4 张照片，取消勾选几张再试")
                 return
+            selected_ids = {str(row["id"]) for row in selected}
+            main_id = (
+                int(main_dd.value)
+                if (main_dd.value or "") in selected_ids
+                else (int(selected[0]["id"]) if selected else None)
+            )
             self.page.pop_dialog()
-            on_confirm(selected)
+            on_confirm(selected, main_id)
 
         width = min(720, (self.page.width or 900) - 80)
         rows = max(1, (len(cards) + 3) // 4)
@@ -933,10 +1038,11 @@ class FilesMixin:
                     [
                         ft.Text(
                             "最多选 4 张；一张都不选也可以，海报会只用课评。"
-                            "做孩子海报时，人像铺底，其他照片叠在人像右下角。",
+                            "主照片会铺满大图，其他照片作为作品叠在右下角。",
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),
+                        main_dd,
                         ft.Row(
                             cards,
                             spacing=12,

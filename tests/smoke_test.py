@@ -1112,6 +1112,14 @@ if _Image is not None:
         and (db.UPLOAD_DIR / _qr_stored).is_file(),
         "设置里能上传并保存海报二维码",
     )
+    click(page.controls[0], "上传 Logo")
+    app._on_files_picked(FakeEvent([FakeFile("机构Logo.png", _qr_buf.getvalue())]))
+    _logo_stored = db.get_meta("poster_logo")
+    ok(
+        _logo_stored.startswith("poster_logo_")
+        and (db.UPLOAD_DIR / _logo_stored).is_file(),
+        "设置里能上传并保存机构 Logo",
+    )
     app.tab = 1
     db.update_attendance(
         att_photo,
@@ -1179,6 +1187,11 @@ if _Image is not None:
     ok(find_text(_choose, "选照片做海报"), "多张照片时先弹出选照片")
     _boxes = [c for c in walk(_choose) if isinstance(c, ft.Checkbox)]
     ok(len(_boxes) == 3, "三张照片都能选")
+    _main_photo_dd = find_dropdown(_choose, "主照片（铺满大图）")
+    ok(
+        len(_main_photo_dd.options) == 3 and _main_photo_dd.value,
+        "做海报前能明确指定哪张是主照片",
+    )
     for b in _boxes:
         b.value = False
     _boxes[0].value = True
@@ -1208,6 +1221,22 @@ if _Image is not None:
         _poster_data.qr_code
         and _poster_data.qr_code == (db.UPLOAD_DIR / _qr_stored).read_bytes(),
         "海报数据带上二维码",
+    )
+    ok(
+        _poster_data.logo
+        and _poster_data.logo == (db.UPLOAD_DIR / _logo_stored).read_bytes(),
+        "海报数据带上机构 Logo",
+    )
+    _all_poster_photos = db.list_files("attendance", att_photo, "照片") + class_photos
+    _chosen_main = _all_poster_photos[1]
+    _main_raw, _work_raws = app._poster_photo_parts(
+        _all_poster_photos, _chosen_main["id"]
+    )
+    ok(
+        _main_raw
+        == (db.UPLOAD_DIR / _chosen_main["stored_name"]).read_bytes()
+        and len(_work_raws) == 2,
+        "明确指定的照片作为主图，其余照片进入作品叠层",
     )
 
     def _poster_photo(color):

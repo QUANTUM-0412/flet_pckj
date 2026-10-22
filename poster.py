@@ -88,6 +88,7 @@ class PosterData:
     class_line: str = ""
     subject: str = ""
     brand: str = ""
+    logo: bytes = b""
     contact: str = ""
     qr_code: bytes = b""
     lesson_comment: str = ""
@@ -992,12 +993,14 @@ def build_poster(data: PosterData) -> bytes:
     header_pad = 40
     name_font = _font(True, 76)
     meta_font = _font(False, 34)
-    brand_font = _font(False, 30)
+    brand_font = _font(True, 44)
+    logo_image = _decode_photo(data.logo) if data.logo else None
+    brand_row_h = 64 if logo_image else 58
 
     meta_line = " · ".join(x for x in (data.date_line, data.class_line) if x)
     # 留出右边一片给装饰和科目牌子，日期那行不往那边压
     meta_lines = _wrap(meta_line, meta_font, inner - 300) if meta_line else []
-    header_height = header_pad + 46 + 100
+    header_height = header_pad + brand_row_h + 12 + 100
     header_height += int(meta_font.size * 1.52) * len(meta_lines)
     header_height += 44
 
@@ -1011,13 +1014,18 @@ def build_poster(data: PosterData) -> bytes:
     canvas.alpha_composite(header, (0, header_top))
 
     text_y = header_top + header_pad
+    brand_x = margin
+    if logo_image is not None:
+        logo = _fit_on_white(logo_image, 58, 58)
+        canvas.paste(_rounded(logo, 12), (margin, text_y))
+        brand_x += 72
     draw.text(
-        (margin, text_y),
+        (brand_x, text_y + 2),
         data.brand or "课堂分享",
         font=brand_font,
-        fill=_lighten(theme.header_bottom, 0.74),
+        fill=_lighten(theme.header_bottom, 0.86),
     )
-    text_y += 50
+    text_y += brand_row_h + 12
     draw.text(
         (margin, text_y),
         data.student_name or "课堂分享",
@@ -1168,7 +1176,7 @@ def build_poster(data: PosterData) -> bytes:
             cx += tag_width + 16
         y = cy + 58 + 30
 
-    # —— 页脚：老师／联系方式在左，二维码在右
+    # —— 页脚：老师／联系方式在上，二维码居中放在最底部，避开右下花纹
     footer_bits = [
         bit
         for bit in (
@@ -1179,38 +1187,46 @@ def build_poster(data: PosterData) -> bytes:
     ]
     qr_image = _decode_photo(data.qr_code) if data.qr_code else None
     footer_end = y + 6
-    footer_width = inner - (246 if qr_image else 0)
     if footer_bits:
         footer_font = _font(False, 30)
-        footer_end = _draw_paragraph(
-            draw,
-            " · ".join(footer_bits),
-            footer_font,
-            GREY,
-            margin,
-            y + 6,
-            footer_width,
-        )
+        footer_lines = _wrap(" · ".join(footer_bits), footer_font, inner)
+        footer_y = y + 6
+        for line in footer_lines:
+            line_w = int(draw.textlength(line, font=footer_font))
+            draw.text(
+                ((WIDTH - line_w) / 2, footer_y),
+                line,
+                font=footer_font,
+                fill=GREY,
+            )
+            footer_y += int(footer_font.size * 1.52)
+        footer_end = footer_y
     if qr_image:
         card_size = 206
-        card_x = WIDTH - margin - card_size
+        card_y = footer_end + 16
+        card_x = (WIDTH - card_size) // 2
         draw.rounded_rectangle(
-            (card_x + 4, y + 10, card_x + card_size + 4, y + card_size + 10),
+            (card_x + 4, card_y + 7, card_x + card_size + 4, card_y + card_size + 7),
             radius=18,
             fill=(225, 232, 239),
         )
         draw.rounded_rectangle(
-            (card_x, y, card_x + card_size, y + card_size),
+            (card_x, card_y, card_x + card_size, card_y + card_size),
             radius=18,
             fill=PAGE,
             outline=LINE,
             width=2,
         )
         qr = _fit_on_white(qr_image, 160, 160)
-        canvas.paste(qr, (card_x + 23, y + 14))
+        canvas.paste(qr, (card_x + 23, card_y + 14))
         qr_font = _font(False, 24)
-        draw.text((card_x + 59, y + 172), "扫码联系", font=qr_font, fill=theme.accent_dark)
-        footer_end = max(footer_end, y + card_size + 14)
+        draw.text(
+            (card_x + 59, card_y + 172),
+            "扫码联系",
+            font=qr_font,
+            fill=theme.accent_dark,
+        )
+        footer_end = card_y + card_size + 14
     y = footer_end + 8
 
     used = max(600, min(height_guess, y + margin))
