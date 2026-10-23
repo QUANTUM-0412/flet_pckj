@@ -187,14 +187,18 @@ def ok(condition, message):
 
 print("1. 初始化数据库")
 db.init_db()
-ok(len(db.list_hour_types()) == 5, "五种课时账户建好了")
-ok(len(db.list_class_types()) == 7, "七种课型建好了")
+ok(len(db.list_hour_types()) == 6, "六种课时账户建好了")
+ok(len(db.list_class_types()) == 8, "八种课型建好了")
 ok(len(db.list_levels()) == 7, "七个等级建好了")
 
 rules = {c["name"]: c for c in db.list_class_types()}
 ok(rules["竞赛"]["primary_name"] == "竞赛", "竞赛课先扣竞赛课时")
 ok(rules["竞赛"]["fallback_name"] == "正课", "竞赛课时不够补扣正课")
 ok(rules["考级"]["fallback_name"] == "正课", "考级课时不够补扣正课")
+ok(
+    rules["全年"]["deduct"] == 1 and rules["全年"]["primary_name"] == "全年",
+    "全年课型默认扣全年课时",
+)
 ok(rules["试听"]["deduct"] == 0, "试听不扣课时")
 ok(rules["替课"]["deduct"] == 1 and rules["替课"]["primary_name"] == "正课", "老师替课照扣正课课时")
 ok(
@@ -465,7 +469,38 @@ ok(any(l["default_minutes"] == 45 for l in db.list_levels() if l["id"] == victim
 app._open_class_type_dialog(rules["替课"])
 dlg = top_dialog(page)
 find_button(dlg, "保存").on_click(None)
-ok(len(db.list_class_types()) == 7, "课型规则能保存")
+ok(len(db.list_class_types()) == 8, "课型规则能保存")
+
+ok(
+    find_button(app._class_types_card(), "新增课型") is not None,
+    "课程设置里有新增课型入口",
+)
+app._open_class_type_dialog()
+dlg = top_dialog(page)
+find_field(dlg, "课型名称 *").value = "晚间课"
+find_dropdown(dlg, "主扣账户").value = str(
+    next(h["id"] for h in db.list_hour_types() if h["name"] == "正课")
+)
+click(dlg, "保存")
+created_class_type = next(
+    c for c in db.list_class_types() if c["name"] == "晚间课"
+)
+ok(
+    created_class_type["deduct"] == 1
+    and created_class_type["primary_name"] == "正课",
+    "设置里可以新增课型并指定扣课时账户",
+)
+app._open_class_type_dialog(created_class_type)
+dlg = top_dialog(page)
+find_field(dlg, "课型名称 *").value = "晚间班"
+click(dlg, "保存")
+ok(
+    any(
+        c["id"] == created_class_type["id"] and c["name"] == "晚间班"
+        for c in db.list_class_types()
+    ),
+    "设置里可以编辑课型名称",
+)
 
 print("10b. 学校字典（设置里加，填学员时直接挑）")
 app.tab = 7

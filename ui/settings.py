@@ -1289,7 +1289,15 @@ class SettingsMixin:
                     bgcolor=ft.Colors.GREY_50,
                 )
             )
-        return self._section("课型与扣课时规则", ft.Column(rows, spacing=10))
+        return self._section(
+            "课型与扣课时规则",
+            ft.Column(rows, spacing=10),
+            action=ft.Button(
+                "新增课型",
+                icon=ft.Icons.ADD,
+                on_click=lambda e: self._open_class_type_dialog(),
+            ),
+        )
 
     def _delete_level(self, level) -> None:
         """删等级。有记录在用的话，说清楚会清空那些记录上的等级，再删。"""
@@ -1462,38 +1470,112 @@ class SettingsMixin:
             )
         )
 
-    def _open_class_type_dialog(self, class_type) -> None:
+    def _open_class_type_dialog(self, class_type=None) -> None:
+        editing = class_type is not None
         hour_types = db.list_hour_types()
         options = [ft.DropdownOption(key="", text="不扣")] + _opts(
             [(h["id"], h["name"]) for h in hour_types]
         )
-        deduct = ft.Switch(label="这节课扣课时", value=bool(class_type["deduct"]))
+        name = _tf(
+            "课型名称 *",
+            class_type["name"] if editing else "",
+            width=DIALOG_WIDTH,
+        )
+        default_hour = next(
+            (str(h["id"]) for h in hour_types if h["name"] == "正课"),
+            "",
+        )
+        deduct = ft.Switch(
+            label="这节课扣课时",
+            value=bool(class_type["deduct"]) if editing else True,
+        )
         primary = _dd(
             "主扣账户",
             options,
-            value=str(class_type["primary_hour_type_id"] or ""),
+            value=(
+                str(class_type["primary_hour_type_id"] or "")
+                if editing
+                else default_hour
+            ),
             width=DIALOG_WIDTH,
         )
         fallback = _dd(
             "账户不够时补扣",
             options,
-            value=str(class_type["fallback_hour_type_id"] or ""),
+            value=(
+                str(class_type["fallback_hour_type_id"] or "")
+                if editing
+                else ""
+            ),
             width=DIALOG_WIDTH,
         )
 
-        def save(e):
-            db.update_class_type(
-                class_type["id"],
-                bool(deduct.value),
-                int(primary.value) if (primary.value or "").strip() else None,
-                int(fallback.value) if (fallback.value or "").strip() else None,
-            )
-            self._finish("规则已保存")
+        def sync_accounts(e=None, update: bool = True) -> None:
+            primary.disabled = not bool(deduct.value)
+            fallback.disabled = not bool(deduct.value)
+            if update:
+                primary.update()
+                fallback.update()
 
-        body = self._form_column([deduct, primary, fallback])
+        deduct.on_change = sync_accounts
+        sync_accounts(update=False)
+
+        def save(e):
+            try:
+                if editing:
+                    db.update_class_type(
+                        class_type["id"],
+                        bool(deduct.value),
+                        (
+                            int(primary.value)
+                            if (primary.value or "").strip()
+                            else None
+                        ),
+                        (
+                            int(fallback.value)
+                            if (fallback.value or "").strip()
+                            else None
+                        ),
+                        name.value or "",
+                    )
+                else:
+                    db.create_class_type(
+                        name.value or "",
+                        bool(deduct.value),
+                        (
+                            int(primary.value)
+                            if (primary.value or "").strip()
+                            else None
+                        ),
+                        (
+                            int(fallback.value)
+                            if (fallback.value or "").strip()
+                            else None
+                        ),
+                    )
+            except ValueError as err:
+                name.error = str(err)
+                name.update()
+                return
+            self._finish("课型已保存")
+
+        body = self._form_column(
+            [
+                name,
+                deduct,
+                primary,
+                fallback,
+                ft.Text(
+                    "改动名称不会影响已有课程；正课、全年、考级、竞赛、托管、社团"
+                    "这些内置名称还用于按等级自动匹配课型。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+            ]
+        )
         self._show(
             self._dialog(
-                f"课型：{class_type['name']}",
+                "编辑课型" if editing else "新增课型",
                 body,
                 [
                     ft.TextButton("取消", on_click=self._close),

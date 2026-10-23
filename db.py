@@ -32,11 +32,12 @@ BEHAVIOR_SCORE_MAX = 10
 # --------------------------------------------------------------- 初始化的字典
 
 # 课时账户种类：孩子报的每一种课，都有自己的课时本子
-HOUR_TYPES = ["正课", "考级", "竞赛", "托管", "社团"]
+HOUR_TYPES = ["正课", "全年", "考级", "竞赛", "托管", "社团"]
 
 # 课型：(名称, 是否扣课时, 主扣账户, 主扣不够时补扣的账户)
 DEFAULT_CLASS_TYPES: list[tuple[str, int, str | None, str | None]] = [
     ("正课", 1, "正课", None),
+    ("全年", 1, "全年", None),
     ("考级", 1, "考级", "正课"),
     ("竞赛", 1, "竞赛", "正课"),
     ("托管", 1, "托管", None),
@@ -745,6 +746,43 @@ def _migrate(con: sqlite3.Connection) -> None:
             con.execute(
                 "DELETE FROM class_types WHERE id = ?",
                 (legacy_id,),
+            )
+    # 「全年」是后来新增的课型，并有自己的课时账户。
+    # 已有库补上账户，并把课型默认扣款改到「全年」。
+    full_year_hour = con.execute(
+        "SELECT id FROM hour_types WHERE name = '全年'"
+    ).fetchone()
+    if full_year_hour is None:
+        if con.execute("SELECT 1 FROM hour_types LIMIT 1").fetchone() is not None:
+            con.execute(
+                "UPDATE hour_types SET sort = sort + 1 WHERE sort >= 1"
+            )
+            cur = con.execute(
+                "INSERT INTO hour_types(name, sort, warn) VALUES('全年', 1, 0)"
+            )
+            full_year_hour = {"id": int(cur.lastrowid)}
+    if full_year_hour is not None:
+        full_year_class = con.execute(
+            "SELECT id FROM class_types WHERE name = '全年'"
+        ).fetchone()
+        if full_year_class is None:
+            con.execute(
+                "UPDATE class_types SET sort = sort + 1 WHERE sort >= 1"
+            )
+            con.execute(
+                """INSERT INTO class_types
+                       (name, deduct, primary_hour_type_id,
+                        fallback_hour_type_id, sort)
+                   VALUES('全年', 1, ?, NULL, 1)""",
+                (int(full_year_hour["id"]),),
+            )
+        else:
+            con.execute(
+                """UPDATE class_types
+                      SET deduct = 1, primary_hour_type_id = ?,
+                          fallback_hour_type_id = NULL
+                    WHERE id = ?""",
+                (int(full_year_hour["id"]), int(full_year_class["id"])),
             )
     _ensure_column(con, "enrollments", "owner_teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "lessons", "teacher_id", "INTEGER REFERENCES users(id)")
@@ -2844,22 +2882,88 @@ def class_type_id_for_level(level_id: int) -> int | None:
         return _class_type_id_for_level(con, level_id)
 
 
+def create_class_type(
+    name: str,
+    deduct: bool,
+    primary_hour_type_id: int | None,
+    fallback_hour_type_id: int | None,
+) -> int:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("课型名称不能为空")
+    if deduct and not primary_hour_type_id:
+        raise ValueError("请选择主扣账户")
+    with _connect() as con:
+        if con.execute(
+            "SELECT 1 FROM class_types WHERE name = ?", (name,)
+        ).fetchone():
+            raise ValueError(f"已经有叫「{name}」的课型了")
+        sort = int(
+            con.execute(
+                "SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM class_types"
+            ).fetchone()["n"]
+        )
+        cur = con.execute(
+            """INSERT INTO class_types
+                   (name, deduct, primary_hour_type_id,
+                    fallback_hour_type_id, sort)
+               VALUES(?, ?, ?, ?, ?)""",
+            (
+                name,
+                1 if deduct else 0,
+                int(primary_hour_type_id) if deduct and primary_hour_type_id else None,
+                (
+                    int(fallback_hour_type_id)
+                    if deduct and fallback_hour_type_id
+                    else None
+                ),
+                sort,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
 def update_class_type(
     class_type_id: int,
     deduct: bool,
     primary_hour_type_id: int | None,
     fallback_hour_type_id: int | None,
+    name: str | None = None,
 ) -> None:
+    deduct = bool(deduct)
+    if deduct and not primary_hour_type_id:
+        raise ValueError("请选择主扣账户")
     with _connect() as con:
+        current = con.execute(
+            "SELECT name FROM class_types WHERE id = ?", (int(class_type_id),)
+        ).fetchone()
+        if current is None:
+            raise ValueError("这个课型不存在")
+        final_name = (
+            (name or "").strip() if name is not None else current["name"]
+        )
+        if not final_name:
+            raise ValueError("课型名称不能为空")
+        if con.execute(
+            "SELECT 1 FROM class_types WHERE name = ? AND id <> ?",
+            (final_name, int(class_type_id)),
+        ).fetchone():
+            raise ValueError(f"已经有叫「{final_name}」的课型了")
         con.execute(
             """UPDATE class_types
-                  SET deduct = ?, primary_hour_type_id = ?, fallback_hour_type_id = ?
+                  SET name = ?, deduct = ?, primary_hour_type_id = ?,
+                      fallback_hour_type_id = ?
                 WHERE id = ?""",
             (
+                final_name,
                 1 if deduct else 0,
-                primary_hour_type_id,
-                fallback_hour_type_id,
-                class_type_id,
+                int(primary_hour_type_id) if deduct and primary_hour_type_id else None,
+                (
+                    int(fallback_hour_type_id)
+                    if deduct and fallback_hour_type_id
+                    else None
+                ),
+                int(class_type_id),
             ),
         )
 

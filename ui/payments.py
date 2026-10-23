@@ -488,7 +488,7 @@ class PaymentsMixin:
             for h in hour_types:
                 if h["name"] == class_type_name:
                     return h["id"]
-            if class_type_name in ("替课",):
+            if class_type_name == "替课":
                 return next((h["id"] for h in hour_types if h["name"] == "正课"), None)
             return None
 
