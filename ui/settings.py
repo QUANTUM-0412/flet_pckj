@@ -879,13 +879,24 @@ class SettingsMixin:
                 f"{item['hour_type_name']} {db.num_text(item['hours'])} 节"
                 for item in package["items"]
             )
+            has_regular = any(
+                item["hour_type_name"] == "正课"
+                and float(item["hours"] or 0) > 0
+                for item in package["items"]
+            )
             face, count = db.voucher_plan(
-                float(package["price"] or 0), package_selected=True
+                float(package["price"] or 0),
+                package_selected=True,
+                has_regular=has_regular,
             )
             voucher_text = (
                 f"送 {count} 张 {db.num_text(face)} 元代金券"
                 if count
-                else f"不送券（课包需满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元）"
+                else (
+                    "不送券（课包不含正课）"
+                    if not has_regular
+                    else f"不送券（课包需满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元）"
+                )
             )
             rows.append(
                 ft.Container(
@@ -948,8 +959,8 @@ class SettingsMixin:
             ft.Column(
                 [
                     ft.Text(
-                        "固定课包用来快速填入一整套课时；只有选择了满 3000 元的课包，"
-                        "缴费时才送 10 张代金券。普通缴费不送券。",
+                        "固定课包用来快速填入一整套课时；只有包含正课且满 3000 元的课包，"
+                        "缴费时才送 10 张代金券。纯全年或其他课时课包不送券。",
                         size=12,
                         color=ft.Colors.GREY_600,
                     ),

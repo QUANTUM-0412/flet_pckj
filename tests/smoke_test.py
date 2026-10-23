@@ -1033,6 +1033,10 @@ ok(
     db.voucher_plan(3000, package_selected=True, has_regular=False) == (0.0, 0),
     "不含正课的固定课包即使满 3000 元也不送券",
 )
+ok(
+    find_text(app._course_packages_card(), "不送券（课包不含正课）"),
+    "固定课包列表也不会把全年班显示成送券",
+)
 full_year_kid = db.create_student({"name": "全年券测试", "grade": "二年级"})
 db.create_payment(
     full_year_kid,
