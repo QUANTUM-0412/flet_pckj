@@ -442,7 +442,7 @@ class PaymentsMixin:
         def issue_text() -> str:
             package = selected_package()
             if not package:
-                return "普通缴费不送代金券；只有含正课且满 3000 元的固定课包才送"
+                return "只有含正课且满 3000 元的固定课包才送代金券"
             face, count = db.voucher_plan(
                 float(package["price"] or 0),
                 package_selected=True,
@@ -462,9 +462,9 @@ class PaymentsMixin:
                 and float(item["hours"] or 0) > 0
                 for item in package.get("items", [])
             ):
-                return "这个课包不含正课课时，不送代金券；手里的券照样能抵这笔"
+                return "这个课包不含正课课时；手里的券照样能抵这笔"
             return (
-                f"这个课包未满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元，不送代金券；"
+                f"这个课包未满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元；"
                 "手里的券照样能抵这笔"
             )
 

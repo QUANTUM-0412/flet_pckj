@@ -1034,8 +1034,8 @@ ok(
     "不含正课的固定课包即使满 3000 元也不送券",
 )
 ok(
-    find_text(app._course_packages_card(), "不送券（课包不含正课）"),
-    "固定课包列表也不会把全年班显示成送券",
+    not find_text(app._course_packages_card(), "不送券（课包不含正课）"),
+    "固定课包列表不显示“不送券”文字",
 )
 full_year_kid = db.create_student({"name": "全年券测试", "grade": "二年级"})
 db.create_payment(
@@ -1125,7 +1125,10 @@ app.render()
 app._open_payment_dialog(None, vou_kid)
 dlg = top_dialog(page)
 ok(find_dropdown(dlg, "用代金券") is not None, "缴费框里有「用代金券」")
-ok(find_text(dlg, "普通缴费不送代金券"), "普通缴费明确提示不送券")
+ok(
+    find_text(dlg, "只有含正课且满 3000 元的固定课包才送代金券"),
+    "缴费框只提示送券规则，不写“不送券”",
+)
 package_dd = find_dropdown(dlg, "固定课包（可选）")
 package_dd.value = str(default_package["id"])
 package_dd.on_select(Evt(package_dd))
