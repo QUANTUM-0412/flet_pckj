@@ -471,6 +471,7 @@ class ScheduleMixin:
     def _schedule_row(
         self, template: dict, found: dict | None, students: list[dict] | None = None
     ) -> ft.Container:
+        can_manage_course = self._can_manage_course(template)
         headcount = (
             found.get("student_count") if found else template["student_count"]
         )
@@ -494,16 +495,29 @@ class ScheduleMixin:
             bits.append("待点名")
         if found and found.get("rolled", 1):
             action = ft.TextButton(
-                "已点名 · 进去看",
+                (
+                    "已点名 · 进去看"
+                    if self._can_manage_lesson(found)
+                    else "已点名 · 查看"
+                ),
                 icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
                 on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
             )
         elif found:
-            action = ft.Button(
-                "去点名",
-                icon=ft.Icons.FACT_CHECK,
-                on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
+            action = (
+                ft.Button(
+                    "去点名",
+                    icon=ft.Icons.FACT_CHECK,
+                    on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
+                )
+                if self._can_manage_lesson(found)
+                else ft.TextButton(
+                    "查看",
+                    on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
+                )
             )
+        elif not can_manage_course:
+            action = ft.Text("只读", size=11, color=ft.Colors.GREY_500)
         else:
             action = ft.Row(
                 [
@@ -522,7 +536,7 @@ class ScheduleMixin:
                                 ),
                             )
                         ]
-                        if self._can_manage_course(template)
+                        if can_manage_course
                         else []
                     ),
                 ],
@@ -693,6 +707,9 @@ class ScheduleMixin:
 
     def _roll_call(self, template_id: int) -> None:
         template = db.get_template(template_id)
+        if template is None or not self._can_manage_course(template):
+            self._toast("这不是你的课程，只能查看")
+            return
         if template is not None and not db.course_covers(
             template, self.schedule_date
         ):

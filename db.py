@@ -2402,6 +2402,51 @@ def _linked_badge_student_ids(
     return sorted({int(row["student_id"]) for row in rows})
 
 
+def _badge_teacher_ids_for_student(
+    con: sqlite3.Connection, level_id: int, student_id: int
+) -> list[int]:
+    """这个学员在这个竞赛／考级级别里对应的授课老师。
+
+    优先看报名所挂课程的实际老师，再看对应课次的实际上课老师；
+    没有任何课程／课次时，才退到等级的默认老师。
+    """
+    row = con.execute(
+        """SELECT
+             (SELECT GROUP_CONCAT(DISTINCT t.teacher_id)
+                FROM enrollments e
+                JOIN schedule_templates t ON t.id = e.class_id
+               WHERE e.student_id = ? AND e.level_id = ?
+                 AND t.teacher_id IS NOT NULL) AS course_teachers,
+             (SELECT GROUP_CONCAT(DISTINCT l.teacher_id)
+                FROM attendance a
+                JOIN lessons l ON l.id = a.lesson_id
+               WHERE a.student_id = ? AND l.level_id = ?
+                 AND l.teacher_id IS NOT NULL) AS lesson_teachers,
+             (SELECT default_teacher_id FROM levels WHERE id = ?)
+               AS default_teacher""",
+        (
+            int(student_id),
+            int(level_id),
+            int(student_id),
+            int(level_id),
+            int(level_id),
+        ),
+    ).fetchone()
+    if row is None:
+        return []
+    values = ",".join(
+        part for part in (row["course_teachers"], row["lesson_teachers"]) if part
+    )
+    teacher_ids = {
+        int(value)
+        for value in values.split(",")
+        if value.strip().isdigit()
+    }
+    if not teacher_ids and row["default_teacher"]:
+        teacher_ids.add(int(row["default_teacher"]))
+    return sorted(teacher_ids)
+
+
 def list_badge_level_participants(level_id: int) -> list[dict]:
     """竞赛／考级目录里，这个级别已关联的学员。"""
     with _connect() as con:
@@ -2418,7 +2463,15 @@ def list_badge_level_participants(level_id: int) -> list[dict]:
                  ORDER BY CASE s.status WHEN '在读' THEN 0 ELSE 1 END, s.name""",
             student_ids,
         ).fetchall()
-    return [dict(row) for row in rows]
+    result = []
+    with _connect() as con:
+        for row in rows:
+            item = dict(row)
+            item["teacher_ids"] = _badge_teacher_ids_for_student(
+                con, int(level_id), int(item["id"])
+            )
+            result.append(item)
+    return result
 
 
 def list_level_badges(level_id: int) -> list[dict]:
@@ -2432,7 +2485,15 @@ def list_level_badges(level_id: int) -> list[dict]:
                 ORDER BY sb.happened_on DESC, sb.id DESC""",
             (int(level_id),),
         ).fetchall()
-    return [dict(row) for row in rows]
+    result = []
+    with _connect() as con:
+        for row in rows:
+            item = dict(row)
+            item["teacher_ids"] = _badge_teacher_ids_for_student(
+                con, int(level_id), int(item["student_id"])
+            )
+            result.append(item)
+    return result
 
 
 def save_badge_awards_for_level(

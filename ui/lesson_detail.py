@@ -16,6 +16,7 @@ class LessonDetailMixin:
         if not lesson:
             self.lesson_id = None
             return self._schedule_view()
+        can_edit = self._can_manage_lesson(lesson)
         self._row_refs = {}
 
         stats = ft.Text(_lessons_stats(lesson), size=12, color=ft.Colors.GREY_600)
@@ -42,6 +43,14 @@ class LessonDetailMixin:
                 ),
                 *(
                     [
+                        ft.Text(
+                            "只读",
+                            size=11,
+                            color=ft.Colors.GREY_500,
+                        )
+                    ]
+                    if not can_edit
+                    else [
                         ft.Button(
                             "点名",
                             icon=ft.Icons.FACT_CHECK,
@@ -102,10 +111,16 @@ class LessonDetailMixin:
                     ft.Row(
                         [
                             ft.Container(expand=True),
-                            ft.Button(
-                                "编辑课次",
-                                icon=ft.Icons.EDIT,
-                                on_click=lambda e: self._open_lesson_dialog(lesson),
+                            *(
+                                [
+                                    ft.Button(
+                                        "编辑课次",
+                                        icon=ft.Icons.EDIT,
+                                        on_click=lambda e: self._open_lesson_dialog(lesson),
+                                    )
+                                ]
+                                if can_edit
+                                else []
                             ),
                             *(
                                 [
@@ -189,15 +204,27 @@ class LessonDetailMixin:
         items = [self._attendance_row(a, lesson, photos.get(a["id"], [])) for a in rows]
         if not items:
             items = [
-                ft.Text("还没点名，点右上角把上课的孩子加进来。", size=12, color=ft.Colors.GREY_600)
+                ft.Text(
+                    (
+                        "还没点名，点右上角把上课的孩子加进来。"
+                        if can_edit
+                        else "这节课还没有点名记录。"
+                    ),
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                )
             ]
         roll = self._section(
             f"点名（{len(rows)} 人）",
             ft.Column(items, spacing=10),
-            action=ft.Button(
-                "添加孩子",
-                icon=ft.Icons.PERSON_ADD,
-                on_click=lambda e: self._open_add_students_dialog(lesson),
+            action=(
+                ft.Button(
+                    "添加孩子",
+                    icon=ft.Icons.PERSON_ADD,
+                    on_click=lambda e: self._open_add_students_dialog(lesson),
+                )
+                if can_edit
+                else None
             ),
         )
 
@@ -218,6 +245,7 @@ class LessonDetailMixin:
 
     def _lesson_content_card(self, lesson: dict) -> ft.Container:
         """课评、教案、课堂照片放在一起，做海报和回看都从这里找。"""
+        can_edit = self._can_manage_lesson(lesson)
         comment = (lesson.get("comment") or "").strip()
         plan = (lesson.get("plan") or "").strip()
         class_photos = db.list_files("lesson", lesson["id"], "照片")
@@ -229,9 +257,22 @@ class LessonDetailMixin:
             max_lines=8,
             dense=True,
             text_size=13,
-            hint_text="写这节课的课评…（离开输入框自动保存）",
-            on_blur=lambda e: self._save_lesson_comment(lesson["id"], e.control.value),
-            on_submit=lambda e: self._save_lesson_comment(lesson["id"], e.control.value),
+            read_only=not can_edit,
+            hint_text=(
+                "写这节课的课评…（离开输入框自动保存）"
+                if can_edit
+                else "这节课由其他老师上课，课评只读"
+            ),
+            on_blur=(
+                lambda e: self._save_lesson_comment(lesson["id"], e.control.value)
+                if can_edit
+                else None
+            ),
+            on_submit=(
+                lambda e: self._save_lesson_comment(lesson["id"], e.control.value)
+                if can_edit
+                else None
+            ),
         )
 
         plan_editor = ft.TextField(
@@ -268,6 +309,9 @@ class LessonDetailMixin:
         )
 
         def show_plan_editor(e) -> None:
+            if not can_edit:
+                self._toast("这节课由其他老师上课，只能查看")
+                return
             fresh = db.get_lesson(lesson["id"])
             plan_editor.value = (fresh or {}).get("plan") or ""
             plan_editor.visible = True
@@ -293,8 +337,8 @@ class LessonDetailMixin:
             plan_empty.visible = not bool(text)
             plan_editor.visible = False
             plan_actions.visible = False
-            edit_plan_button.visible = True
-            plan_upload_button.visible = True
+            edit_plan_button.visible = can_edit
+            plan_upload_button.visible = can_edit
             for control in (
                 plan_editor,
                 plan_actions,
@@ -313,8 +357,10 @@ class LessonDetailMixin:
             "编辑教案",
             icon=ft.Icons.EDIT,
             on_click=show_plan_editor,
+            visible=can_edit,
         )
         plan_upload_button = self._plan_upload_button(lesson["id"])
+        plan_upload_button.visible = can_edit
         plan_actions = ft.Row(
             [
                 ft.Button("保存教案", icon=ft.Icons.SAVE, on_click=save_plan),
@@ -364,7 +410,12 @@ class LessonDetailMixin:
                         class_photos,
                         owner_type="lesson",
                         add_label="加课堂照片",
-                        action=self._class_poster_button(lesson),
+                        action=(
+                            self._class_poster_button(lesson)
+                            if can_edit
+                            else None
+                        ),
+                        editable=can_edit,
                     ),
                     ft.Text(
                         "全班合影传一次就够了；给每个孩子做海报时也会一起用上。",
@@ -380,7 +431,10 @@ class LessonDetailMixin:
     def _save_lesson_comment(self, lesson_id: int, value: str) -> None:
         text = (value or "").strip()
         current = db.get_lesson(lesson_id)
-        if current is None or (current["comment"] or "").strip() == text:
+        if current is None or not self._can_manage_lesson(current):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        if (current["comment"] or "").strip() == text:
             return
         db.set_lesson_comment(lesson_id, text)
         self._toast("课评已保存")
@@ -388,7 +442,10 @@ class LessonDetailMixin:
     def _save_lesson_plan(self, lesson_id: int, value: str) -> None:
         text = (value or "").strip()
         current = db.get_lesson(lesson_id)
-        if current is None or (current["plan"] or "").strip() == text:
+        if current is None or not self._can_manage_lesson(current):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        if (current["plan"] or "").strip() == text:
             return
         db.set_lesson_plan(lesson_id, text)
         db.cleanup_plan_images(lesson_id, text)
@@ -396,6 +453,9 @@ class LessonDetailMixin:
 
     def _ask_roll_call(self, lesson: dict) -> None:
         """这节课真上完了：点名之后才开始扣课时、加积分。"""
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         rows = db.list_attendance(lesson["id"])
         hours = 0.0
         points = 0.0
@@ -414,6 +474,9 @@ class LessonDetailMixin:
 
     def _ask_unroll_call(self, lesson: dict) -> None:
         """撤销点名：先把要退回的课时、积分说清楚，确认了才改。"""
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         rows = db.list_attendance(lesson["id"])
         hours = 0.0
         points = 0.0
@@ -434,6 +497,7 @@ class LessonDetailMixin:
 
 
     def _lesson_files_card(self, lesson: dict) -> ft.Container:
+        can_edit = self._can_manage_lesson(lesson)
         files = db.list_files("lesson", lesson["id"], "附件")
         rows = []
         for f in files:
@@ -455,15 +519,21 @@ class LessonDetailMixin:
                                 self._open_attachment, row
                             ),
                         ),
-                        ft.IconButton(
-                            ft.Icons.DELETE_OUTLINE,
-                            tooltip="删除",
-                            icon_size=18,
-                            on_click=lambda e, row=f: self._confirm(
-                                "删除附件",
-                                f"确定删除「{row['filename']}」吗？",
-                                lambda: db.delete_file(row["id"]),
-                            ),
+                        *(
+                            [
+                                ft.IconButton(
+                                    ft.Icons.DELETE_OUTLINE,
+                                    tooltip="删除",
+                                    icon_size=18,
+                                    on_click=lambda e, row=f: self._confirm(
+                                        "删除附件",
+                                        f"确定删除「{row['filename']}」吗？",
+                                        lambda: db.delete_file(row["id"]),
+                                    ),
+                                )
+                            ]
+                            if can_edit
+                            else []
                         ),
                     ],
                     spacing=8,
@@ -481,12 +551,21 @@ class LessonDetailMixin:
         return self._section(
             f"附件（{len(files)} 个）",
             ft.Column(rows, spacing=8),
-            action=self._upload_button(
-                "上传附件", "lesson", lesson["id"], "附件", icon=ft.Icons.UPLOAD_FILE
+            action=(
+                self._upload_button(
+                    "上传附件",
+                    "lesson",
+                    lesson["id"],
+                    "附件",
+                    icon=ft.Icons.UPLOAD_FILE,
+                )
+                if can_edit
+                else None
             ),
         )
 
     def _attendance_row(self, a: dict, lesson: dict, photos: list[dict]) -> ft.Container:
+        can_edit = self._can_manage_lesson(lesson)
         hours, points = _attendance_calc(a, lesson)
         present = int(a["attendance"] or 0)
         discipline_good = bool(a["discipline"])
@@ -510,19 +589,22 @@ class LessonDetailMixin:
             label="出勤",
             width=90,
             value=bool(present),
-            on_change=flag_handler("attendance"),
+            disabled=not can_edit,
+            on_change=flag_handler("attendance") if can_edit else None,
         )
         cb_dis = ft.Checkbox(
             label="纪律",
             width=90,
             value=discipline_good,
-            on_change=flag_handler("discipline"),
+            disabled=not can_edit,
+            on_change=flag_handler("discipline") if can_edit else None,
         )
         cb_per = ft.Checkbox(
             label="学习",
             width=90,
             value=performance_good,
-            on_change=flag_handler("performance"),
+            disabled=not can_edit,
+            on_change=flag_handler("performance") if can_edit else None,
         )
         bonus = ft.TextField(
             value=db.num_text(a["bonus"]),
@@ -530,8 +612,17 @@ class LessonDetailMixin:
             dense=True,
             text_size=13,
             keyboard_type=ft.KeyboardType.NUMBER,
-            on_blur=lambda e: self._save_attendance_value(a["id"], "bonus", a["bonus"], e.control.value),
-            on_submit=lambda e: self._save_attendance_value(a["id"], "bonus", a["bonus"], e.control.value),
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_attendance_value(a["id"], "bonus", a["bonus"], e.control.value)
+                if can_edit
+                else None
+            ),
+            on_submit=(
+                lambda e: self._save_attendance_value(a["id"], "bonus", a["bonus"], e.control.value)
+                if can_edit
+                else None
+            ),
         )
         discipline_score = ft.TextField(
             value=db.num_text(discipline_score_value),
@@ -540,21 +631,22 @@ class LessonDetailMixin:
             label="纪律分（-10 < x < 10）",
             hint_text="纪律不好时由老师填写，例如 3、0、-4.5",
             visible=bool(present and not discipline_good),
-            on_blur=lambda e: self._save_behavior_score(
-                a["id"],
-                "discipline_score",
-                "纪律分",
-                a["discipline_score"],
-                e.control.value,
-                e.control,
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_behavior_score(
+                    a["id"], "discipline_score", "纪律分",
+                    a["discipline_score"], e.control.value, e.control,
+                )
+                if can_edit
+                else None
             ),
-            on_submit=lambda e: self._save_behavior_score(
-                a["id"],
-                "discipline_score",
-                "纪律分",
-                a["discipline_score"],
-                e.control.value,
-                e.control,
+            on_submit=(
+                lambda e: self._save_behavior_score(
+                    a["id"], "discipline_score", "纪律分",
+                    a["discipline_score"], e.control.value, e.control,
+                )
+                if can_edit
+                else None
             ),
         )
         poor_discipline_reason = ft.TextField(
@@ -571,17 +663,22 @@ class LessonDetailMixin:
                 else None
             ),
             visible=bool(present and not discipline_good),
-            on_blur=lambda e: self._save_attendance_value(
-                a["id"],
-                "poor_discipline_reason",
-                a["poor_discipline_reason"],
-                e.control.value,
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_attendance_value(
+                    a["id"], "poor_discipline_reason",
+                    a["poor_discipline_reason"], e.control.value,
+                )
+                if can_edit
+                else None
             ),
-            on_submit=lambda e: self._save_attendance_value(
-                a["id"],
-                "poor_discipline_reason",
-                a["poor_discipline_reason"],
-                e.control.value,
+            on_submit=(
+                lambda e: self._save_attendance_value(
+                    a["id"], "poor_discipline_reason",
+                    a["poor_discipline_reason"], e.control.value,
+                )
+                if can_edit
+                else None
             ),
         )
         bonus_reason = ft.TextField(
@@ -596,11 +693,20 @@ class LessonDetailMixin:
                 else None
             ),
             visible=bool(present and bonus_value),
-            on_blur=lambda e: self._save_attendance_value(
-                a["id"], "bonus_reason", a["bonus_reason"], e.control.value
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_attendance_value(
+                    a["id"], "bonus_reason", a["bonus_reason"], e.control.value
+                )
+                if can_edit
+                else None
             ),
-            on_submit=lambda e: self._save_attendance_value(
-                a["id"], "bonus_reason", a["bonus_reason"], e.control.value
+            on_submit=(
+                lambda e: self._save_attendance_value(
+                    a["id"], "bonus_reason", a["bonus_reason"], e.control.value
+                )
+                if can_edit
+                else None
             ),
         )
         performance_score = ft.TextField(
@@ -610,21 +716,22 @@ class LessonDetailMixin:
             label="学习分（-10 < x < 10）",
             hint_text="学习不好时由老师填写，例如 3、0、-4.5",
             visible=bool(present and not performance_good),
-            on_blur=lambda e: self._save_behavior_score(
-                a["id"],
-                "performance_score",
-                "学习分",
-                a["performance_score"],
-                e.control.value,
-                e.control,
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_behavior_score(
+                    a["id"], "performance_score", "学习分",
+                    a["performance_score"], e.control.value, e.control,
+                )
+                if can_edit
+                else None
             ),
-            on_submit=lambda e: self._save_behavior_score(
-                a["id"],
-                "performance_score",
-                "学习分",
-                a["performance_score"],
-                e.control.value,
-                e.control,
+            on_submit=(
+                lambda e: self._save_behavior_score(
+                    a["id"], "performance_score", "学习分",
+                    a["performance_score"], e.control.value, e.control,
+                )
+                if can_edit
+                else None
             ),
         )
         poor_reason = ft.TextField(
@@ -641,17 +748,22 @@ class LessonDetailMixin:
                 else None
             ),
             visible=bool(present and not performance_good),
-            on_blur=lambda e: self._save_attendance_value(
-                a["id"],
-                "poor_performance_reason",
-                a["poor_performance_reason"],
-                e.control.value,
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_attendance_value(
+                    a["id"], "poor_performance_reason",
+                    a["poor_performance_reason"], e.control.value,
+                )
+                if can_edit
+                else None
             ),
-            on_submit=lambda e: self._save_attendance_value(
-                a["id"],
-                "poor_performance_reason",
-                a["poor_performance_reason"],
-                e.control.value,
+            on_submit=(
+                lambda e: self._save_attendance_value(
+                    a["id"], "poor_performance_reason",
+                    a["poor_performance_reason"], e.control.value,
+                )
+                if can_edit
+                else None
             ),
         )
         minutes = ft.TextField(
@@ -660,16 +772,34 @@ class LessonDetailMixin:
             dense=True,
             text_size=13,
             keyboard_type=ft.KeyboardType.NUMBER,
-            on_blur=lambda e: self._save_attendance_value(a["id"], "minutes", a["minutes"], e.control.value),
-            on_submit=lambda e: self._save_attendance_value(a["id"], "minutes", a["minutes"], e.control.value),
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_attendance_value(a["id"], "minutes", a["minutes"], e.control.value)
+                if can_edit
+                else None
+            ),
+            on_submit=(
+                lambda e: self._save_attendance_value(a["id"], "minutes", a["minutes"], e.control.value)
+                if can_edit
+                else None
+            ),
         )
         comment = ft.TextField(
             value=a["comment"],
             dense=True,
             text_size=13,
             hint_text="这个孩子的点评（可选）",
-            on_blur=lambda e: self._save_attendance_value(a["id"], "comment", a["comment"], e.control.value),
-            on_submit=lambda e: self._save_attendance_value(a["id"], "comment", a["comment"], e.control.value),
+            read_only=not can_edit,
+            on_blur=(
+                lambda e: self._save_attendance_value(a["id"], "comment", a["comment"], e.control.value)
+                if can_edit
+                else None
+            ),
+            on_submit=(
+                lambda e: self._save_attendance_value(a["id"], "comment", a["comment"], e.control.value)
+                if can_edit
+                else None
+            ),
         )
 
         self._row_refs[a["id"]] = {
@@ -706,15 +836,21 @@ class LessonDetailMixin:
                                 else []
                             ),
                             balance,
-                            ft.IconButton(
-                                ft.Icons.CLOSE,
-                                tooltip="把这个人从这节课去掉",
-                                icon_size=18,
-                                on_click=lambda e: self._confirm(
-                                    "移出这节课",
-                                    f"把「{a['student_name']}」从这节课的名单里去掉吗？",
-                                    lambda: db.delete_attendance(a["id"]),
-                                ),
+                            *(
+                                [
+                                    ft.IconButton(
+                                        ft.Icons.CLOSE,
+                                        tooltip="把这个人从这节课去掉",
+                                        icon_size=18,
+                                        on_click=lambda e: self._confirm(
+                                            "移出这节课",
+                                            f"把「{a['student_name']}」从这节课的名单里去掉吗？",
+                                            lambda: db.delete_attendance(a["id"]),
+                                        ),
+                                    )
+                                ]
+                                if can_edit
+                                else []
                             ),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -745,14 +881,24 @@ class LessonDetailMixin:
                     comment,
                     ft.Row(
                         [
-                            self._photo_strip(a["id"], photos),
-                            ft.Button(
-                                "做海报",
-                                icon=ft.Icons.AUTO_AWESOME,
-                                tooltip="把孩子的照片和课评拼成一张图，发给家长",
-                                on_click=lambda e, att_id=a["id"], lid=lesson["id"]: (
-                                    self._open_poster_for(att_id, lid)
-                                ),
+                            self._photo_strip(
+                                a["id"],
+                                photos,
+                                editable=can_edit,
+                            ),
+                            *(
+                                [
+                                    ft.Button(
+                                        "做海报",
+                                        icon=ft.Icons.AUTO_AWESOME,
+                                        tooltip="把孩子的照片和课评拼成一张图，发给家长",
+                                        on_click=lambda e, att_id=a["id"], lid=lesson["id"]: (
+                                            self._open_poster_for(att_id, lid)
+                                        ),
+                                    )
+                                ]
+                                if can_edit
+                                else []
                             ),
                         ],
                         spacing=8,
@@ -779,9 +925,17 @@ class LessonDetailMixin:
                 return f"剩余 {db.num_text(account['balance'])}"
         return ""
 
+    def _can_edit_attendance(self, att_id: int) -> bool:
+        row = db.get_attendance(att_id)
+        lesson = db.get_lesson(int(row["lesson_id"])) if row else None
+        return bool(lesson and self._can_manage_lesson(lesson))
+
     def _save_attendance_flag(self, att_id: int, field: str, value) -> None:
         row = db.get_attendance(att_id)
         if row is None:
+            return
+        if not self._can_edit_attendance(att_id):
+            self._toast("这节课由其他老师上课，只能查看")
             return
         new = 1 if value else 0
         if new == int(row[field] or 0):
@@ -797,6 +951,9 @@ class LessonDetailMixin:
         self._refresh_attendance_row(att_id)
 
     def _save_attendance_value(self, att_id: int, field: str, current, value) -> None:
+        if not self._can_edit_attendance(att_id):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         text = (value or "").strip()
         if field in ("bonus", "minutes"):
             try:
@@ -823,6 +980,9 @@ class LessonDetailMixin:
         value: str,
         control: ft.TextField,
     ) -> None:
+        if not self._can_edit_attendance(att_id):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         text = (value or "").strip()
         try:
             new = float(text)

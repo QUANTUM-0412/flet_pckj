@@ -2411,7 +2411,85 @@ ok(
     and not app._can_manage_student(other_student),
     "自己的学员能编辑，别人的学员只读",
 )
+own_perm_lesson = db.create_lesson(
+    "2026-10-20",
+    "16:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    teacher_id=teacher_id,
+    template_id=own_course,
+    rolled=0,
+)
+db.add_attendance(own_perm_lesson, own_student)
+other_perm_lesson = db.create_lesson(
+    "2026-10-20",
+    "18:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    teacher_id=teacher2_id,
+    template_id=other_course,
+    rolled=0,
+)
+other_attendance_id = db.add_attendance(other_perm_lesson, other_student)
+makeup_own_lesson = db.create_lesson(
+    "2026-10-21",
+    "16:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    kind="补课",
+    teacher_id=teacher_id,
+    template_id=other_course,
+    rolled=0,
+)
+db.add_attendance(makeup_own_lesson, own_student)
+app.tab = 1
+app.open_lesson(own_perm_lesson)
+ok(
+    find_button(page.controls[0], "点名") is not None
+    and find_button(page.controls[0], "编辑课次") is not None
+    and find_button(page.controls[0], "添加孩子") is not None,
+    "自己的课可以点名学生、编辑和添加孩子",
+)
+own_comment = next(
+    c
+    for c in walk(page.controls[0])
+    if isinstance(c, ft.TextField) and "课评" in str(c.hint_text or "")
+)
+ok(not own_comment.read_only, "自己的课可以编辑课评")
+app.open_lesson(other_perm_lesson)
+other_lesson_tree = page.controls[0]
+for label in ("点名", "编辑课次", "添加孩子"):
+    try:
+        find_button(other_lesson_tree, label)
+        visible = True
+    except AssertionError:
+        visible = False
+    ok(not visible, f"其他老师的课不显示「{label}」")
+ok(find_text(other_lesson_tree, "只读"), "其他老师的课明确标为只读")
+other_comment = next(
+    c
+    for c in walk(other_lesson_tree)
+    if isinstance(c, ft.TextField) and "课评" in str(c.hint_text or "")
+)
+ok(other_comment.read_only, "其他老师的课评只读")
+app._save_lesson_comment(other_perm_lesson, "越权修改")
+app._save_attendance_flag(other_attendance_id, "attendance", False)
+ok(
+    (db.get_lesson(other_perm_lesson)["comment"] or "") == ""
+    and db.get_attendance(other_attendance_id)["attendance"] == 1,
+    "即使绕过界面调用，也不能改其他老师的课评和点名",
+)
+app.open_lesson(makeup_own_lesson)
+ok(
+    find_button(page.controls[0], "编辑课次") is not None
+    and find_button(page.controls[0], "点名") is not None,
+    "补课由实际上课老师编辑，不受原课程归属限制",
+)
 app.tab = 0
+app.lesson_id = None
 app.open_student(own_student)
 ok(find_text(page.controls[0], "基本档案"), "自己的学员档案默认表格展示")
 ok(find_button(page.controls[0], "编辑") is not None, "老师能进入自己学员的档案编辑")
@@ -2531,6 +2609,9 @@ ok(find_button(page.controls[0], "记一节课") is not None, "老师还能在�
 
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 db.delete_payment(db.list_payments(own_student)[0]["id"])
+db.delete_lesson(makeup_own_lesson)
+db.delete_lesson(other_perm_lesson)
+db.delete_lesson(own_perm_lesson)
 db.delete_student(own_student)
 db.delete_student(other_student)
 db.delete_template(own_course)
@@ -4572,12 +4653,50 @@ ok(
     "学生能在我的页面看到自己的竞赛和考级徽章",
 )
 
+award_course = db.create_template(
+    2,
+    "16:00",
+    60,
+    zhengke["id"],
+    configured_badge_level["id"],
+    name="考级颁发权限课-李老师",
+    teacher_id=portal_teacher,
+)
 db.create_enrollment(
     portal_student,
     configured_badge_level["id"],
     zhengke["id"],
     60,
     owner_teacher_id=portal_teacher,
+    class_id=award_course,
+)
+award_other_teacher = db.create_user(
+    "award_other", "pw123456", "其他颁发老师", db.ROLE_TEACHER
+)
+award_other_student = db.create_student(
+    {
+        "name": "别的课学员",
+        "grade": "四年级",
+        "owner_teacher_id": award_other_teacher,
+        "owner_manual": True,
+    }
+)
+award_other_course = db.create_template(
+    3,
+    "16:00",
+    60,
+    zhengke["id"],
+    configured_badge_level["id"],
+    name="考级颁发权限课-王老师",
+    teacher_id=award_other_teacher,
+)
+db.create_enrollment(
+    award_other_student,
+    configured_badge_level["id"],
+    zhengke["id"],
+    60,
+    owner_teacher_id=award_other_teacher,
+    class_id=award_other_course,
 )
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 app.tab = 6
@@ -4589,6 +4708,30 @@ ok(
     and find_text(page.controls[0], "学生门户娃"),
     "竞技考级目录会列出关联级别和已关联学员",
 )
+portal_teacher_row = db.get_user(portal_teacher)
+app.user = {
+    "id": portal_teacher,
+    "username": portal_teacher_row["username"],
+    "display_name": portal_teacher_row["display_name"],
+    "role": portal_teacher_row["role"],
+}
+app.tab = 6
+app.render()
+app._open_level_award_dialog(configured_badge_level)
+dlg = top_dialog(page)
+ok(
+    find_checkbox(dlg, "学生门户娃") is not None,
+    "课程老师可以给本课学员颁发",
+)
+try:
+    find_checkbox(dlg, "别的课学员")
+    other_course_award_visible = True
+except AssertionError:
+    other_course_award_visible = False
+ok(not other_course_award_visible, "其他课程老师不能给别人课上的学员颁发")
+app._close()
+
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 app._open_level_award_dialog(configured_badge_level)
 dlg = top_dialog(page)
 find_field(dlg, "比赛／考级名称 *").value = "2026 机器人技术等级考试"
@@ -4609,6 +4752,20 @@ ok(
     and level_awards[0]["level_name"] == "3级"
     and level_awards[0]["result"] == "良好",
     "目录里可以一次为本场关联学员颁发结果",
+)
+participant_teachers = {
+    row["id"]: row["teacher_ids"]
+    for row in db.list_badge_level_participants(configured_badge_level["id"])
+}
+award_teachers = {
+    row["student_id"]: row["teacher_ids"]
+    for row in db.list_level_badges(configured_badge_level["id"])
+}
+ok(
+    participant_teachers[portal_student] == [portal_teacher]
+    and participant_teachers[award_other_student] == [award_other_teacher]
+    and award_teachers[portal_student] == [portal_teacher],
+    "竞技考级关联和颁发记录都归对应课程老师",
 )
 db.save_badge_awards_for_level(
     configured_badge_level["id"],
@@ -4640,6 +4797,10 @@ ok(not unlinked_award_allowed, "没有关联该级别的学员不能从目录批
 db.delete_student(unlinked_student)
 
 db.delete_lesson(portal_lesson)
+db.delete_template(award_other_course)
+db.delete_template(award_course)
+db.delete_student(award_other_student)
+db.delete_user(award_other_teacher)
 db.delete_user(student_login["id"])
 db.delete_student(portal_student)
 db.delete_level(configured_badge_level["id"], force=True)

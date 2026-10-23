@@ -238,7 +238,24 @@ def _shrink_photo_with_system_tool(data: bytes, suffix: str) -> tuple[bytes, str
 class FilesMixin:
     """上传与打开附件（ClassHoursApp 的一部分）。"""
 
+    def _can_edit_file_owner(self, owner_type: str, owner_id: int) -> bool:
+        if owner_type == "lesson":
+            lesson = db.get_lesson(int(owner_id))
+        elif owner_type == "attendance":
+            attendance = db.get_attendance(int(owner_id))
+            lesson = (
+                db.get_lesson(int(attendance["lesson_id"]))
+                if attendance is not None
+                else None
+            )
+        else:
+            return True
+        return bool(lesson and self._can_manage_lesson(lesson))
+
     def _set_upload_target(self, owner_type: str, owner_id: int, kind: str) -> None:
+        if not self._can_edit_file_owner(owner_type, owner_id):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         self._upload_target = (owner_type, owner_id, kind)
 
     def _upload_button(
@@ -417,6 +434,10 @@ class FilesMixin:
         """课次详情里的「上传 Markdown」：连同本地图片一起导入。"""
 
         def picked(files: list) -> None:
+            lesson = db.get_lesson(lesson_id)
+            if lesson is None or not self._can_manage_lesson(lesson):
+                self._toast("这节课由其他老师上课，只能查看")
+                return
             result = self._prepare_markdown_upload(
                 files, prefix=f"planimg_l{lesson_id}"
             )
@@ -439,6 +460,10 @@ class FilesMixin:
                 )
 
         def open_picker(e) -> None:
+            lesson = db.get_lesson(lesson_id)
+            if lesson is None or not self._can_manage_lesson(lesson):
+                self._toast("这节课由其他老师上课，只能查看")
+                return
             self._files_callback = picked
 
         return ft.Button(
@@ -449,7 +474,7 @@ class FilesMixin:
             on_click=open_picker,
         )
 
-    def _open_photo(self, file_row: dict) -> None:
+    def _open_photo(self, file_row: dict, *, editable: bool = True) -> None:
         width = min(520, (self.page.width or 900) - 100)
         dlg = ft.AlertDialog(
             modal=True,
@@ -459,10 +484,16 @@ class FilesMixin:
                 width=width,
             ),
             actions=[
-                ft.TextButton(
-                    "删除",
-                    icon=ft.Icons.DELETE_OUTLINE,
-                    on_click=lambda e: self._delete_file_and_close(file_row),
+                *(
+                    [
+                        ft.TextButton(
+                            "删除",
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            on_click=lambda e: self._delete_file_and_close(file_row),
+                        )
+                    ]
+                    if editable
+                    else []
                 ),
                 ft.TextButton("关闭", on_click=self._close),
             ],
@@ -475,6 +506,12 @@ class FilesMixin:
         )
 
     def _delete_file_and_close(self, file_row: dict) -> None:
+        if not self._can_edit_file_owner(
+            file_row.get("owner_type") or "",
+            int(file_row.get("owner_id") or 0),
+        ):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         db.delete_file(file_row["id"])
         self.page.pop_dialog()
         self.render()
@@ -487,6 +524,7 @@ class FilesMixin:
         owner_type: str = "attendance",
         add_label: str = "加照片",
         action=None,
+        editable: bool = True,
     ) -> ft.Row:
         thumbs = []
         for photo in photos:
@@ -499,22 +537,25 @@ class FilesMixin:
                         fit=ft.BoxFit.COVER,
                         border_radius=8,
                     ),
-                    on_click=lambda e, row=photo: self._open_photo(row),
+                    on_click=lambda e, row=photo: self._open_photo(
+                        row, editable=editable
+                    ),
                     ink=True,
                     border_radius=8,
                     tooltip=photo["filename"],
                 )
             )
-        thumbs.append(
-            self._upload_button(
-                add_label,
-                owner_type,
-                owner_id,
-                "照片",
-                images_only=True,
-                icon=ft.Icons.ADD_A_PHOTO,
+        if editable:
+            thumbs.append(
+                self._upload_button(
+                    add_label,
+                    owner_type,
+                    owner_id,
+                    "照片",
+                    images_only=True,
+                    icon=ft.Icons.ADD_A_PHOTO,
+                )
             )
-        )
         if action is not None:
             thumbs.append(action)
         return ft.Row(thumbs, spacing=8, wrap=True, run_spacing=8)
@@ -774,6 +815,9 @@ class FilesMixin:
         if a is None or lesson is None:
             self._toast("这条点名记录找不到了")
             return
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         # 孩子自己的照片放前面，全班合影补在后面。一张全班照传一次，
         # 每个孩子的海报都能用上，不用挨个重复上传。
         photos = db.list_files("attendance", attendance_id, "照片")
@@ -898,6 +942,9 @@ class FilesMixin:
         fresh = db.get_lesson(int(lesson["id"]))
         if fresh is not None:
             lesson = fresh
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         photos = db.list_files("lesson", int(lesson["id"]), "照片")
         if not (lesson.get("comment") or "").strip() and not photos:
             self._toast("这节课还没有课评和课堂照片，先写一点再做海报")

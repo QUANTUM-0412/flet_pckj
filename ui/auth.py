@@ -215,6 +215,14 @@ class AuthMixin:
             and self._can_manage_teacher(course_data.get("teacher_id"))
         )
 
+    def _can_manage_lesson(self, lesson: dict | None) -> bool:
+        """课次以实际上课老师为准；补课也看补课老师本人。"""
+        lesson_data = dict(lesson) if lesson is not None else {}
+        return bool(
+            lesson_data
+            and self._can_manage_teacher(lesson_data.get("teacher_id"))
+        )
+
     def _can_manage_student(self, student_id: int | None) -> bool:
         if self.is_admin():
             return True

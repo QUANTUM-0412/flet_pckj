@@ -17,6 +17,18 @@ class BadgesMixin:
     def _directory_category_label(category: str) -> str:
         return "竞技" if category == "竞赛" else category
 
+    def _can_award_badge_student(self, item: dict) -> bool:
+        if self.is_admin():
+            return True
+        me = self._my_user_id()
+        return bool(
+            me
+            and int(me) in {
+                int(teacher_id)
+                for teacher_id in (item.get("teacher_ids") or [])
+            }
+        )
+
     def _badge_directory_view(self) -> ft.Control:
         levels = [
             level
@@ -68,7 +80,8 @@ class BadgesMixin:
                 self._card(
                     ft.Text(
                         "这里按等级汇总已关联的学员。报名、缴费或上过对应课程的学员会自动出现；"
-                        "比赛结束或考级完成后，点「本场颁发」一次登记每人的结果。",
+                        "比赛结束或考级完成后，点「本场颁发」一次登记每人的结果。"
+                        "谁上的课谁颁发，其他老师只读。",
                         size=12,
                         color=ft.Colors.GREY_700,
                     )
@@ -89,7 +102,7 @@ class BadgesMixin:
         manageable = [
             student
             for student in participants
-            if self._can_manage_student(student["id"])
+            if self._can_award_badge_student(student)
         ]
         detail = " · ".join(
             part
@@ -242,7 +255,7 @@ class BadgesMixin:
     def _level_award_row(self, badge: dict) -> ft.Control:
         bgcolor, color = self._badge_colors(badge)
         actions: list[ft.Control] = []
-        if self._can_manage_student(int(badge["student_id"])):
+        if self._can_award_badge_student(badge):
             actions = [
                 ft.IconButton(
                     ft.Icons.EDIT,
@@ -296,7 +309,7 @@ class BadgesMixin:
         manageable = [
             student
             for student in participants
-            if self._can_manage_student(student["id"])
+            if self._can_award_badge_student(student)
         ]
         if not manageable:
             self._toast("这个级别里没有你可以颁发的学员")

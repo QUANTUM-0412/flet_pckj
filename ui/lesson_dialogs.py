@@ -25,8 +25,17 @@ class LessonDialogsMixin:
     def _open_lesson_dialog(self, lesson: dict | None = None) -> None:
         levels = db.list_levels(active_only=True)
         class_types = db.list_class_types()
-        classes = db.list_templates()
         editing = lesson is not None
+        if editing and not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        my_teacher_id = self._my_user_id()
+        classes = [
+            course
+            for course in db.list_templates()
+            if self.is_admin()
+            or int(course.get("teacher_id") or 0) == int(my_teacher_id or 0)
+        ]
 
         # 新记一节课：默认就用"你正在看的那天"（在课程页翻到哪天就是哪天），
         # 没翻过就是今天。旁边还有个「今天」按钮随手切回来。
@@ -91,6 +100,9 @@ class LessonDialogsMixin:
             ),
             width=DIALOG_WIDTH,
         )
+        if not self.is_admin():
+            teacher_dd.disabled = True
+            teacher_dd.value = str(my_teacher_id or "")
         # 新记一节课：默认只排上、先不点名，等上完课点「点名」才算课时。
         # 只有当场就要算数的（比如补录今天就上完的课），才勾「现在就点名」。
         immediate = None if editing else ft.Checkbox(
@@ -307,6 +319,9 @@ class LessonDialogsMixin:
         )
 
     def _open_add_students_dialog(self, lesson: dict) -> None:
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         have = {a["student_id"] for a in db.list_attendance(lesson["id"])}
         # 这节课的等级已经定了，就只列这个级别的孩子，
         # 免得从别的级别里挑人挑错（要挑也能把下面的开关打开）
