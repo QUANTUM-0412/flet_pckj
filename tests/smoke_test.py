@@ -1019,6 +1019,37 @@ def package_items(package: dict) -> list[dict]:
     ]
 
 
+full_year_hour = next(
+    h["id"] for h in db.list_hour_types() if h["name"] == "全年"
+)
+full_year_package_id = db.save_course_package(
+    None,
+    "全年 3000 元课包",
+    3000,
+    [{"hour_type_id": full_year_hour, "hours": 24}],
+)
+full_year_package = db.get_course_package(full_year_package_id)
+ok(
+    db.voucher_plan(3000, package_selected=True, has_regular=False) == (0.0, 0),
+    "不含正课的固定课包即使满 3000 元也不送券",
+)
+full_year_kid = db.create_student({"name": "全年券测试", "grade": "二年级"})
+db.create_payment(
+    full_year_kid,
+    "2026-10-01",
+    package_items(full_year_package),
+    package_id=full_year_package["id"],
+)
+ok(
+    db.list_vouchers(full_year_kid) == [],
+    "全年课包实际缴费不会生成代金券",
+)
+for p in db.list_payments(student_id=full_year_kid):
+    db.delete_payment(p["id"])
+db.delete_student(full_year_kid)
+db.delete_course_package(full_year_package_id)
+
+
 v_first = db.create_payment(
     vou_kid,
     "2026-10-01",

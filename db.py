@@ -308,7 +308,8 @@ CREATE TABLE IF NOT EXISTS course_package_items (
 );
 
 -- 缴费：一笔钱买了哪种课时
--- 代金券：固定课包满 3000 元才送一批（10 张，面额 = 课包价格 ÷ 10，24 个月有效），
+-- 代金券：满 3000 元且含正课课时的固定课包才送一批
+-- （10 张，面额 = 课包价格 ÷ 10，24 个月有效），
 -- 以后每次缴费最多用掉 1 张。放在 payments 前面建，好让外键指得着。
 CREATE TABLE IF NOT EXISTS vouchers (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6405,12 +6406,19 @@ def _validate_package_payment(
     if row is None:
         raise ValueError("找不到这个固定课包")
     package = dict(row)
-    expected = {
-        int(r["hour_type_id"]): float(r["hours"])
+    package["items"] = [
+        dict(r)
         for r in con.execute(
-            "SELECT hour_type_id, hours FROM course_package_items WHERE package_id = ?",
+            """SELECT pi.*, ht.name AS hour_type_name
+                 FROM course_package_items pi
+                 JOIN hour_types ht ON ht.id = pi.hour_type_id
+                WHERE pi.package_id = ?
+                ORDER BY pi.sort, pi.id""",
             (int(package_id),),
-        )
+        ).fetchall()
+    ]
+    expected = {
+        int(r["hour_type_id"]): float(r["hours"]) for r in package["items"]
     }
     package_items = [item for item in clean if item.get("package_item")]
     extra_items = [item for item in clean if not item.get("package_item")]
@@ -6461,7 +6469,7 @@ def create_payment(
     """一笔缴费：总金额由各行相加，行里 amount=0 就是赠送。
 
     用代金券的话：amount 记实收现金，券抵的那部分记在 voucher_amount 里。
-    只有明确选择固定课包且课包价格不低于 3000 元才送券。
+    只有明确选择固定课包、课包价格不低于 3000 元且包含正课课时才送券。
     """
     clean = _clean_payment_items(items)
     if not clean:
@@ -6812,10 +6820,18 @@ def _add_months(day: date, months: int) -> date:
     return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
 
 
-def voucher_plan(base: float, package_selected: bool = False) -> tuple[float, int]:
-    """固定课包满 3000 元才送券：面额 = 课包价格 ÷ 10，一次 10 张。"""
+def voucher_plan(
+    base: float,
+    package_selected: bool = False,
+    has_regular: bool = True,
+) -> tuple[float, int]:
+    """固定课包满 3000 元且含正课才送券：面额 = 课包价格 ÷ 10。"""
     money = float(base or 0)
-    if not package_selected or money < VOUCHER_MIN_PACKAGE_PRICE:
+    if (
+        not package_selected
+        or not has_regular
+        or money < VOUCHER_MIN_PACKAGE_PRICE
+    ):
         return 0.0, 0
     return round(money / VOUCHER_COUNT, 2), VOUCHER_COUNT
 
@@ -6877,10 +6893,16 @@ def issue_vouchers(
     package: dict | None,
     issued_on: str,
 ) -> int | None:
-    """只有固定课包满 3000 元才送券。"""
+    """固定课包满 3000 元且包含正课课时才送券。"""
+    has_regular = any(
+        item.get("hour_type_name") == "正课"
+        and float(item.get("hours") or 0) > 0
+        for item in (package or {}).get("items", [])
+    )
     face, count = voucher_plan(
         float((package or {}).get("price") or 0),
         package_selected=bool(package),
+        has_regular=has_regular,
     )
     if face <= 0 or count <= 0:
         return None

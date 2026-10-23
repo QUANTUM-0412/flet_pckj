@@ -415,7 +415,7 @@ class PaymentsMixin:
                 voucher_dd.value = ""
             if not list_rows:
                 voucher_hint.value = (
-                    "这个孩子还没有可用的代金券（固定课包满 3000 元才送，"
+                    "这个孩子还没有可用的代金券（满 3000 元且含正课的固定课包才送，"
                     "但券可以用在任何一笔缴费上）"
                 )
             if update:
@@ -442,16 +442,27 @@ class PaymentsMixin:
         def issue_text() -> str:
             package = selected_package()
             if not package:
-                return "普通缴费不送代金券；只有选择满 3000 元的固定课包才送"
+                return "普通缴费不送代金券；只有含正课且满 3000 元的固定课包才送"
             face, count = db.voucher_plan(
                 float(package["price"] or 0),
                 package_selected=True,
+                has_regular=any(
+                    item["hour_type_name"] == "正课"
+                    and float(item["hours"] or 0) > 0
+                    for item in package.get("items", [])
+                ),
             )
             if face:
                 return (
                     f"这个课包 {db.num_text(package['price'])} 元 → 送 {count} 张 "
                     f"{db.num_text(face)} 元的代金券（{db.VOUCHER_MONTHS} 个月有效）"
                 )
+            if not any(
+                item["hour_type_name"] == "正课"
+                and float(item["hours"] or 0) > 0
+                for item in package.get("items", [])
+            ):
+                return "这个课包不含正课课时，不送代金券；手里的券照样能抵这笔"
             return (
                 f"这个课包未满 {db.num_text(db.VOUCHER_MIN_PACKAGE_PRICE)} 元，不送代金券；"
                 "手里的券照样能抵这笔"
