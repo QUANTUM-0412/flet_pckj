@@ -4291,8 +4291,33 @@ forum_previews = [
 ok(
     len(forum_previews) == 1
     and forum_previews[0].visible
+    and forum_previews[0].fit == ft.BoxFit.CONTAIN
     and find_text(dlg, "题目截图.png"),
     "论坛选图后显示缩略图和文件名，并只保留一张",
+)
+click(dlg, "查看全图")
+full_preview = top_dialog(page)
+ok(
+    any(
+        isinstance(c, ft.Image)
+        and str(c.src or "").startswith("data:image/")
+        for c in walk(full_preview)
+    ),
+    "发布前可以查看选中图片的全貌",
+)
+app._close()
+click(dlg, "删除图片")
+ok(
+    not forum_previews[0].visible
+    and find_text(dlg, "未选择图片（只能上传 1 张）"),
+    "发布前可以删除已选图片",
+)
+app._files_callback(
+    [FakeFile("题目截图.png", _qr_buf.getvalue())]
+)
+ok(
+    forum_previews[0].visible,
+    "删除图片后可以重新选择并继续发布",
 )
 click(dlg, "发布")
 ok(app._files_callback is None, "发布完成后清理临时图片回调")
