@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 import sqlite3
@@ -340,6 +341,101 @@ ok(
     and find_text(page.controls[0], "3 小时（180 分钟）"),
     "打印 3 小时不用自己换算分钟",
 )
+
+print("2c. 网站工具")
+ok(
+    db.normalize_web_tool_url("scratch.mit.edu") == "https://scratch.mit.edu",
+    "网址省略 https:// 时自动补全",
+)
+try:
+    db.normalize_web_tool_url("javascript:alert(1)")
+    unsafe_url_allowed = True
+except ValueError:
+    unsafe_url_allowed = False
+ok(not unsafe_url_allowed, "网站工具不允许脚本地址")
+
+root_id = app._my_user_id() or 0
+try:
+    db.create_web_tool(999, "无权添加", "example.com")
+    non_root_created_tool = True
+except PermissionError:
+    non_root_created_tool = False
+ok(not non_root_created_tool, "只有 root 能在数据层添加网站工具")
+
+app._goto(8)
+ok(find_text(page.controls[0], "网站工具（0）"), "工具栏有网站工具区域")
+click(page.controls[0], "添加网站")
+dlg = top_dialog(page)
+find_field(dlg, "网站名称 *").value = "Scratch 官网"
+find_field(dlg, "网址 *").value = "scratch.mit.edu"
+click(dlg, "添加网站")
+app._close()
+web_tools = db.list_web_tools()
+ok(
+    len(web_tools) == 1
+    and web_tools[0]["title"] == "Scratch 官网"
+    and web_tools[0]["url"] == "https://scratch.mit.edu",
+    "root 添加的网站会成为一个独立工具",
+)
+ok(
+    find_text(page.controls[0], "Scratch 官网")
+    and any(
+        isinstance(c, ft.IconButton) and c.tooltip == "编辑网站工具"
+        for c in walk(page.controls[0])
+    ),
+    "root 能看到网站工具和编辑入口",
+)
+
+app._open_web_tool_dialog(web_tools[0])
+dlg = top_dialog(page)
+find_field(dlg, "网站名称 *").value = "Scratch 编程"
+click(dlg, "保存修改")
+app._close()
+ok(db.list_web_tools()[0]["title"] == "Scratch 编程", "root 能编辑网站工具")
+
+class FakeBookmarkLauncher:
+    def __init__(self):
+        self.opened = []
+
+    async def launch_url(self, url, web_only_window_name=None):
+        self.opened.append((url, web_only_window_name))
+
+
+original_launcher = app.launcher
+app.launcher = FakeBookmarkLauncher()
+asyncio.run(app._open_web_tool("https://scratch.mit.edu"))
+ok(
+    app.launcher.opened == [("https://scratch.mit.edu", "_blank")],
+    "打开网站工具会交给默认浏览器的新窗口",
+)
+app.launcher = original_launcher
+
+root_user = dict(app.user)
+app.user = {
+    "id": 999,
+    "username": "student-viewer",
+    "display_name": "学生",
+    "role": db.ROLE_STUDENT,
+}
+app.tab = 3
+app.render()
+ok(
+    find_text(page.controls[0], "Scratch 编程")
+    and not any(
+        isinstance(c, ft.IconButton)
+        and c.tooltip in {"编辑网站工具", "删除网站工具"}
+        for c in walk(page.controls[0])
+    ),
+    "普通账号能打开网站工具，但看不到添加、编辑、删除入口",
+)
+try:
+    find_button(page.controls[0], "添加网站")
+    non_root_saw_add = True
+except AssertionError:
+    non_root_saw_add = False
+ok(not non_root_saw_add, "普通账号看不到添加网站按钮")
+app.user = root_user
+db.delete_web_tool(web_tools[0]["id"], root_id)
 app._goto(0)
 
 app._goto(1)

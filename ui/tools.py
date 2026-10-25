@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import flet as ft
 
 import db
-from .common import _tf
+from .common import DIALOG_WIDTH, _tf
 
 
 def print_half_hour_units(duration_minutes) -> int:
@@ -66,6 +66,217 @@ def parse_print_duration(value) -> int:
 
 class ToolsMixin:
     """工具栏页面（ClassHoursApp 的一部分）。"""
+
+    async def _open_web_tool(self, url: str) -> None:
+        await self.launcher.launch_url(url, web_only_window_name="_blank")
+
+    def _open_web_tool_dialog(self, tool: dict | None = None) -> None:
+        if not self.is_admin():
+            self._toast("只有管理员可以维护网站工具")
+            return
+        editing = tool is not None
+        title = _tf(
+            "网站名称 *",
+            (tool or {}).get("title", ""),
+            width=DIALOG_WIDTH,
+            hint_text="例如 Scratch 官网",
+        )
+        url = _tf(
+            "网址 *",
+            (tool or {}).get("url", ""),
+            width=DIALOG_WIDTH,
+            hint_text="example.com 或 https://example.com",
+        )
+
+        def save(e=None) -> None:
+            title.error = None
+            url.error = None
+            try:
+                if editing:
+                    db.update_web_tool(
+                        tool["id"],
+                        self._my_user_id() or 0,
+                        title.value or "",
+                        url.value or "",
+                    )
+                else:
+                    db.create_web_tool(
+                        self._my_user_id() or 0,
+                        title.value or "",
+                        url.value or "",
+                    )
+            except (PermissionError, ValueError) as err:
+                message = str(err)
+                if message == "只有管理员可以维护网站工具":
+                    self._toast(message)
+                elif "名称" in message:
+                    title.error = message
+                    title.update()
+                else:
+                    url.error = message
+                    url.update()
+                return
+            self._finish("网站工具已更新" if editing else "网站工具已添加")
+
+        self._show(
+            self._dialog(
+                "编辑网站工具" if editing else "添加网站工具",
+                self._form_column(
+                    [
+                        title,
+                        url,
+                        ft.Text(
+                            "网址可以省略 https://；所有人都能打开，只有管理员能修改。",
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                        ),
+                    ]
+                ),
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button(
+                        "保存修改" if editing else "添加网站",
+                        on_click=save,
+                    ),
+                ],
+            )
+        )
+
+    def _web_tool_card(self, tool: dict) -> ft.Container:
+        admin_actions = (
+            [
+                ft.IconButton(
+                    ft.Icons.EDIT_OUTLINED,
+                    tooltip="编辑网站工具",
+                    on_click=lambda e, row=tool: self._open_web_tool_dialog(row),
+                ),
+                ft.IconButton(
+                    ft.Icons.DELETE_OUTLINE,
+                    tooltip="删除网站工具",
+                    on_click=lambda e, row=tool: self._confirm(
+                        "删除网站工具",
+                        f"确定删除「{row['title']}」吗？",
+                        lambda: db.delete_web_tool(
+                            row["id"], self._my_user_id() or 0
+                        ),
+                        done_text="网站工具已删除",
+                    ),
+                ),
+            ]
+            if self.is_admin()
+            else []
+        )
+        return ft.Container(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Container(
+                                ft.Icon(
+                                    ft.Icons.LANGUAGE,
+                                    size=20,
+                                    color=ft.Colors.BLUE_700,
+                                ),
+                                width=36,
+                                height=36,
+                                border_radius=8,
+                                bgcolor=ft.Colors.BLUE_50,
+                                alignment=ft.Alignment.CENTER,
+                            ),
+                            ft.Text(
+                                "网站工具",
+                                size=11,
+                                color=ft.Colors.GREY_600,
+                                expand=True,
+                            ),
+                            *admin_actions,
+                        ],
+                        spacing=4,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        tool["title"],
+                        size=16,
+                        weight=ft.FontWeight.W_600,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    ft.Text(
+                        tool["url"],
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Button(
+                                "打开网站",
+                                icon=ft.Icons.OPEN_IN_NEW,
+                                on_click=lambda e, row=tool: self.page.run_task(
+                                    self._open_web_tool, row["url"]
+                                ),
+                            )
+                        ],
+                        alignment=ft.MainAxisAlignment.END,
+                    ),
+                ],
+                spacing=8,
+                tight=True,
+            ),
+            padding=12,
+            border_radius=12,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(1, ft.Colors.GREY_300),
+        )
+
+    def _web_tools_view(self) -> ft.Control:
+        tools = db.list_web_tools()
+        if tools:
+            body: ft.Control = ft.ResponsiveRow(
+                [
+                    ft.Container(
+                        self._web_tool_card(tool),
+                        col={"xs": 12, "md": 6},
+                    )
+                    for tool in tools
+                ],
+                spacing=12,
+                run_spacing=12,
+            )
+        else:
+            body = ft.Container(
+                ft.Text(
+                    (
+                        "还没有网站工具。点右上角「添加网站」，每个网址都会成为一张独立工具卡。"
+                        if self.is_admin()
+                        else "管理员还没有添加网站工具。"
+                    ),
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                ),
+                padding=14,
+                border_radius=10,
+                bgcolor=ft.Colors.GREY_50,
+            )
+        return ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text(
+                            f"网站工具（{len(tools)}）",
+                            size=15,
+                            weight=ft.FontWeight.W_600,
+                            expand=True,
+                        ),
+                        ft.Text("全机构共用 · 仅管理员可维护", size=11, color=ft.Colors.GREY_500),
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                body,
+            ],
+            spacing=8,
+        )
 
     def _tools_view(self) -> ft.Control:
         weight = _tf(
@@ -185,7 +396,18 @@ class ToolsMixin:
             [
                 self._header(
                     "工具栏",
-                    "常用计算工具集中在这里；本工具只计算，不会自动扣除积分。",
+                    "3D 打印计算器和全机构共用的网站工具。",
+                    (
+                        [
+                            ft.Button(
+                                "添加网站",
+                                icon=ft.Icons.ADD,
+                                on_click=lambda e: self._open_web_tool_dialog(),
+                            )
+                        ]
+                        if self.is_admin()
+                        else None
+                    ),
                 ),
                 self._section(
                     "3D 打印积分",
@@ -217,6 +439,7 @@ class ToolsMixin:
                         spacing=4,
                     ),
                 ),
+                self._web_tools_view(),
             ],
             spacing=12,
         )

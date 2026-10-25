@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlsplit, urlunsplit
 
 from slugify import slugify
 
@@ -479,6 +480,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS web_tools (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_by_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    title               TEXT    NOT NULL DEFAULT '',
+    url                 TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT '',
+    updated_at          TEXT    NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS schedule_templates (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT    NOT NULL DEFAULT '',
@@ -528,6 +538,7 @@ CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_type, owner_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_weekday ON schedule_templates(weekday);
 CREATE INDEX IF NOT EXISTS idx_payment_items ON payment_items(payment_id);
 CREATE INDEX IF NOT EXISTS idx_course_skips ON course_skips(skip_date);
+CREATE INDEX IF NOT EXISTS idx_web_tools_updated ON web_tools(updated_at);
 """
 
 
@@ -3349,6 +3360,107 @@ def set_meta(key: str, value: str) -> None:
         con.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", (key, value or "")
         )
+
+
+def normalize_web_tool_url(value: str) -> str:
+    """补全缺少的 https://，并只允许普通网页链接。"""
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("请填写网址")
+    if any(char.isspace() for char in text):
+        raise ValueError("网址里不能有空格")
+    if "://" not in text:
+        host_part = text.split("/", 1)[0]
+        if ":" in host_part:
+            _, port = host_part.rsplit(":", 1)
+            if not port.isdigit():
+                raise ValueError("请填写 http:// 或 https:// 开头的网页地址")
+        text = f"https://{text}"
+    parsed = urlsplit(text)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("请填写 http:// 或 https:// 开头的网页地址")
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def _web_tool_values(title: str, url: str) -> tuple[str, str]:
+    clean_title = str(title or "").strip()
+    if not clean_title:
+        raise ValueError("请填写网站名称")
+    if len(clean_title) > 80:
+        raise ValueError("网站名称最多 80 个字")
+    return clean_title, normalize_web_tool_url(url)
+
+
+def _require_root_for_web_tool(con: sqlite3.Connection, user_id: int) -> int:
+    try:
+        actor_id = int(user_id)
+    except (TypeError, ValueError) as err:
+        raise PermissionError("只有管理员可以维护网站工具") from err
+    row = con.execute("SELECT role FROM users WHERE id = ?", (actor_id,)).fetchone()
+    if row is None or row["role"] != ROLE_ROOT:
+        raise PermissionError("只有管理员可以维护网站工具")
+    return actor_id
+
+
+def list_web_tools() -> list[dict]:
+    """所有账号都能看到并使用网站工具。"""
+    with _connect() as con:
+        return [
+            dict(row)
+            for row in con.execute(
+                """SELECT *
+                     FROM web_tools
+                    ORDER BY updated_at DESC, id DESC"""
+            ).fetchall()
+        ]
+
+
+def create_web_tool(user_id: int, title: str, url: str) -> int:
+    clean_title, clean_url = _web_tool_values(title, url)
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as con:
+        actor_id = _require_root_for_web_tool(con, user_id)
+        cur = con.execute(
+            """INSERT INTO web_tools(
+                   created_by_user_id, title, url, created_at, updated_at
+               ) VALUES(?, ?, ?, ?, ?)""",
+            (actor_id, clean_title, clean_url, now_text, now_text),
+        )
+        return int(cur.lastrowid)
+
+
+def update_web_tool(tool_id: int, user_id: int, title: str, url: str) -> None:
+    clean_title, clean_url = _web_tool_values(title, url)
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as con:
+        _require_root_for_web_tool(con, user_id)
+        cur = con.execute(
+            """UPDATE web_tools
+                  SET title = ?, url = ?, updated_at = ?
+                WHERE id = ?""",
+            (clean_title, clean_url, now_text, int(tool_id)),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("找不到这个网站工具")
+
+
+def delete_web_tool(tool_id: int, user_id: int) -> None:
+    with _connect() as con:
+        _require_root_for_web_tool(con, user_id)
+        cur = con.execute(
+            "DELETE FROM web_tools WHERE id = ?",
+            (int(tool_id),),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("找不到这个网站工具")
 
 
 def next_lesson_for(student_id: int, day: str, start_time: str = "") -> dict | None:
