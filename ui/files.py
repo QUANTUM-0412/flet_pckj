@@ -253,9 +253,9 @@ class FilesMixin:
         return bool(lesson and self._can_manage_lesson(lesson))
 
     def _set_upload_target(self, owner_type: str, owner_id: int, kind: str) -> None:
-        if not self._can_edit_file_owner(owner_type, owner_id):
-            self._toast("这节课由其他老师上课，只能查看")
-            return
+        # 文件选择器会在这次点击里立刻打开，不能先做数据库往返；
+        # 否则用户很快选完文件时，上传目标还没写回来，文件会被丢弃。
+        # 真正的权限校验放在收到文件之后。
         self._upload_target = (owner_type, owner_id, kind)
 
     def _upload_button(
@@ -299,6 +299,9 @@ class FilesMixin:
         if not target:
             return
         owner_type, owner_id, kind = target
+        if not self._can_edit_file_owner(owner_type, owner_id):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
         saved = 0
         for f in files:
             data = getattr(f, "bytes", None)

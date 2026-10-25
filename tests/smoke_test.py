@@ -1456,7 +1456,12 @@ ok(db.file_url(photos[0]).endswith(photos[0]["stored_name"]), "图片地址拼�
 ok(db.human_size(1234) == "1 KB", "文件大小显示成人话")
 
 # 全班合影挂在课次上：传一次，所有孩子都能用
-app._set_upload_target("lesson", lesson_file, "照片")
+class_photo_button = find_button(page.controls[0], "加课堂照片")
+class_photo_button.on_click(Evt(class_photo_button))
+ok(
+    app._upload_target == ("lesson", lesson_file, "照片"),
+    "点课堂照片按钮会立即记下上传目标",
+)
 app._on_files_picked(FakeEvent([FakeFile("全班合影.jpg", b"c" * 777)]))
 class_photos = db.list_files("lesson", lesson_file, "照片")
 ok(
@@ -2481,6 +2486,14 @@ ok(
     (db.get_lesson(other_perm_lesson)["comment"] or "") == ""
     and db.get_attendance(other_attendance_id)["attendance"] == 1,
     "即使绕过界面调用，也不能改其他老师的课评和点名",
+)
+app._set_upload_target("lesson", other_perm_lesson, "照片")
+app._on_files_picked(
+    FakeEvent([FakeFile("越权班级照片.jpg", b"not-allowed")])
+)
+ok(
+    db.list_files("lesson", other_perm_lesson, "照片") == [],
+    "其他老师选完照片后仍会被权限校验拦住",
 )
 app.open_lesson(makeup_own_lesson)
 ok(
