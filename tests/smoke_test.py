@@ -318,8 +318,8 @@ app._goto(8)
 page.width = 1600
 app.render()
 ok(
-    any(isinstance(c, ft.Container) and c.width == 760 for c in walk(page.controls[0])),
-    "工具页在宽屏上保持紧凑宽度，不会被无限拉长",
+    any(isinstance(c, ft.ResponsiveRow) for c in walk(page.controls[0])),
+    "工具页会利用宽屏空间，输入和结果分区展示",
 )
 page.width = 1200
 app.render()

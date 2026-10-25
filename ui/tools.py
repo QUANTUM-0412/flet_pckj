@@ -68,14 +68,6 @@ class ToolsMixin:
     """工具栏页面（ClassHoursApp 的一部分）。"""
 
     def _tools_view(self) -> ft.Control:
-        content_width = min(
-            760,
-            max(
-                320,
-                (self.page.width or 1000)
-                - (124 if self.is_wide() else 28),
-            ),
-        )
         weight = _tf(
             "耗材重量（克）",
             hint_text="例如 12.5",
@@ -200,8 +192,20 @@ class ToolsMixin:
                     ft.Column(
                         [
                             rules,
-                            form,
-                            result_panel,
+                            ft.ResponsiveRow(
+                                [
+                                    ft.Container(
+                                        form,
+                                        col={"xs": 12, "md": 7},
+                                    ),
+                                    ft.Container(
+                                        result_panel,
+                                        col={"xs": 12, "md": 5},
+                                    ),
+                                ],
+                                spacing=12,
+                                run_spacing=12,
+                            ),
                         ],
                         spacing=12,
                     ),
@@ -216,7 +220,4 @@ class ToolsMixin:
             ],
             spacing=12,
         )
-        return ft.Row(
-            [ft.Container(content, width=content_width)],
-            alignment=ft.MainAxisAlignment.CENTER,
-        )
+        return content
