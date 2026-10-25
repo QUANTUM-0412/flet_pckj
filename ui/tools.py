@@ -69,7 +69,7 @@ class ToolsMixin:
 
     def _tools_view(self) -> ft.Control:
         content_width = min(
-            1080,
+            760,
             max(
                 320,
                 (self.page.width or 1000)
@@ -131,15 +131,6 @@ class ToolsMixin:
             result.update()
             formula.update()
 
-        input_fields = ft.ResponsiveRow(
-            [
-                ft.Container(weight, col={"xs": 12, "md": 6}),
-                ft.Container(duration, col={"xs": 12, "md": 6}),
-            ],
-            spacing=8,
-            run_spacing=8,
-        )
-
         def rule_chip(text: str) -> ft.Container:
             return ft.Container(
                 ft.Text(text, size=12, color=ft.Colors.GREY_700),
@@ -165,7 +156,8 @@ class ToolsMixin:
         )
         form = ft.Column(
             [
-                input_fields,
+                weight,
+                duration,
                 duration_help,
                 ft.Row(
                     [
@@ -208,20 +200,8 @@ class ToolsMixin:
                     ft.Column(
                         [
                             rules,
-                            ft.ResponsiveRow(
-                                [
-                                    ft.Container(
-                                        form,
-                                        col={"xs": 12, "md": 7},
-                                    ),
-                                    ft.Container(
-                                        result_panel,
-                                        col={"xs": 12, "md": 5},
-                                    ),
-                                ],
-                                spacing=12,
-                                run_spacing=12,
-                            ),
+                            form,
+                            result_panel,
                         ],
                         spacing=12,
                     ),
