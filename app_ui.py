@@ -29,6 +29,7 @@ from ui.settings import SettingsMixin
 from ui.forum import ForumMixin
 from ui.student_portal import StudentPortalMixin
 from ui.badges import BadgesMixin
+from ui.tools import ToolsMixin
 
 
 class ClassHoursApp(
@@ -51,6 +52,7 @@ class ClassHoursApp(
     ForumMixin,
     StudentPortalMixin,
     BadgesMixin,
+    ToolsMixin,
 ):
     """整个应用的界面，由 ui/ 里各个功能模块拼成。"""
 

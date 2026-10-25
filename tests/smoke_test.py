@@ -22,6 +22,10 @@ import flet as ft  # noqa: E402
 
 import db  # noqa: E402
 from app_ui import ClassHoursApp  # noqa: E402
+from ui.tools import (  # noqa: E402
+    calculate_3d_print_points,
+    print_half_hour_units,
+)
 
 # 自检里没有真的页面，控件上的 .update() 直接跳过
 ft.BaseControl.update = lambda self: None
@@ -107,6 +111,13 @@ def find_button(control, text: str):
         if isinstance(c, (ft.Button, ft.TextButton)) and c.content == text:
             return c
     raise AssertionError(f"找不到按钮：{text}")
+
+
+def find_key(control, key: str):
+    for c in walk(control):
+        if c.key == key:
+            return c
+    raise AssertionError(f"找不到控件：{key}")
 
 
 def find_checkbox(control, name_prefix: str) -> ft.Checkbox:
@@ -258,6 +269,8 @@ app._goto(6)
 ok(find_text(page.controls[0], "竞技与考级"), "点「竞技」能切过去")
 app._goto(7)
 ok(find_text(page.controls[0], "课型与扣课时规则"), "点「课程设置」能切过去")
+app._goto(8)
+ok(find_text(page.controls[0], "工具栏"), "点「工具」能切过去")
 app._goto(0)
 ok(find_text(page.controls[0], "还没有学员"), "点「学员」能切回来")
 
@@ -269,6 +282,7 @@ ok(
         "试听",
         "缴费",
         "论坛",
+        "工具",
         "报表",
         "竞技",
         "设置",
@@ -277,6 +291,32 @@ ok(
 )
 ok("上课记录" not in menus, "「上课记录」栏目并入「课程」了")
 ok("积分" not in menus, "积分不再单占一个菜单（挪进学员页和报表页了）")
+
+print("2b. 3D 打印积分工具")
+ok(print_half_hour_units(1) == 1, "不足半小时按 1 档")
+ok(print_half_hour_units(30) == 1, "正好半小时按 1 档")
+ok(print_half_hour_units(31) == 2, "超过半小时按 2 档")
+ok(print_half_hour_units(60) == 2, "1 小时按 2 档")
+ok(print_half_hour_units(61) == 3, "超过 1 小时按 3 档")
+ok(calculate_3d_print_points(10, 30) == 100, "10 克打印半小时消耗 100 积分")
+ok(calculate_3d_print_points(10, 61) == 300, "10 克打印 61 分钟消耗 300 积分")
+try:
+    calculate_3d_print_points(10, 0)
+    zero_duration_allowed = True
+except ValueError:
+    zero_duration_allowed = False
+ok(not zero_duration_allowed, "打印时长必须大于 0")
+
+app._goto(8)
+find_field(page.controls[0], "耗材重量（克）").value = "12.5"
+find_field(page.controls[0], "打印时长（分钟）").value = "61"
+click(page.controls[0], "计算积分")
+ok(
+    find_text(page.controls[0], "375 积分")
+    and find_text(page.controls[0], "12.5 克 × 10 积分 × 3 个半小时"),
+    "工具栏能按重量和半小时档数算出积分",
+)
+app._goto(0)
 
 app._goto(1)
 ok(
@@ -4197,7 +4237,13 @@ app.user = {
     "student_id": student_login["student_id"],
 }
 menus = [label for _icon, _selected, label in app._nav_items()]
-ok(menus == ["我的", "课程", "论坛"], "学生登录后只有我的、课程、论坛")
+ok(
+    menus == ["我的", "课程", "论坛", "工具"],
+    "学生登录后只有我的、课程、论坛和工具",
+)
+app.tab = 3
+app.render()
+ok(find_text(page.controls[0], "3D 打印积分"), "学生也能使用工具栏")
 app.tab = 0
 app.render()
 ok(find_text(page.controls[0], "学生门户娃"), "学生能看到自己的信息")
@@ -4290,25 +4336,35 @@ forum_previews = [
 ]
 ok(
     len(forum_previews) == 1
-    and forum_previews[0].visible
     and forum_previews[0].fit == ft.BoxFit.CONTAIN
-    and find_text(dlg, "题目截图.png"),
-    "论坛选图后显示缩略图和文件名，并只保留一张",
+    and find_key(dlg, "forum-selected-image-holder").visible,
+    "论坛选图后显示缩略图，并只保留一张",
 )
-click(dlg, "查看全图")
-full_preview = top_dialog(page)
+preview_surface = find_key(dlg, "forum-selected-image-preview")
+remove_image_button = find_key(dlg, "forum-selected-image-delete")
 ok(
-    any(
-        isinstance(c, ft.Image)
-        and str(c.src or "").startswith("data:image/")
-        for c in walk(full_preview)
-    ),
+    preview_surface.on_click is not None
+    and isinstance(remove_image_button, ft.IconButton)
+    and remove_image_button.tooltip == "删除图片",
+    "缩略图本身可以点开，右上角有删除图标，没有多余文字按钮",
+)
+preview_surface.on_click(None)
+full_preview = top_dialog(page)
+full_preview_image = next(
+    c
+    for c in walk(full_preview)
+    if isinstance(c, ft.Image) and str(c.src or "").startswith("data:image/")
+)
+ok(
+    find_text(full_preview, "查看图片")
+    and full_preview_image.fit == ft.BoxFit.CONTAIN
+    and full_preview_image.height is not None,
     "发布前可以查看选中图片的全貌",
 )
 app._close()
-click(dlg, "删除图片")
+remove_image_button.on_click(None)
 ok(
-    not forum_previews[0].visible
+    not find_key(dlg, "forum-selected-image-holder").visible
     and find_text(dlg, "未选择图片（只能上传 1 张）"),
     "发布前可以删除已选图片",
 )
@@ -4316,7 +4372,7 @@ app._files_callback(
     [FakeFile("题目截图.png", _qr_buf.getvalue())]
 )
 ok(
-    forum_previews[0].visible,
+    find_key(dlg, "forum-selected-image-holder").visible,
     "删除图片后可以重新选择并继续发布",
 )
 click(dlg, "发布")

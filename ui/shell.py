@@ -19,6 +19,7 @@ class ShellMixin:
                 (ft.Icons.HOME_OUTLINED, ft.Icons.HOME, "我的"),
                 (ft.Icons.SCHOOL_OUTLINED, ft.Icons.SCHOOL, "课程"),
                 (ft.Icons.FORUM_OUTLINED, ft.Icons.FORUM, "论坛"),
+                (ft.Icons.CALCULATE_OUTLINED, ft.Icons.CALCULATE, "工具"),
             ]
         return [
             (ft.Icons.PEOPLE_OUTLINE, ft.Icons.PEOPLE, "学员"),
@@ -26,6 +27,7 @@ class ShellMixin:
             (ft.Icons.PERSON_SEARCH, ft.Icons.PERSON_SEARCH, "试听"),
             (ft.Icons.PAYMENTS_OUTLINED, ft.Icons.PAYMENTS, "缴费"),
             (ft.Icons.FORUM_OUTLINED, ft.Icons.FORUM, "论坛"),
+            (ft.Icons.CALCULATE_OUTLINED, ft.Icons.CALCULATE, "工具"),
             (ft.Icons.INSIGHTS_OUTLINED, ft.Icons.INSIGHTS, "报表"),
             (
                 ft.Icons.WORKSPACE_PREMIUM_OUTLINED,
@@ -34,6 +36,12 @@ class ShellMixin:
             ),
             (ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "设置"),
         ]
+
+    def _nav_tab_indices(self) -> list[int]:
+        """导航顺序和页签编号分开，新增工具时不打乱已有页面。"""
+        if self.is_student():
+            return [0, 1, 2, 3]
+        return [0, 1, 2, 3, 4, 8, 5, 6, 7]
 
     def render(self) -> None:
         self.page.clean()
@@ -121,11 +129,12 @@ class ShellMixin:
         )
 
     def _rail(self) -> ft.Container:
+        items = list(zip(self._nav_tab_indices(), self._nav_items()))
         return ft.Container(
             content=ft.Column(
                 [
                     self._nav_button(i, ic, sic, lb, True)
-                    for i, (ic, sic, lb) in enumerate(self._nav_items())
+                    for i, (ic, sic, lb) in items
                 ],
                 spacing=8,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -136,11 +145,12 @@ class ShellMixin:
         )
 
     def _bottom_bar(self) -> ft.Container:
+        items = list(zip(self._nav_tab_indices(), self._nav_items()))
         return ft.Container(
             content=ft.Row(
                 [
                     self._nav_button(i, ic, sic, lb, False)
-                    for i, (ic, sic, lb) in enumerate(self._nav_items())
+                    for i, (ic, sic, lb) in items
                 ],
                 spacing=8,
             ),
@@ -154,6 +164,8 @@ class ShellMixin:
                 return self._student_course_view()
             if self.tab == 2:
                 return self._forum_view()
+            if self.tab == 3:
+                return self._tools_view()
             return self._student_portal_view()
         if self.tab == 0:
             # 从学员页点进某节课，看课次详情；返回就回到这个学员
@@ -179,7 +191,9 @@ class ShellMixin:
             return self._reports_view()
         if self.tab == 6:
             return self._badge_directory_view()
-        return self._settings_view()
+        if self.tab == 7:
+            return self._settings_view()
+        return self._tools_view()
 
     def open_lesson(self, lesson_id: int | None) -> None:
         self.lesson_id = lesson_id

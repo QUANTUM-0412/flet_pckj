@@ -606,38 +606,48 @@ class ForumMixin:
             height=180,
             fit=ft.BoxFit.CONTAIN,
             border_radius=8,
-            visible=False,
         )
-        image_preview_name = ft.Text(
-            "",
-            size=11,
-            color=ft.Colors.GREY_600,
-            max_lines=2,
-            overflow=ft.TextOverflow.ELLIPSIS,
-            visible=False,
+        image_preview_surface = ft.Container(
+            image_preview,
+            width=DIALOG_WIDTH - 20,
+            height=180,
+            alignment=ft.Alignment.CENTER,
+            border_radius=8,
+            on_click=lambda e: open_preview_dialog(),
+            tooltip="点击查看全图",
+            key="forum-selected-image-preview",
         )
-        image_action_row = ft.Row(
+        remove_image_button = ft.IconButton(
+            key="forum-selected-image-delete",
+            icon=ft.Icons.CLOSE,
+            icon_color=ft.Colors.WHITE,
+            icon_size=18,
+            bgcolor=ft.Colors.with_opacity(0.78, ft.Colors.BLACK),
+            tooltip="删除图片",
+            width=34,
+            height=34,
+            padding=0,
+            on_click=lambda e: clear_selected_image(),
+        )
+        image_stack = ft.Stack(
             [
-                ft.TextButton(
-                    "查看全图",
-                    icon=ft.Icons.ZOOM_OUT_MAP,
-                    on_click=lambda e: open_preview_dialog(),
-                ),
-                ft.TextButton(
-                    "删除图片",
-                    icon=ft.Icons.DELETE_OUTLINE,
-                    on_click=lambda e: clear_selected_image(),
+                image_preview_surface,
+                ft.Container(
+                    ft.Semantics(
+                        content=remove_image_button,
+                        label="删除图片",
+                        button=True,
+                    ),
+                    top=6,
+                    right=6,
                 ),
             ],
-            spacing=4,
-            visible=False,
+            width=DIALOG_WIDTH - 20,
+            height=180,
         )
         image_preview_holder = ft.Container(
-            ft.Column(
-                [image_preview, image_preview_name, image_action_row],
-                spacing=4,
-                tight=True,
-            ),
+            image_stack,
+            key="forum-selected-image-holder",
             padding=8,
             border_radius=10,
             bgcolor=ft.Colors.WHITE,
@@ -648,18 +658,23 @@ class ForumMixin:
         def open_preview_dialog() -> None:
             if not selected_images or not image_preview.src:
                 return
-            width = min(720, (self.page.width or 900) - 80)
+            width = max(240, min(720, (self.page.width or 900) - 48))
+            height = max(240, min(540, (self.page.height or 720) - 220))
             self._show(
                 ft.AlertDialog(
                     modal=True,
-                    title=ft.Text(image_preview_name.value or "悬赏图片"),
+                    title=ft.Text("查看图片"),
                     content=ft.Container(
                         ft.Image(
                             src=image_preview.src,
                             width=width,
+                            height=height,
                             fit=ft.BoxFit.CONTAIN,
+                            border_radius=8,
                         ),
                         width=width,
+                        height=height,
+                        alignment=ft.Alignment.CENTER,
                     ),
                     actions=[ft.TextButton("关闭", on_click=self._close)],
                 )
@@ -668,16 +683,10 @@ class ForumMixin:
         def clear_selected_image() -> None:
             selected_images.clear()
             image_preview.src = ""
-            image_preview.visible = False
-            image_preview_name.value = ""
-            image_preview_name.visible = False
-            image_action_row.visible = False
             image_preview_holder.visible = False
             image_hint.value = "未选择图片（只能上传 1 张）"
             image_hint.update()
             image_preview.update()
-            image_preview_name.update()
-            image_action_row.update()
             image_preview_holder.update()
 
         def pick_images(files: list) -> None:
@@ -710,17 +719,9 @@ class ForumMixin:
                     f"data:{mime};base64,"
                     + base64.b64encode(preview_data).decode("ascii")
                 )
-                image_preview.visible = True
-                image_preview_name.value = name
-                image_preview_name.visible = True
-                image_action_row.visible = True
                 image_preview_holder.visible = True
             else:
                 image_preview.src = ""
-                image_preview.visible = False
-                image_preview_name.value = ""
-                image_preview_name.visible = False
-                image_action_row.visible = False
                 image_preview_holder.visible = False
             image_hint.value = (
                 "已选择 1 张图片"
@@ -729,8 +730,6 @@ class ForumMixin:
             )
             image_hint.update()
             image_preview.update()
-            image_preview_name.update()
-            image_action_row.update()
             image_preview_holder.update()
 
         def choose_images(e) -> None:
