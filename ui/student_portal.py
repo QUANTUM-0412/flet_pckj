@@ -71,29 +71,118 @@ class StudentPortalMixin:
         )
 
     def _open_student_points_history(self, student: dict) -> None:
-        transactions = db.list_point_transactions(student["id"], limit=500)
-        rows = [
-            self._student_points_row(transaction)
-            for transaction in transactions
-        ] or [ft.Text("还没有积分流水。", size=12, color=ft.Colors.GREY_600)]
+        current_month = date.today().strftime("%Y-%m")
+        selected_month = {"value": current_month}
+
+        month_label = ft.Text("", size=14, weight=ft.FontWeight.W_600)
+        month_summary = ft.Text("", size=12, color=ft.Colors.GREY_600)
+        rows_holder = ft.Container(
+            ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO),
+            height=min(480, max(240, (self.page.height or 720) - 280)),
+        )
+
+        def shift_month(month: str, delta: int) -> str:
+            year, number = (int(part) for part in month.split("-"))
+            index = year * 12 + number - 1 + delta
+            return f"{index // 12:04d}-{index % 12 + 1:02d}"
+
+        def month_text(month: str) -> str:
+            year, number = month.split("-")
+            return f"{year}年{int(number)}月"
+
+        def render_month(update: bool = True) -> None:
+            month = selected_month["value"]
+            transactions = db.list_point_transactions(
+                student["id"], limit=500, month=month
+            )
+            rows = [
+                self._student_points_row(transaction)
+                for transaction in transactions
+            ] or [
+                ft.Text(
+                    "这个月还没有积分流水。",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                )
+            ]
+            gained = sum(
+                float(transaction["change"] or 0)
+                for transaction in transactions
+                if float(transaction["change"] or 0) > 0
+            )
+            spent = -sum(
+                float(transaction["change"] or 0)
+                for transaction in transactions
+                if float(transaction["change"] or 0) < 0
+            )
+            month_label.value = month_text(month)
+            month_summary.value = (
+                f"本月获得 +{db.num_text(gained)} · "
+                f"本月扣除 -{db.num_text(spent)} · "
+                f"当前积分 {db.num_text(db.student_points(student['id']))}"
+            )
+            rows_holder.content = ft.Column(
+                rows,
+                spacing=8,
+                scroll=ft.ScrollMode.AUTO,
+            )
+            next_button.disabled = month >= current_month
+            if update:
+                month_label.update()
+                month_summary.update()
+                rows_holder.update()
+                next_button.update()
+
+        previous_button = ft.TextButton(
+            "← 上月",
+            on_click=lambda e: (
+                selected_month.__setitem__(
+                    "value", shift_month(selected_month["value"], -1)
+                ),
+                render_month(),
+            ),
+        )
+        next_button = ft.TextButton(
+            "下月 →",
+            on_click=lambda e: (
+                selected_month.__setitem__(
+                    "value", shift_month(selected_month["value"], 1)
+                ),
+                render_month(),
+            ),
+        )
+        this_month_button = ft.TextButton(
+            "本月",
+            on_click=lambda e: (
+                selected_month.__setitem__("value", current_month),
+                render_month(),
+            ),
+        )
+        render_month(update=False)
         self._show(
             self._dialog(
                 "积分流水",
                 ft.Column(
                     [
                         ft.Text(
-                            f"当前积分：{db.num_text(db.student_points(student['id']))} 分",
-                            size=14,
-                            weight=ft.FontWeight.W_600,
+                            "按月查看积分获得、兑换、悬赏和管理员调整。",
+                            size=11,
+                            color=ft.Colors.GREY_600,
                         ),
-                        ft.Container(
-                            ft.Column(
-                                rows,
-                                spacing=8,
-                                scroll=ft.ScrollMode.AUTO,
-                            ),
-                            height=min(520, max(260, (self.page.height or 720) - 220)),
+                        ft.Row(
+                            [
+                                previous_button,
+                                month_label,
+                                next_button,
+                                this_month_button,
+                            ],
+                            spacing=4,
+                            wrap=True,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
+                        month_summary,
+                        ft.Divider(height=1, color=ft.Colors.GREY_200),
+                        rows_holder,
                     ],
                     spacing=10,
                 ),
@@ -103,13 +192,17 @@ class StudentPortalMixin:
 
     def _student_points_card(self, student: dict) -> ft.Container:
         points = db.student_points(student["id"])
-        transactions = db.list_point_transactions(student["id"], limit=6)
+        month = date.today().strftime("%Y-%m")
+        transactions = db.list_point_transactions(
+            student["id"], limit=6, month=month
+        )
         rows = [
             self._student_points_row(transaction)
             for transaction in transactions
-        ] or [ft.Text("还没有积分流水。", size=12, color=ft.Colors.GREY_600)]
+        ] or [ft.Text("本月还没有积分流水。", size=12, color=ft.Colors.GREY_600)]
+        month_text = f"{month[:4]}年{int(month[5:])}月"
         return self._section(
-            f"积分流水（当前 {db.num_text(points)} 分）",
+            f"积分流水（{month_text} · 当前 {db.num_text(points)} 分）",
             ft.Column(rows, spacing=8),
             action=ft.TextButton(
                 "查看全部",

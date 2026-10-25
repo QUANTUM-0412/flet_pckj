@@ -4475,6 +4475,15 @@ db.add_redemption(
     date.today().isoformat(),
     "兑换小奖品",
 )
+previous_month_day = (
+    date.today().replace(day=1) - timedelta(days=1)
+).isoformat()
+db.add_redemption(
+    portal_student,
+    2,
+    previous_month_day,
+    "上月兑换",
+)
 app.user = {
     "id": student_login["id"],
     "username": student_login["username"],
@@ -4486,16 +4495,26 @@ app.tab = 0
 app.render()
 ok(
     find_text(page.controls[0], "兑换")
-    and find_text(page.controls[0], "兑换小奖品"),
-    "学生能在积分流水中查询兑换记录",
+    and find_text(page.controls[0], "兑换小奖品")
+    and not find_text(page.controls[0], "上月兑换"),
+    "学生首页积分流水只显示本月兑换记录",
 )
 click(page.controls[0], "查看全部")
 history_dialog = top_dialog(page)
 ok(
     find_text(history_dialog, "上课")
-    and find_text(history_dialog, "兑换小奖品"),
-    "学生能打开完整积分获得和兑换流水",
+    and find_text(history_dialog, "兑换小奖品")
+    and find_button(history_dialog, "下月 →").disabled,
+    "完整积分流水默认显示本月，并停在最新月份",
 )
+click(history_dialog, "← 上月")
+ok(
+    find_text(history_dialog, "上月兑换")
+    and not find_text(history_dialog, "兑换小奖品"),
+    "积分流水可以像银行账单一样切换到上月",
+)
+click(history_dialog, "本月")
+ok(find_text(history_dialog, "兑换小奖品"), "积分流水可以切回本月")
 app._close()
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 try:

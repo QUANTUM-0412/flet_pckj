@@ -4158,14 +4158,21 @@ def points_map(student_ids: list[int]) -> dict[int, float]:
     return {int(r["student_id"]): float(r["p"]) for r in rows}
 
 
-def list_point_transactions(student_id: int, limit: int = 50) -> list[dict]:
+def list_point_transactions(
+    student_id: int,
+    limit: int = 50,
+    month: str | None = None,
+) -> list[dict]:
+    sql = """SELECT * FROM point_transactions
+              WHERE student_id = ?"""
+    args: list[Any] = [student_id]
+    if month:
+        sql += " AND happened_on LIKE ?"
+        args.append(f"{month}%")
+    sql += " ORDER BY happened_on DESC, id DESC LIMIT ?"
+    args.append(limit)
     with _connect() as con:
-        rows = con.execute(
-            """SELECT * FROM point_transactions
-                WHERE student_id = ?
-                ORDER BY happened_on DESC, id DESC LIMIT ?""",
-            (student_id, limit),
-        ).fetchall()
+        rows = con.execute(sql, args).fetchall()
     return [dict(r) for r in rows]
 
 
