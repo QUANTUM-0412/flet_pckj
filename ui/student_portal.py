@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 import flet as ft
 
 import db
@@ -29,6 +31,168 @@ class StudentPortalMixin:
             padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             border_radius=10,
             bgcolor=ft.Colors.GREY_50,
+        )
+
+    def _student_points_row(self, transaction: dict) -> ft.Row:
+        change = float(transaction.get("change") or 0)
+        color = (
+            ft.Colors.GREEN_700
+            if change > 0
+            else ft.Colors.RED_600
+            if change < 0
+            else ft.Colors.GREY_500
+        )
+        detail = str(transaction.get("kind") or "")
+        if transaction.get("note"):
+            detail += f" · {transaction['note']}"
+        return ft.Row(
+            [
+                ft.Text(
+                    _date_text(transaction.get("happened_on") or ""),
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    width=76,
+                ),
+                ft.Text(
+                    detail,
+                    size=12,
+                    color=ft.Colors.GREY_700,
+                    expand=True,
+                ),
+                ft.Text(
+                    f"{'+' if change > 0 else ''}{db.num_text(change)}",
+                    size=14,
+                    weight=ft.FontWeight.W_600,
+                    color=color,
+                ),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _open_student_points_history(self, student: dict) -> None:
+        transactions = db.list_point_transactions(student["id"], limit=500)
+        rows = [
+            self._student_points_row(transaction)
+            for transaction in transactions
+        ] or [ft.Text("还没有积分流水。", size=12, color=ft.Colors.GREY_600)]
+        self._show(
+            self._dialog(
+                "积分流水",
+                ft.Column(
+                    [
+                        ft.Text(
+                            f"当前积分：{db.num_text(db.student_points(student['id']))} 分",
+                            size=14,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                        ft.Container(
+                            ft.Column(
+                                rows,
+                                spacing=8,
+                                scroll=ft.ScrollMode.AUTO,
+                            ),
+                            height=min(520, max(260, (self.page.height or 720) - 220)),
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                [ft.TextButton("关闭", on_click=self._close)],
+            )
+        )
+
+    def _student_points_card(self, student: dict) -> ft.Container:
+        points = db.student_points(student["id"])
+        transactions = db.list_point_transactions(student["id"], limit=6)
+        rows = [
+            self._student_points_row(transaction)
+            for transaction in transactions
+        ] or [ft.Text("还没有积分流水。", size=12, color=ft.Colors.GREY_600)]
+        return self._section(
+            f"积分流水（当前 {db.num_text(points)} 分）",
+            ft.Column(rows, spacing=8),
+            action=ft.TextButton(
+                "查看全部",
+                icon=ft.Icons.RECEIPT_LONG,
+                on_click=lambda e: self._open_student_points_history(student),
+            ),
+        )
+
+    def _student_upcoming_card(self, student: dict) -> ft.Container:
+        start_day = date.today().isoformat()
+        start_time = datetime.now().strftime("%H:%M")
+        lessons = db.student_upcoming_lessons(
+            student["id"],
+            days=7,
+            start_day=start_day,
+            start_time=start_time,
+        )
+        rows = []
+        for lesson in lessons:
+            course = lesson.get("class_name") or db.lesson_label(lesson)
+            bits = [
+                lesson.get("start_time") or "",
+                course,
+                lesson.get("teacher_name") or "",
+            ]
+            rows.append(
+                ft.Container(
+                    ft.Row(
+                        [
+                            ft.Icon(
+                                ft.Icons.EVENT,
+                                size=20,
+                                color=ft.Colors.BLUE_700,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        _date_text(lesson["lesson_date"]),
+                                        size=14,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                    ft.Text(
+                                        " · ".join(bit for bit in bits if bit),
+                                        size=12,
+                                        color=ft.Colors.GREY_700,
+                                    ),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            *(
+                                [
+                                    ft.Text(
+                                        "补课",
+                                        size=11,
+                                        color=ft.Colors.ORANGE_700,
+                                    )
+                                ]
+                                if lesson.get("kind") == "补课"
+                                else []
+                            ),
+                        ],
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=9),
+                    border_radius=10,
+                    bgcolor=ft.Colors.BLUE_50,
+                )
+            )
+        return self._section(
+            f"未来 7 天要上的课（{len(lessons)}）",
+            ft.Column(
+                rows
+                or [
+                    ft.Text(
+                        "未来 7 天暂时没有排好的课。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    )
+                ],
+                spacing=8,
+            ),
         )
 
     def _student_portal_view(self) -> ft.Control:
@@ -88,6 +252,8 @@ class StudentPortalMixin:
                         run_spacing=8,
                     ),
                 ),
+                self._student_upcoming_card(student),
+                self._student_points_card(student),
                 self._section(
                     "最近课程",
                     ft.Column(recent, spacing=8),
@@ -104,7 +270,16 @@ class StudentPortalMixin:
         student = self._student_profile()
         if student is None:
             return ft.Text("账号没有绑定有效学员。", color=ft.Colors.RED_600)
-        lessons = db.student_course_lessons(student["id"])
+        today = date.today().isoformat()
+        lessons = [
+            lesson
+            for lesson in db.student_course_lessons(student["id"])
+            if lesson["lesson_date"] < today
+            or (
+                lesson["lesson_date"] == today
+                and int(lesson.get("rolled") or 0)
+            )
+        ]
         cards = [
             self._student_lesson_card(lesson)
             for lesson in lessons
@@ -119,8 +294,12 @@ class StudentPortalMixin:
         ]
         return ft.Column(
             [
-                self._header("我的课程", f"共 {len(lessons)} 次"),
-                *cards,
+                self._header("我的课程", f"上课记录 {len(lessons)} 次"),
+                self._student_upcoming_card(student),
+                self._section(
+                    "上课记录",
+                    ft.Column(cards, spacing=8),
+                ),
                 ft.Container(height=8),
             ],
             expand=True,
@@ -154,6 +333,8 @@ class StudentPortalMixin:
             facts.append(f"积分 {db.num_text(lesson.get('points') or 0)}")
         if lesson.get("teacher_name"):
             facts.append(f"上课老师 {lesson['teacher_name']}")
+        if lesson.get("kind") == "补课":
+            facts.append("补课")
         details: list[ft.Control] = [
             ft.Row(
                 [
@@ -165,21 +346,78 @@ class StudentPortalMixin:
             ),
             ft.Text(course or "课程", size=13, weight=ft.FontWeight.W_600),
         ]
-        comment = (lesson.get("comment") or "").strip()
-        plan = (lesson.get("plan") or "").strip()
-        if comment:
+        if not compact and (
+            (lesson.get("comment") or "").strip()
+            or (lesson.get("plan") or "").strip()
+        ):
             details.append(
-                ft.Text(f"课评：{comment}", size=12, color=ft.Colors.GREY_700)
-            )
-        elif not compact:
-            details.append(
-                ft.Text("课评：老师暂未填写", size=12, color=ft.Colors.GREY_500)
-            )
-        if plan and not compact:
-            details.append(
-                ft.Text(f"教案：{plan}", size=12, color=ft.Colors.GREY_700)
+                ft.TextButton(
+                    "查看课评 / 教案",
+                    icon=ft.Icons.ARTICLE_OUTLINED,
+                    on_click=lambda e, row=lesson: self._open_student_lesson_detail(
+                        row
+                    ),
+                )
             )
         return self._card(ft.Column(details, spacing=6))
+
+    def _open_student_lesson_detail(self, lesson: dict) -> None:
+        comment = (lesson.get("comment") or "").strip()
+        plan = (lesson.get("plan") or "").strip()
+        self._show(
+            self._dialog(
+                "课程内容",
+                ft.Column(
+                    [
+                        ft.Text(
+                            f"{_date_text(lesson['lesson_date'])} "
+                            f"{lesson.get('start_time') or ''} · "
+                            f"{lesson.get('class_name') or db.lesson_label(lesson)}",
+                            size=13,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                        ft.Text(
+                            "课评",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Text(
+                            comment or "老师暂未填写课评。",
+                            size=13,
+                            color=ft.Colors.GREY_800,
+                            selectable=True,
+                        ),
+                        ft.Divider(height=1, color=ft.Colors.GREY_200),
+                        ft.Text(
+                            "教案",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        *(
+                            [
+                                ft.Markdown(
+                                    plan,
+                                    selectable=True,
+                                    extension_set=ft.MarkdownExtensionSet.GITHUB_FLAVORED,
+                                    soft_line_break=True,
+                                )
+                            ]
+                            if plan
+                            else [
+                                ft.Text(
+                                    "老师暂未上传教案。",
+                                    size=13,
+                                    color=ft.Colors.GREY_500,
+                                )
+                            ]
+                        ),
+                    ],
+                    spacing=8,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                [ft.TextButton("关闭", on_click=self._close)],
+            )
+        )
 
 
 __all__ = ["StudentPortalMixin"]

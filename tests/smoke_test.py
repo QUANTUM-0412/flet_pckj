@@ -4140,6 +4140,17 @@ portal_lesson = db.create_lesson(
 )
 db.set_lesson_plan(portal_lesson, "先复习循环，再完成嵌套练习")
 db.add_attendance(portal_lesson, portal_student)
+upcoming_day = (date.today() + timedelta(days=2)).isoformat()
+portal_upcoming_lesson = db.create_lesson(
+    upcoming_day,
+    "16:00",
+    90,
+    zhengke["id"],
+    portal_level["id"],
+    teacher_id=portal_teacher,
+    rolled=0,
+)
+db.add_attendance(portal_upcoming_lesson, portal_student)
 
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 app.tab = 0
@@ -4179,6 +4190,15 @@ app.render()
 ok(find_text(page.controls[0], "学生门户娃"), "学生能看到自己的信息")
 ok(find_text(page.controls[0], "当前积分"), "学生能看到自己的积分")
 ok(
+    find_text(page.controls[0], "积分流水")
+    and find_text(page.controls[0], "上课"),
+    "学生能在我的页面查询积分获得流水",
+)
+ok(
+    find_text(page.controls[0], "未来 7 天要上的课（1）"),
+    "学生首页提醒未来一周要上的课",
+)
+ok(
     not find_text(page.controls[0], "缴费记录")
     and not find_text(page.controls[0], "课时账户")
     and not find_text(page.controls[0], "代金券"),
@@ -4186,8 +4206,20 @@ ok(
 )
 app.tab = 1
 app.render()
-ok(find_text(page.controls[0], "这节课学习循环嵌套"), "学生能看自己的课评")
-ok(find_text(page.controls[0], "先复习循环，再完成嵌套练习"), "学生能看自己的教案")
+ok(
+    find_text(page.controls[0], "未来 7 天要上的课（1）"),
+    "学生课程页也提醒未来一周的课",
+)
+ok(
+    not find_text(page.controls[0], "这节课学习循环嵌套")
+    and find_button(page.controls[0], "查看课评 / 教案") is not None,
+    "我的课程默认只显示简单信息，课评收进详情",
+)
+click(page.controls[0], "查看课评 / 教案")
+dlg = top_dialog(page)
+ok(find_text(dlg, "这节课学习循环嵌套"), "学生能在详情里查看课评")
+ok(find_text(dlg, "先复习循环，再完成嵌套练习"), "学生能在详情里查看教案")
+app._close()
 ok(not find_text(page.controls[0], "缴费"), "学生课程页不展示费用")
 
 app.tab = 2
@@ -4437,6 +4469,35 @@ ok(
     and penalized["moderation_note"] == "发布内容包含不当言论",
     "管理员扣分后学生积分和悬赏记录同步更新",
 )
+db.add_redemption(
+    portal_student,
+    5,
+    date.today().isoformat(),
+    "兑换小奖品",
+)
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 0
+app.render()
+ok(
+    find_text(page.controls[0], "兑换")
+    and find_text(page.controls[0], "兑换小奖品"),
+    "学生能在积分流水中查询兑换记录",
+)
+click(page.controls[0], "查看全部")
+history_dialog = top_dialog(page)
+ok(
+    find_text(history_dialog, "上课")
+    and find_text(history_dialog, "兑换小奖品"),
+    "学生能打开完整积分获得和兑换流水",
+)
+app._close()
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 try:
     db.mute_forum_user(
         portal_student, portal_teacher, "2099-12-31 23:59", "老师不能禁言"
@@ -4797,6 +4858,7 @@ ok(not unlinked_award_allowed, "没有关联该级别的学员不能从目录批
 db.delete_student(unlinked_student)
 
 db.delete_lesson(portal_lesson)
+db.delete_lesson(portal_upcoming_lesson)
 db.delete_template(award_other_course)
 db.delete_template(award_course)
 db.delete_student(award_other_student)

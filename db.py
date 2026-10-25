@@ -4274,6 +4274,7 @@ def student_course_lessons(student_id: int, limit: int = 200) -> list[dict]:
                       a.discipline_score, a.performance_score,
                       a.bonus, a.minutes,
                       l.id AS lesson_id, l.lesson_date, l.start_time,
+                      l.rolled, l.kind,
                       l.comment, l.plan,
                       ct.name AS class_type_name, ct.deduct AS class_type_deduct,
                       lv.subject, lv.name AS level_name,
@@ -4296,6 +4297,55 @@ def student_course_lessons(student_id: int, limit: int = 200) -> list[dict]:
         item["points"] = attendance_points(item) if item["attendance"] else 0.0
         out.append(item)
     return out
+
+
+def student_upcoming_lessons(
+    student_id: int,
+    days: int = 7,
+    start_day: str = "",
+    start_time: str = "",
+) -> list[dict]:
+    """学生未来一周已经排进名单的课。"""
+    if not student_id:
+        return []
+    try:
+        first = date.fromisoformat(start_day) if start_day else date.today()
+    except ValueError:
+        first = date.today()
+    last = first + timedelta(days=max(1, int(days)) - 1)
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT a.attendance, a.minutes,
+                      l.id AS lesson_id, l.lesson_date, l.start_time,
+                      l.rolled, l.kind,
+                      ct.name AS class_type_name,
+                      lv.subject, lv.name AS level_name,
+                      t.name AS class_name,
+                      u.display_name AS teacher_name
+                 FROM attendance a
+                 JOIN lessons l ON l.id = a.lesson_id
+                 LEFT JOIN class_types ct ON ct.id = l.class_type_id
+                 LEFT JOIN levels lv ON lv.id = l.level_id
+                 LEFT JOIN schedule_templates t ON t.id = l.template_id
+                 LEFT JOIN users u ON u.id = l.teacher_id
+                WHERE a.student_id = ?
+                  AND l.lesson_date BETWEEN ? AND ?
+                  AND (
+                    l.lesson_date > ?
+                    OR ? = ''
+                    OR l.start_time >= ?
+                  )
+                ORDER BY l.lesson_date, l.start_time, l.id""",
+            (
+                int(student_id),
+                first.isoformat(),
+                last.isoformat(),
+                first.isoformat(),
+                start_time,
+                start_time,
+            ),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def attendance_names(lesson_ids: list[int]) -> dict[int, list[dict]]:
