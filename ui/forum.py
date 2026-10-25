@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -599,6 +600,31 @@ class ForumMixin:
             size=12,
             color=ft.Colors.GREY_600,
         )
+        image_preview = ft.Image(
+            src="",
+            width=220,
+            height=150,
+            fit=ft.BoxFit.COVER,
+            border_radius=8,
+            visible=False,
+        )
+        image_preview_name = ft.Text(
+            "",
+            size=11,
+            color=ft.Colors.GREY_600,
+            visible=False,
+        )
+        image_preview_holder = ft.Container(
+            ft.Column(
+                [image_preview, image_preview_name],
+                spacing=4,
+                tight=True,
+            ),
+            padding=8,
+            border_radius=10,
+            bgcolor=ft.Colors.GREY_50,
+            visible=False,
+        )
 
         def pick_images(files: list) -> None:
             valid = [
@@ -610,12 +636,45 @@ class ForumMixin:
                 )
             ]
             selected_images[:] = valid[:1]
+            if selected_images:
+                source = selected_images[0]
+                name = getattr(source, "name", "") or "图片"
+                suffix = Path(name).suffix.lower()
+                preview_data, preview_suffix = _shrink_photo(
+                    bytes(source.bytes), suffix
+                )
+                mime = (
+                    "image/png"
+                    if preview_suffix == ".png"
+                    else "image/gif"
+                    if preview_suffix == ".gif"
+                    else "image/webp"
+                    if preview_suffix == ".webp"
+                    else "image/jpeg"
+                )
+                image_preview.src = (
+                    f"data:{mime};base64,"
+                    + base64.b64encode(preview_data).decode("ascii")
+                )
+                image_preview.visible = True
+                image_preview_name.value = name
+                image_preview_name.visible = True
+                image_preview_holder.visible = True
+            else:
+                image_preview.src = ""
+                image_preview.visible = False
+                image_preview_name.value = ""
+                image_preview_name.visible = False
+                image_preview_holder.visible = False
             image_hint.value = (
                 "已选择 1 张图片"
                 if selected_images
                 else "未选择图片（只能上传 1 张）"
             )
             image_hint.update()
+            image_preview.update()
+            image_preview_name.update()
+            image_preview_holder.update()
 
         def choose_images(e) -> None:
             self._files_callback = pick_images
@@ -699,6 +758,7 @@ class ForumMixin:
                 content,
                 image_button,
                 image_hint,
+                image_preview_holder,
                 points,
                 target,
             ]

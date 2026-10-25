@@ -4269,6 +4269,18 @@ app._files_callback(
         FakeFile("多余图片.png", _qr_buf.getvalue()),
     ]
 )
+forum_previews = [
+    c
+    for c in walk(dlg)
+    if isinstance(c, ft.Image)
+    and str(c.src or "").startswith("data:image/")
+]
+ok(
+    len(forum_previews) == 1
+    and forum_previews[0].visible
+    and find_text(dlg, "题目截图.png"),
+    "论坛选图后显示缩略图和文件名，并只保留一张",
+)
 click(dlg, "发布")
 bounties = db.list_forum_bounties()
 ok(
@@ -4291,6 +4303,15 @@ app.tab = 2
 app.render()
 ok(find_text(page.controls[0], "循环题不会做"), "论坛里能看到公开发布的悬赏")
 ok(find_text(page.controls[0], "12 积分"), "悬赏积分用醒目徽章单独显示")
+ok(
+    any(
+        isinstance(c, ft.Image)
+        and c.visible
+        and str(c.src or "") == db.file_url(forum_images[0])
+        for c in walk(page.controls[0])
+    ),
+    "论坛帖子中显示上传图片的缩略图",
+)
 ok(
     find_text(page.controls[0], student_nickname)
     and not find_text(page.controls[0], "学生门户娃"),
