@@ -388,7 +388,6 @@ class StudentPortalMixin:
         return ft.Column(
             [
                 self._header("我的课程", f"上课记录 {len(lessons)} 次"),
-                self._student_upcoming_card(student),
                 self._section(
                     "上课记录",
                     ft.Column(cards, spacing=8),

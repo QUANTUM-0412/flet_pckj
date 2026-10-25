@@ -285,13 +285,19 @@ class FilesMixin:
 
     def _on_files_picked(self, e) -> None:
         files = list(getattr(e, "files", None) or [])
+        callback = self._files_callback
+        keep_callback = bool(
+            callback is not None
+            and getattr(callback, "_keep_after_pick", False)
+        )
         if not files:  # 用户点了取消
-            self._files_callback = None
+            if not keep_callback:
+                self._files_callback = None
             self._upload_target = None
             return
-        callback = self._files_callback
         if callback is not None:
-            self._files_callback = None
+            if not keep_callback:
+                self._files_callback = None
             callback(files)
             return
         target = self._upload_target

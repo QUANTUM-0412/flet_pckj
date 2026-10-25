@@ -4220,8 +4220,8 @@ ok(
 app.tab = 1
 app.render()
 ok(
-    find_text(page.controls[0], "未来 7 天要上的课（1）"),
-    "学生课程页也提醒未来一周的课",
+    not find_text(page.controls[0], "未来 7 天要上的课"),
+    "未来一周提醒只放在我的首页，不在课程页重复",
 )
 ok(
     not find_text(page.controls[0], "这节课学习循环嵌套")
@@ -4262,7 +4262,20 @@ ok(
     < _forum_order.index(find_field(dlg, "悬赏积分 *")),
     "内容图片入口紧跟在问题内容下面",
 )
+ok(
+    app._files_callback is not None,
+    "发布框打开时图片回调已经准备好",
+)
+app._on_files_picked(FakeEvent([]))
+ok(
+    app._files_callback is not None,
+    "取消系统文件选择后仍可重新添加图片",
+)
 find_button(dlg, "添加内容图片").on_click(None)
+ok(
+    app._files_callback is not None,
+    "打开论坛发布框时已准备好接图片，不依赖点击后的数据库往返",
+)
 app._files_callback(
     [
         FakeFile("题目截图.png", _qr_buf.getvalue()),
@@ -4282,6 +4295,7 @@ ok(
     "论坛选图后显示缩略图和文件名，并只保留一张",
 )
 click(dlg, "发布")
+ok(app._files_callback is None, "发布完成后清理临时图片回调")
 bounties = db.list_forum_bounties()
 ok(
     len(bounties) == 1

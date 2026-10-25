@@ -679,6 +679,16 @@ class ForumMixin:
         def choose_images(e) -> None:
             self._files_callback = pick_images
 
+        # 文件选择器在点击瞬间就会打开；回调必须先准备好，
+        # 不能等按钮的 on_click 事件再从网页返回 Python。
+        pick_images._keep_after_pick = True
+        self._files_callback = pick_images
+
+        def close_post_dialog(e=None) -> None:
+            if self._files_callback is pick_images:
+                self._files_callback = None
+            self._close()
+
         image_button = ft.Button(
             "添加内容图片",
             icon=ft.Icons.ADD_PHOTO_ALTERNATE,
@@ -745,6 +755,8 @@ class ForumMixin:
                     stored,
                     len(data),
                 )
+            if self._files_callback is pick_images:
+                self._files_callback = None
             self._finish("悬赏已发布，积分已冻结")
 
         body = self._form_column(
@@ -768,7 +780,7 @@ class ForumMixin:
                 "发布悬赏",
                 body,
                 [
-                    ft.TextButton("取消", on_click=self._close),
+                    ft.TextButton("取消", on_click=close_post_dialog),
                     ft.Button("发布", on_click=save),
                 ],
             )
