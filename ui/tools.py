@@ -35,6 +35,35 @@ def calculate_3d_print_points(weight_g, duration_minutes) -> float:
     return float(weight * Decimal("10") * units)
 
 
+def format_print_duration(duration_minutes) -> str:
+    """把总分钟数写成人容易核对的小时／分钟。"""
+    hours, minutes = divmod(int(duration_minutes), 60)
+    if hours and minutes:
+        return f"{hours} 小时 {minutes} 分钟"
+    if hours:
+        return f"{hours} 小时"
+    return f"{minutes} 分钟"
+
+
+def parse_print_duration(value) -> int:
+    """把 3:00 这样的「小时:分钟」转成总分钟。"""
+    text = str(value or "").strip().replace("：", ":")
+    if ":" not in text:
+        raise ValueError("请按「小时:分钟」填写，例如 3:00")
+    hour_text, minute_text = text.split(":", 1)
+    try:
+        hours = int(hour_text.strip())
+        minutes = int(minute_text.strip())
+    except ValueError as err:
+        raise ValueError("请按「小时:分钟」填写，例如 3:00") from err
+    if hours < 0 or minutes < 0 or minutes > 59:
+        raise ValueError("小时不能小于 0，分钟请填 0～59")
+    duration = hours * 60 + minutes
+    if duration <= 0:
+        raise ValueError("打印时长必须大于 0")
+    return duration
+
+
 class ToolsMixin:
     """工具栏页面（ClassHoursApp 的一部分）。"""
 
@@ -46,9 +75,9 @@ class ToolsMixin:
             expand=True,
         )
         duration = _tf(
-            "打印时长（分钟）",
-            hint_text="例如 70",
-            keyboard_type=ft.KeyboardType.NUMBER,
+            "打印时长（小时:分钟）",
+            hint_text="例如 3:00",
+            prefix_icon=ft.Icons.SCHEDULE,
             expand=True,
         )
         result = ft.Text(
@@ -73,12 +102,7 @@ class ToolsMixin:
                 weight.update()
                 return
             try:
-                duration_value = float((duration.value or "").strip())
-            except ValueError:
-                duration.error = "请填写数字"
-                duration.update()
-                return
-            try:
+                duration_value = parse_print_duration(duration.value)
                 units = print_half_hour_units(duration_value)
                 points = calculate_3d_print_points(weight_value, duration_value)
             except ValueError as err:
@@ -90,78 +114,77 @@ class ToolsMixin:
             duration.update()
             result.value = f"{db.num_text(points)} 积分"
             formula.value = (
-                f"{db.num_text(weight_value)} 克 × 10 积分 × {units} 个半小时"
+                f"{format_print_duration(duration_value)}（{duration_value} 分钟）"
+                f" · {db.num_text(weight_value)}g × 10 × {units} 档"
                 f" = {db.num_text(points)} 积分"
             )
             result.update()
             formula.update()
 
-        fields = ft.ResponsiveRow(
+        input_fields = ft.ResponsiveRow(
             [
-                ft.Container(weight, col={"xs": 12, "md": 5}),
-                ft.Container(duration, col={"xs": 12, "md": 5}),
-                ft.Container(
-                    ft.Button(
-                        "计算积分",
-                        icon=ft.Icons.CALCULATE,
-                        on_click=calculate,
-                    ),
-                    col={"xs": 12, "md": 2},
-                    alignment=ft.Alignment.CENTER,
-                    padding=ft.Padding.only(top=12),
-                ),
+                ft.Container(weight, col={"xs": 12, "md": 6}),
+                ft.Container(duration, col={"xs": 12, "md": 6}),
             ],
             spacing=8,
             run_spacing=8,
         )
 
-        rules = ft.ResponsiveRow(
+        def rule_chip(text: str) -> ft.Container:
+            return ft.Container(
+                ft.Text(text, size=12, color=ft.Colors.GREY_700),
+                padding=ft.Padding.symmetric(horizontal=9, vertical=5),
+                border_radius=16,
+                bgcolor=ft.Colors.GREY_100,
+            )
+
+        rules = ft.Row(
             [
-                ft.Container(
-                    ft.Column(
-                        [
-                            ft.Text("耗材", size=11, color=ft.Colors.GREY_600),
-                            ft.Text("每克 10 积分", weight=ft.FontWeight.W_600),
-                        ],
-                        spacing=2,
-                        tight=True,
-                    ),
-                    col={"xs": 12, "md": 4},
-                    padding=10,
-                    border_radius=8,
-                    bgcolor=ft.Colors.GREY_50,
-                ),
-                ft.Container(
-                    ft.Column(
-                        [
-                            ft.Text("时长倍率", size=11, color=ft.Colors.GREY_600),
-                            ft.Text("每 30 分钟 1 档", weight=ft.FontWeight.W_600),
-                        ],
-                        spacing=2,
-                        tight=True,
-                    ),
-                    col={"xs": 12, "md": 4},
-                    padding=10,
-                    border_radius=8,
-                    bgcolor=ft.Colors.GREY_50,
-                ),
-                ft.Container(
-                    ft.Column(
-                        [
-                            ft.Text("不足半小时", size=11, color=ft.Colors.GREY_600),
-                            ft.Text("也按 1 个半小时算", weight=ft.FontWeight.W_600),
-                        ],
-                        spacing=2,
-                        tight=True,
-                    ),
-                    col={"xs": 12, "md": 4},
-                    padding=10,
-                    border_radius=8,
-                    bgcolor=ft.Colors.GREY_50,
-                ),
+                rule_chip("每克 10 积分"),
+                rule_chip("每 30 分钟 ×1 档"),
+                rule_chip("不足半小时按 1 档"),
             ],
             spacing=8,
             run_spacing=8,
+            wrap=True,
+        )
+        duration_help = ft.Text(
+            "格式：小时:分钟 · 例如 3:00、1:30；不足半小时也按半小时算。",
+            size=12,
+            color=ft.Colors.GREY_600,
+        )
+        form = ft.Column(
+            [
+                input_fields,
+                duration_help,
+                ft.Row(
+                    [
+                        ft.Button(
+                            "计算积分",
+                            icon=ft.Icons.CALCULATE,
+                            on_click=calculate,
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.END,
+                ),
+            ],
+            spacing=10,
+            tight=True,
+        )
+        result_panel = ft.Container(
+            ft.Column(
+                [
+                    ft.Text("应扣积分", size=12, color=ft.Colors.BLUE_800),
+                    result,
+                    formula,
+                ],
+                spacing=5,
+                tight=True,
+            ),
+            padding=16,
+            border_radius=10,
+            bgcolor=ft.Colors.BLUE_50,
+            alignment=ft.Alignment.CENTER_LEFT,
         )
 
         return ft.Column(
@@ -175,30 +198,19 @@ class ToolsMixin:
                     ft.Column(
                         [
                             rules,
-                            fields,
-                            ft.Container(
-                                ft.Column(
-                                    [
-                                        ft.Text(
-                                            "本次应扣",
-                                            size=12,
-                                            color=ft.Colors.BLUE_800,
-                                        ),
-                                        result,
-                                        formula,
-                                    ],
-                                    spacing=4,
-                                    tight=True,
-                                ),
-                                padding=14,
-                                border_radius=10,
-                                bgcolor=ft.Colors.BLUE_50,
-                            ),
-                            ft.Text(
-                                "计算规则：耗材重量（克）× 10 × 半小时档数。"
-                                "例如 10 克打印 61 分钟，按 3 档计算，共 300 积分。",
-                                size=12,
-                                color=ft.Colors.GREY_600,
+                            ft.ResponsiveRow(
+                                [
+                                    ft.Container(
+                                        form,
+                                        col={"xs": 12, "md": 7},
+                                    ),
+                                    ft.Container(
+                                        result_panel,
+                                        col={"xs": 12, "md": 5},
+                                    ),
+                                ],
+                                spacing=12,
+                                run_spacing=12,
                             ),
                         ],
                         spacing=12,

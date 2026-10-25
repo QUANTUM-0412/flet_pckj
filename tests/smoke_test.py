@@ -24,6 +24,8 @@ import db  # noqa: E402
 from app_ui import ClassHoursApp  # noqa: E402
 from ui.tools import (  # noqa: E402
     calculate_3d_print_points,
+    format_print_duration,
+    parse_print_duration,
     print_half_hour_units,
 )
 
@@ -300,6 +302,11 @@ ok(print_half_hour_units(60) == 2, "1 小时按 2 档")
 ok(print_half_hour_units(61) == 3, "超过 1 小时按 3 档")
 ok(calculate_3d_print_points(10, 30) == 100, "10 克打印半小时消耗 100 积分")
 ok(calculate_3d_print_points(10, 61) == 300, "10 克打印 61 分钟消耗 300 积分")
+ok(format_print_duration(180) == "3 小时", "180 分钟显示成 3 小时")
+ok(format_print_duration(90) == "1 小时 30 分钟", "90 分钟显示成 1 小时 30 分钟")
+ok(parse_print_duration("3:00") == 180, "时长 3:00 能解析成 180 分钟")
+ok(parse_print_duration("1:30") == 90, "时长 1:30 能解析成 90 分钟")
+ok(parse_print_duration("1：01") == 61, "中文冒号也能识别")
 try:
     calculate_3d_print_points(10, 0)
     zero_duration_allowed = True
@@ -309,12 +316,20 @@ ok(not zero_duration_allowed, "打印时长必须大于 0")
 
 app._goto(8)
 find_field(page.controls[0], "耗材重量（克）").value = "12.5"
-find_field(page.controls[0], "打印时长（分钟）").value = "61"
+find_field(page.controls[0], "打印时长（小时:分钟）").value = "1:01"
 click(page.controls[0], "计算积分")
 ok(
     find_text(page.controls[0], "375 积分")
-    and find_text(page.controls[0], "12.5 克 × 10 积分 × 3 个半小时"),
-    "工具栏能按重量和半小时档数算出积分",
+    and find_text(page.controls[0], "1 小时 1 分钟（61 分钟）")
+    and find_text(page.controls[0], "12.5g × 10 × 3 档"),
+    "用 1:01 输入，也能正确按半小时档数算积分",
+)
+find_field(page.controls[0], "打印时长（小时:分钟）").value = "3:00"
+click(page.controls[0], "计算积分")
+ok(
+    find_text(page.controls[0], "750 积分")
+    and find_text(page.controls[0], "3 小时（180 分钟）"),
+    "打印 3 小时不用自己换算分钟",
 )
 app._goto(0)
 
