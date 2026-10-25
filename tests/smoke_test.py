@@ -315,6 +315,15 @@ except ValueError:
 ok(not zero_duration_allowed, "打印时长必须大于 0")
 
 app._goto(8)
+page.width = 1600
+app.render()
+ok(
+    any(isinstance(c, ft.Container) and c.width == 1080 for c in walk(page.controls[0])),
+    "工具页在宽屏上限制宽度，不会被无限拉长",
+)
+page.width = 1200
+app.render()
+ok(find_text(page.controls[0], "等待计算"), "还没填写时结果是清楚的等待状态")
 find_field(page.controls[0], "耗材重量（克）").value = "12.5"
 find_field(page.controls[0], "打印时长（小时:分钟）").value = "1:01"
 click(page.controls[0], "计算积分")

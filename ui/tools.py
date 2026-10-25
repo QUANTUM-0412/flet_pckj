@@ -67,7 +67,15 @@ def parse_print_duration(value) -> int:
 class ToolsMixin:
     """工具栏页面（ClassHoursApp 的一部分）。"""
 
-    def _tools_view(self) -> ft.Column:
+    def _tools_view(self) -> ft.Control:
+        content_width = min(
+            1080,
+            max(
+                320,
+                (self.page.width or 1000)
+                - (124 if self.is_wide() else 28),
+            ),
+        )
         weight = _tf(
             "耗材重量（克）",
             hint_text="例如 12.5",
@@ -81,10 +89,9 @@ class ToolsMixin:
             expand=True,
         )
         result = ft.Text(
-            "—",
-            size=32,
-            weight=ft.FontWeight.BOLD,
-            color=ft.Colors.BLUE_700,
+            "等待计算",
+            size=16,
+            color=ft.Colors.GREY_600,
         )
         formula = ft.Text(
             "填写耗材重量和打印时长后，点「计算积分」。",
@@ -113,6 +120,9 @@ class ToolsMixin:
             weight.update()
             duration.update()
             result.value = f"{db.num_text(points)} 积分"
+            result.size = 32
+            result.weight = ft.FontWeight.BOLD
+            result.color = ft.Colors.BLUE_700
             formula.value = (
                 f"{format_print_duration(duration_value)}（{duration_value} 分钟）"
                 f" · {db.num_text(weight_value)}g × 10 × {units} 档"
@@ -187,7 +197,7 @@ class ToolsMixin:
             alignment=ft.Alignment.CENTER_LEFT,
         )
 
-        return ft.Column(
+        content = ft.Column(
             [
                 self._header(
                     "工具栏",
@@ -225,4 +235,8 @@ class ToolsMixin:
                 ),
             ],
             spacing=12,
+        )
+        return ft.Row(
+            [ft.Container(content, width=content_width)],
+            alignment=ft.MainAxisAlignment.CENTER,
         )
