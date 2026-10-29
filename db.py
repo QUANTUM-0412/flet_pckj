@@ -1391,6 +1391,63 @@ def course_status(row: dict | sqlite3.Row) -> str:
     return "在读"
 
 
+def course_in_month(course: dict | sqlite3.Row, month: str) -> bool:
+    """这门课在选定月份里是否实际有排课或课次。
+
+    有固定上课日的课程按开班／结课范围与当月重叠判断；时间不定的课程
+    没有可推算的上课日，只有在那个月实际记过课时才算。
+    """
+    data = dict(course)
+    try:
+        first_day = date.fromisoformat(f"{str(month)[:7]}-01")
+    except (TypeError, ValueError):
+        return False
+    last_day = date(
+        first_day.year,
+        first_day.month,
+        calendar.monthrange(first_day.year, first_day.month)[1],
+    )
+
+    try:
+        course_start = (
+            date.fromisoformat((data.get("start_date") or "").strip())
+            if (data.get("start_date") or "").strip()
+            else first_day
+        )
+        course_end = (
+            date.fromisoformat((data.get("end_date") or "").strip())
+            if (data.get("end_date") or "").strip()
+            else last_day
+        )
+    except ValueError:
+        return False
+
+    segment_start = max(first_day, course_start)
+    segment_end = min(last_day, course_end)
+    if segment_start > segment_end:
+        return False
+    if template_weekdays(data):
+        return bool(
+            template_dates(
+                data, segment_start.isoformat(), segment_end.isoformat()
+            )
+        )
+
+    template_id = int(data.get("id") or 0)
+    if not template_id:
+        return False
+    with _connect() as con:
+        row = con.execute(
+            """SELECT 1
+                 FROM lessons
+                WHERE template_id = ?
+                  AND lesson_date >= ? AND lesson_date <= ?
+                LIMIT 1""",
+            (template_id, segment_start.isoformat(), segment_end.isoformat()),
+        ).fetchone()
+    return row is not None
+
+
 def _apply_course_dates(con: sqlite3.Connection, course_id: int) -> int:
     """按课程的起止日期，把挂在它下面的报名状态同步一下。
 
@@ -5022,18 +5079,79 @@ def templates_on(day: str) -> list[dict]:
     return out
 
 
-def skip_course_day(template_id: int, day: str, note: str = "") -> None:
-    """把这门课某一天标成"不上"：那天不再出现在课表上，也不给点名。"""
+def cancel_course_occurrence(
+    template_id: int,
+    day: str,
+    note: str = "",
+    allow_rolled: bool = False,
+    lesson_id: int | None = None,
+) -> list[int]:
+    """取消某门课某一天的课次，并标记这天不上。
+
+    还没点名的课次会直接清掉；已经点名的课次默认拒绝，避免悄悄退回
+    已计算的课时和积分。界面明确告知账务变化后，可以传 ``allow_rolled=True``。
+    """
     text = (day or "").strip()
     if not text:
         raise ValueError("要指定日期")
+    removed_lesson_ids: list[int] = []
+    student_ids: set[int] = set()
     with _connect() as con:
+        if lesson_id is not None:
+            lessons = con.execute(
+                """SELECT id, rolled
+                     FROM lessons
+                    WHERE id = ? AND lesson_date = ?""",
+                (int(lesson_id), text),
+            ).fetchall()
+        else:
+            lessons = con.execute(
+                """SELECT id, rolled
+                     FROM lessons
+                    WHERE template_id = ? AND lesson_date = ?""",
+                (int(template_id), text),
+            ).fetchall()
+        if any(int(row["rolled"] or 0) for row in lessons) and not allow_rolled:
+            raise ValueError("这节课已经点过名，请先撤销点名再标成不上课")
+        for lesson in lessons:
+            lesson_id = int(lesson["id"])
+            removed_lesson_ids.append(lesson_id)
+            student_ids.update(
+                int(row["student_id"])
+                for row in con.execute(
+                    "SELECT DISTINCT student_id FROM attendance WHERE lesson_id = ?",
+                    (lesson_id,),
+                )
+            )
+            attendance_rows = con.execute(
+                "SELECT id FROM attendance WHERE lesson_id = ?", (lesson_id,)
+            ).fetchall()
+            for attendance in attendance_rows:
+                _remove_files(con, "attendance", int(attendance["id"]))
+            _remove_files(con, "lesson", lesson_id)
+            con.execute(
+                "DELETE FROM hour_transactions WHERE source_type = 'lesson' AND source_id = ?",
+                (lesson_id,),
+            )
+            con.execute(
+                "DELETE FROM point_transactions WHERE source_type = 'lesson' AND source_id = ?",
+                (lesson_id,),
+            )
+            con.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
         con.execute(
             """INSERT OR REPLACE INTO course_skips
                    (template_id, skip_date, note, created_at)
                VALUES(?, ?, ?, ?)""",
             (int(template_id), text, note or "", _today()),
         )
+    for student_id in student_ids:
+        recompute_student(student_id)
+    return removed_lesson_ids
+
+
+def skip_course_day(template_id: int, day: str, note: str = "") -> None:
+    """把这门课某一天标成"不上"，并清掉那天的待点名课次。"""
+    cancel_course_occurrence(template_id, day, note=note)
 
 
 def unskip_course_day(template_id: int, day: str) -> None:

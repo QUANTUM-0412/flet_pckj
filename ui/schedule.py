@@ -17,7 +17,9 @@ from .common import (
     _dd,
     _lessons_stats,
     _level_title,
+    _month_text,
     _opts,
+    _shift_month,
     _teacher_opts,
     _tf,
 )
@@ -55,14 +57,19 @@ class ScheduleMixin:
         blocks = []
         for day in days:
             iso = day.isoformat()
-            cards = []
+            entries: list[tuple[str, int, int, int, ft.Control]] = []
             done_templates: set[int] = set()
             for lesson in db.lessons_on(iso):
                 pending = not lesson.get("rolled", 1)
                 if lesson.get("template_id"):
                     done_templates.add(int(lesson["template_id"]))
-                cards.append(
-                    ft.Container(
+                entries.append(
+                    (
+                        str(lesson.get("start_time") or ""),
+                        0,
+                        int(lesson.get("template_id") or 0),
+                        int(lesson["id"]),
+                        ft.Container(
                         content=ft.Column(
                             [
                                 ft.Text(
@@ -93,41 +100,52 @@ class ScheduleMixin:
                         border=ft.Border.all(1, ft.Colors.GREY_300),
                         ink=True,
                         on_click=lambda e, lid=lesson["id"]: self.open_lesson(lid),
+                        ),
                     )
                 )
             # 还没点名、还没建课次的课程，也摆在这一天（浅一点，点一下去那天）
             for template in db.templates_on(iso):
                 if int(template["id"]) in done_templates:
                     continue
-                cards.append(
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Text(
-                                    f"{template['start_time']} "
-                                    + (
-                                        (template.get("name") or "").strip()
-                                        or db.lesson_label(template)
+                entries.append(
+                    (
+                        str(template.get("start_time") or ""),
+                        1,
+                        int(template["id"]),
+                        0,
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(
+                                        f"{template['start_time']} "
+                                        + (
+                                            (template.get("name") or "").strip()
+                                            or db.lesson_label(template)
+                                        ),
+                                        size=12,
+                                        weight=ft.FontWeight.W_600,
+                                        color=ft.Colors.GREY_700,
                                     ),
-                                    size=12,
-                                    weight=ft.FontWeight.W_600,
-                                    color=ft.Colors.GREY_700,
-                                ),
-                                ft.Text(
-                                    "待点名 · " + db.lesson_label(template),
-                                    size=11,
-                                    color=ft.Colors.ORANGE_700,
-                                ),
-                            ],
-                            spacing=1,
-                            tight=True,
+                                    ft.Text(
+                                        "待点名 · " + db.lesson_label(template),
+                                        size=11,
+                                        color=ft.Colors.ORANGE_700,
+                                    ),
+                                ],
+                                spacing=1,
+                                tight=True,
+                            ),
+                            padding=6,
+                            border_radius=8,
+                            bgcolor=ft.Colors.GREY_50,
+                            border=ft.Border.all(1, ft.Colors.GREY_300),
                         ),
-                        padding=6,
-                        border_radius=8,
-                        bgcolor=ft.Colors.GREY_50,
-                        border=ft.Border.all(1, ft.Colors.GREY_300),
                     )
                 )
+            cards = [
+                entry[4]
+                for entry in sorted(entries, key=lambda item: item[:4])
+            ]
             if not cards:
                 cards = [ft.Text("没有课", size=11, color=ft.Colors.GREY_500)]
             blocks.append(
@@ -183,6 +201,241 @@ class ScheduleMixin:
         )
         body = ft.Row(blocks, spacing=8, vertical_alignment=ft.CrossAxisAlignment.START) if wide else ft.Column(blocks, spacing=8)
         return self._section("这一周的课", ft.Column([head, body], spacing=10))
+
+    def _shift_course_month(self, delta: int) -> None:
+        self.course_month = _shift_month(self.course_month, delta)
+        self.render()
+
+    def _this_course_month(self) -> None:
+        self.course_month = date.today().strftime("%Y-%m")
+        self.render()
+
+    def _reset_course_filters(self) -> None:
+        self.course_month = date.today().strftime("%Y-%m")
+        self.course_status_filter = "unclosed"
+        self.course_teacher_filter = ""
+        self.course_subject_filter = ""
+        self.render()
+
+    def _effective_course_teacher(self) -> str:
+        if self.course_teacher_filter:
+            return self.course_teacher_filter
+        return "all" if self.is_admin() else "mine"
+
+    def _course_filter_panel(
+        self, courses: list[dict]
+    ) -> tuple[list[dict], ft.Container]:
+        """筛选课程列表；返回筛选结果和面板。"""
+        if not re.fullmatch(r"\d{4}-\d{2}", self.course_month or ""):
+            self.course_month = date.today().strftime("%Y-%m")
+        if self.course_status_filter not in {
+            "unclosed", "未开课", "在读", "已结课", "all"
+        }:
+            self.course_status_filter = "unclosed"
+
+        known_teacher_names = db.teacher_name_map()
+        teacher_names: dict[int, str] = {}
+        for course in courses:
+            teacher_id = int(course.get("teacher_id") or 0)
+            if teacher_id:
+                teacher_names[teacher_id] = (
+                    course.get("teacher_name")
+                    or known_teacher_names.get(teacher_id)
+                    or f"老师 {teacher_id}"
+                )
+        teacher_options = [
+            ft.DropdownOption(key="mine", text="当前老师"),
+            ft.DropdownOption(key="all", text="全部老师"),
+            ft.DropdownOption(key="none", text="未指定老师"),
+            *_opts(sorted(teacher_names.items(), key=lambda item: item[1])),
+        ]
+
+        month_rows = [
+            course
+            for course in courses
+            if db.course_in_month(course, self.course_month)
+        ]
+        effective_teacher = self._effective_course_teacher()
+        current_teacher_id = int((self.user or {}).get("id") or 0)
+        if effective_teacher == "mine":
+            teacher_rows = [
+                course
+                for course in month_rows
+                if int(course.get("teacher_id") or 0) == current_teacher_id
+            ]
+        elif effective_teacher == "none":
+            teacher_rows = [
+                course for course in month_rows if not course.get("teacher_id")
+            ]
+        elif effective_teacher == "all":
+            teacher_rows = month_rows
+        else:
+            try:
+                teacher_id = int(effective_teacher)
+            except ValueError:
+                teacher_id = 0
+            teacher_rows = [
+                course
+                for course in month_rows
+                if int(course.get("teacher_id") or 0) == teacher_id
+            ]
+
+        subjects = sorted(
+            {
+                (course.get("subject") or "").strip()
+                for course in teacher_rows
+            }
+        )
+        subject_keys = {subject or "__none__" for subject in subjects}
+        if self.course_subject_filter and self.course_subject_filter not in subject_keys:
+            self.course_subject_filter = ""
+        subject_rows = teacher_rows
+        if self.course_subject_filter:
+            wanted = (
+                ""
+                if self.course_subject_filter == "__none__"
+                else self.course_subject_filter
+            )
+            subject_rows = [
+                course
+                for course in teacher_rows
+                if (course.get("subject") or "").strip() == wanted
+            ]
+
+        before_status = subject_rows
+        if self.course_status_filter == "unclosed":
+            filtered = [
+                course
+                for course in before_status
+                if db.course_status(course) != "已结课"
+            ]
+        elif self.course_status_filter == "all":
+            filtered = before_status
+        else:
+            filtered = [
+                course
+                for course in before_status
+                if db.course_status(course) == self.course_status_filter
+            ]
+
+        hidden_ended = (
+            len(before_status) - len(filtered)
+            if self.course_status_filter == "unclosed"
+            else 0
+        )
+        summary = f"显示 {len(filtered)} / 共 {len(courses)} 门课程"
+        if hidden_ended:
+            summary += f"，已隐藏 {hidden_ended} 门已结课"
+
+        status_dd = _dd(
+            "课程状态",
+            _opts(
+                [
+                    ("unclosed", "未结课（默认）"),
+                    ("未开课", "未开课"),
+                    ("在读", "在读"),
+                    ("已结课", "已结课"),
+                    ("all", "全部状态"),
+                ]
+            ),
+            value=self.course_status_filter,
+            width=180,
+            on_select=lambda e: self._set_course_filter(
+                "course_status_filter", e.control.value or "unclosed"
+            ),
+        )
+        teacher_dd = _dd(
+            "上课老师",
+            teacher_options,
+            value=effective_teacher,
+            width=180,
+            on_select=lambda e: self._set_course_teacher(e.control.value or ""),
+        )
+        subject_dd = _dd(
+            "科目",
+            [ft.DropdownOption(key="", text="全部科目")]
+            + _opts(
+                [
+                    (subject or "__none__", subject or "未设置科目")
+                    for subject in subjects
+                ]
+            ),
+            value=self.course_subject_filter,
+            width=180,
+            on_select=lambda e: self._set_course_filter(
+                "course_subject_filter", e.control.value or ""
+            ),
+        )
+
+        month_bar = ft.Row(
+            [
+                ft.IconButton(
+                    ft.Icons.CHEVRON_LEFT,
+                    tooltip="上个月",
+                    on_click=lambda e: self._shift_course_month(-1),
+                ),
+                ft.Text(
+                    _month_text(self.course_month),
+                    size=14,
+                    weight=ft.FontWeight.W_600,
+                    text_align=ft.TextAlign.CENTER,
+                    width=130,
+                ),
+                ft.IconButton(
+                    ft.Icons.CHEVRON_RIGHT,
+                    tooltip="下个月",
+                    on_click=lambda e: self._shift_course_month(1),
+                ),
+                ft.TextButton(
+                    "本月",
+                    icon=ft.Icons.TODAY,
+                    on_click=lambda e: self._this_course_month(),
+                ),
+            ],
+            spacing=2,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        panel = self._card(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text(
+                                "课程筛选",
+                                size=14,
+                                weight=ft.FontWeight.W_600,
+                                expand=True,
+                            ),
+                            ft.TextButton(
+                                "重置筛选",
+                                icon=ft.Icons.FILTER_ALT_OFF,
+                                on_click=lambda e: self._reset_course_filters(),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    month_bar,
+                    ft.Row(
+                        [status_dd, teacher_dd, subject_dd],
+                        spacing=8,
+                        run_spacing=8,
+                        wrap=True,
+                    ),
+                    ft.Text(summary, size=11, color=ft.Colors.GREY_600),
+                ],
+                spacing=8,
+            )
+        )
+        return filtered, panel
+
+    def _set_course_filter(self, field: str, value: str) -> None:
+        setattr(self, field, value)
+        self.render()
+
+    def _set_course_teacher(self, value: str) -> None:
+        self.course_teacher_filter = value
+        self.course_subject_filter = ""
+        self.render()
 
     def _schedule_view(self) -> ft.Column:
         db.sync_course_statuses()  # 课程到期了就自动结课
@@ -274,7 +527,7 @@ class ScheduleMixin:
         day_lessons = db.lessons_on(self.schedule_date)
         names = db.attendance_names([l["id"] for l in day_lessons])
         used_ids: set[int] = set()
-        rows: list[ft.Control] = []
+        row_entries: list[tuple[str, int, int, int, ft.Control]] = []
         # 这天已经建出来的课次，按"属于哪门课程"对号入座
         by_template = {
             int(l["template_id"]): l for l in day_lessons if l.get("template_id")
@@ -283,9 +536,15 @@ class ScheduleMixin:
             found = by_template.get(int(t["id"]))
             if found:
                 used_ids.add(int(found["id"]))
-            rows.append(
-                self._schedule_row(
-                    t, found, names.get(int(found["id"]), []) if found else []
+            row_entries.append(
+                (
+                    str((found or t).get("start_time") or ""),
+                    0,
+                    int(t["id"]),
+                    int((found or {}).get("id") or 0),
+                    self._schedule_row(
+                        t, found, names.get(int(found["id"]), []) if found else []
+                    ),
                 )
             )
         # 时间不定的课程、临时加课、补课，也都放在「这天的课」里
@@ -298,11 +557,26 @@ class ScheduleMixin:
                 else None
             )
             # 属于某门课程的（比如"时间不定"的竞赛课），跟别的课程一样显示
-            rows.append(
-                self._schedule_row(linked, lesson, names.get(int(lesson["id"]), []))
-                if linked is not None
-                else self._day_lesson_row(lesson, names.get(int(lesson["id"]), []))
+            row_entries.append(
+                (
+                    str(lesson.get("start_time") or ""),
+                    0 if linked is not None else 1,
+                    int(lesson.get("template_id") or 0),
+                    int(lesson["id"]),
+                    (
+                        self._schedule_row(
+                            linked, lesson, names.get(int(lesson["id"]), [])
+                        )
+                        if linked is not None
+                        else self._day_lesson_row(
+                            lesson, names.get(int(lesson["id"]), [])
+                        )
+                    ),
+                )
             )
+        rows = [
+            entry[4] for entry in sorted(row_entries, key=lambda item: item[:4])
+        ]
         if not rows:
             rows = [
                 ft.Text(
@@ -346,12 +620,17 @@ class ScheduleMixin:
         )
 
         all_courses = db.list_templates()
-        template_rows = [self._template_row(t) for t in all_courses]
+        filtered_courses, filter_panel = self._course_filter_panel(all_courses)
+        template_rows = [self._template_row(t) for t in filtered_courses]
         if not template_rows:
             template_rows = [
                 ft.Text(
-                    "还没有课程。点右上角「新增课程」，把课程名、老师、" 
-                    "开课／结课日期、每周上课时间和学生定好，以后到那天点一下「点名」就行。",
+                    (
+                        "还没有课程。点右上角「新增课程」，把课程名、老师、"
+                        "开课／结课日期、每周上课时间和学生定好，以后到那天点一下「点名」就行。"
+                    )
+                    if not all_courses
+                    else "当前筛选没有课程。可以调整月份、状态、老师或科目。",
                     size=12,
                     color=ft.Colors.GREY_600,
                 )
@@ -368,14 +647,9 @@ class ScheduleMixin:
                     f"这天的课（{_date_text(self.schedule_date)}）",
                     ft.Column(rows, spacing=10),
                 ),
+                filter_panel,
                 self._section(
-                    f"课程（{len(all_courses)} 个"
-                    + (
-                        f"，{sum(1 for t in all_courses if not (t.get('end_date') or '').strip())} 个还没填结课日"
-                        if any(not (t.get("end_date") or "").strip() for t in all_courses)
-                        else ""
-                    )
-                    + "）",
+                    f"课程（{len(filtered_courses)} 个）",
                     ft.Column(template_rows, spacing=10),
                 ),
                 ft.Container(height=8),
@@ -494,7 +768,7 @@ class ScheduleMixin:
         elif found:
             bits.append("待点名")
         if found and found.get("rolled", 1):
-            action = ft.TextButton(
+            primary_action = ft.TextButton(
                 (
                     "已点名 · 进去看"
                     if self._can_manage_lesson(found)
@@ -504,7 +778,7 @@ class ScheduleMixin:
                 on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
             )
         elif found:
-            action = (
+            primary_action = (
                 ft.Button(
                     "去点名",
                     icon=ft.Icons.FACT_CHECK,
@@ -517,33 +791,35 @@ class ScheduleMixin:
                 )
             )
         elif not can_manage_course:
-            action = ft.Text("只读", size=11, color=ft.Colors.GREY_500)
+            primary_action = ft.Text("只读", size=11, color=ft.Colors.GREY_500)
         else:
+            primary_action = ft.Button(
+                "点名",
+                icon=ft.Icons.FACT_CHECK,
+                on_click=lambda e, tid=template["id"]: self._roll_call(tid),
+            )
+
+        can_cancel = can_manage_course and (
+            found is None or self._can_manage_lesson(found)
+        )
+        if can_cancel:
             action = ft.Row(
                 [
-                    ft.Button(
-                        "点名",
-                        icon=ft.Icons.FACT_CHECK,
-                        on_click=lambda e, tid=template["id"]: self._roll_call(tid),
-                    ),
-                    *(
-                        [
-                            ft.TextButton(
-                                "这天不上",
-                                tooltip="这天不算上课，从课表上去掉",
-                                on_click=lambda e, tid=template["id"]: self._skip_course_day(
-                                    tid, self.schedule_date
-                                ),
-                            )
-                        ]
-                        if can_manage_course
-                        else []
+                    primary_action,
+                    ft.TextButton(
+                        "这天不上",
+                        tooltip="取消这天的课次，并标成不上课",
+                        on_click=lambda e, tid=template["id"], day=self.schedule_date: self._skip_course_day(
+                            tid, day
+                        ),
                     ),
                 ],
                 spacing=4,
                 tight=True,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
+        else:
+            action = primary_action
         return ft.Container(
             content=ft.Row(
                 [
@@ -808,18 +1084,49 @@ class ScheduleMixin:
         )
 
     def _skip_course_day(self, template_id: int, day: str) -> None:
-        """某天的课不上了：那天从课表上去掉。"""
+        """某天的课不上了：取消那天的课次，并从课表上去掉。"""
         template = db.get_template(template_id)
         if template is None or not self._can_manage_course(template):
             self._toast("这是其他老师的课程，只能查看")
             return
         title = db.class_label(template) if template else "这门课"
+        found = db.find_lesson_for_template(template, day)
+        if found is not None and not self._can_manage_lesson(found):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        allow_rolled = False
+        if found and found.get("rolled", 1):
+            hours = round(float(found.get("attended_minutes") or 0) / 60, 2)
+            points = float(found.get("points") or 0)
+            message = (
+                f"{_date_text(day)} 的「{title}」已经点过名："
+                f"已扣 {db.num_text(hours)} 课时、加 {db.num_text(points)} 分。\n"
+                "取消后会退回这些课时和积分，并删掉这节课的数据。确定吗？"
+            )
+            allow_rolled = True
+        elif found:
+            message = (
+                f"{_date_text(day)} 的「{title}」已经建了待点名课次。\n"
+                "标成不上课后，会一并删除这节待点名课次，不扣课时、不加积分。确定吗？"
+            )
+        else:
+            message = (
+                f"{_date_text(day)} 的「{title}」不上？"
+                "这天就不会再出现在课表上，也不会建课次。"
+            )
+
+        def cancel() -> None:
+            db.cancel_course_occurrence(
+                template_id,
+                day,
+                allow_rolled=allow_rolled,
+                lesson_id=int(found["id"]) if found else None,
+            )
+
         self._confirm(
             "这天不上课",
-            f"{_date_text(day)} 的「{title}」不上？"
-            "这天就不会再出现在课表上，也不会建课次（以后想上回来，"
-            "在课程里点「恢复」）。",
-            lambda: db.skip_course_day(template_id, day),
+            message + " 以后想上回来，在课程里点「恢复」。",
+            cancel,
             ok_text="确定",
             done_text="这天标成「不上」了",
         )

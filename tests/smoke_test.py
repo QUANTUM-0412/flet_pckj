@@ -4025,10 +4025,25 @@ except AssertionError:
     has_skip_btn = False
 ok(has_skip_btn, "待点名的课程旁边有「这天不上」")
 
+# 点进点名后先生成一节待点名课次；返回课表时，“不上课”入口不能丢。
+app._roll_call(cls_a)
+pending_skip_id = app.lesson_id
+app.open_schedule(True)
+try:
+    find_button(page.controls[0], "去点名")
+    find_button(page.controls[0], "这天不上")
+    pending_actions_visible = True
+except AssertionError:
+    pending_actions_visible = False
+ok(pending_actions_visible, "进入点名后回到课表，「这天不上」仍然在")
 app._skip_course_day(cls_a, skip_day)
 dlg = top_dialog(page)
 click(dlg, "确定")
 ok(db.is_course_skipped(cls_a, skip_day), "标成这天不上了")
+ok(
+    db.get_lesson(pending_skip_id) is None,
+    "标成不上课时，那天的待点名课次一起清掉了",
+)
 ok(
     cls_a not in {t["id"] for t in db.templates_on(skip_day)},
     "这天的课表上就没有这门课了",
@@ -4046,12 +4061,208 @@ ok(
     "恢复以后这天的课又回来了",
 )
 
+# 已经正式点过名，也允许在明确退回课时／积分后取消这一天的课。
+rolled_skip_day = "2026-10-13"
+rolled_skip_cls = db.create_template(
+    1,
+    "11:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    name="取消已点名课程-测试",
+    teacher_id=t_a,
+    start_date="2026-09-01",
+    end_date="2026-10-31",
+)
+rolled_skip_id = db.create_lesson_from_template(rolled_skip_cls, rolled_skip_day)
+db.roll_call(rolled_skip_id)
+app.tab = 1
+app.lesson_id = None
+app.schedule_date = rolled_skip_day
+app.render()
+try:
+    find_button(page.controls[0], "这天不上")
+    rolled_skip_visible = find_text(page.controls[0], "已点名")
+except AssertionError:
+    rolled_skip_visible = False
+ok(rolled_skip_visible, "已点名的课程也保留「这天不上」入口")
+try:
+    db.skip_course_day(rolled_skip_cls, rolled_skip_day)
+    direct_rolled_skip = False
+except ValueError:
+    direct_rolled_skip = True
+ok(direct_rolled_skip, "数据层不会悄悄取消已点名的课")
+app._skip_course_day(rolled_skip_cls, rolled_skip_day)
+dlg = top_dialog(page)
+click(dlg, "确定")
+ok(
+    db.get_lesson(rolled_skip_id) is None
+    and db.is_course_skipped(rolled_skip_cls, rolled_skip_day),
+    "确认后可取消已点名课次并标成不上课",
+)
+db.delete_template(rolled_skip_cls)
+
 db.skip_course_day(rng_cls, "2026-10-05")
 result42 = db.generate_template_lessons(rng_cls)
 ok("2026-10-05" not in result42["made"], "排整学期会跳过标了「不上」的那天")
 for lesson in db.template_lessons(rng_cls):
     db.delete_lesson(lesson["id"])
 db.unskip_course_day(rng_cls, "2026-10-05")
+
+print("43. 周课表按时间排序，课程列表按月／状态／老师／科目筛选")
+sort_day = "2026-10-19"
+sort_early = db.create_template(
+    0,
+    "09:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    name="时间排序-早课",
+    teacher_id=t_a,
+    start_date="2026-10-01",
+    end_date="2026-10-31",
+)
+sort_late = db.create_template(
+    0,
+    "10:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    name="时间排序-晚课",
+    teacher_id=t_a,
+    start_date="2026-10-01",
+    end_date="2026-10-31",
+)
+sort_late_lesson = db.create_lesson_from_template(sort_late, sort_day)
+app.tab = 1
+app.lesson_id = None
+app.schedule_date = sort_day
+app.render()
+visible_texts = [
+    str(c.value or "") for c in walk(page.controls[0]) if isinstance(c, ft.Text)
+]
+early_pos = next(
+    i for i, value in enumerate(visible_texts) if "时间排序-早课" in value
+)
+late_pos = next(
+    i for i, value in enumerate(visible_texts) if "时间排序-晚课" in value
+)
+ok(early_pos < late_pos, "同一天的待点名课程和已生成课次按开始时间排列")
+
+filter_own = db.create_template(
+    0,
+    "13:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    name="筛选-王老师-在读",
+    teacher_id=t_a,
+    start_date="2026-10-01",
+    end_date="2026-10-31",
+)
+filter_ended = db.create_template(
+    0,
+    "14:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    name="筛选-王老师-已结课",
+    teacher_id=t_a,
+    start_date="2026-09-01",
+    end_date="2026-10-05",
+)
+filter_other = db.create_template(
+    0,
+    "15:00",
+    60,
+    zhengke["id"],
+    mcu_level["id"],
+    name="筛选-李老师-MCU",
+    teacher_id=t_b,
+    start_date="2026-10-01",
+    end_date="2026-10-31",
+)
+ok(
+    app.course_month == date.today().strftime("%Y-%m")
+    and app.course_status_filter == "unclosed",
+    "课程筛选默认显示本月且隐藏已结课",
+)
+ok(
+    db.course_in_month(db.get_template(filter_own), "2026-10")
+    and not db.course_in_month(db.get_template(filter_own), "2026-11"),
+    "月份按课程实际排课区间判断",
+)
+app.course_month = "2026-10"
+app.course_status_filter = "unclosed"
+app.course_teacher_filter = str(t_a)
+app.course_subject_filter = ""
+app.render()
+def course_list_text() -> str:
+    controls = list(walk(page.controls[0]))
+    title_index = next(
+        i
+        for i, control in enumerate(controls)
+        if isinstance(control, ft.Text)
+        and str(control.value or "").startswith("课程（")
+    )
+    return "\n".join(
+        str(control.value or "")
+        for control in controls[title_index:]
+        if isinstance(control, ft.Text)
+    )
+
+
+ok("筛选-王老师-在读" in course_list_text(), "老师自己的在读课程仍然显示")
+ok(
+    "筛选-王老师-已结课" not in course_list_text(),
+    "已结课课程默认隐藏",
+)
+ok(
+    "筛选-李老师-MCU" not in course_list_text(),
+    "其他老师的课程不在当前老师筛选里",
+)
+ok(
+    find_dropdown(page.controls[0], "课程状态").value == "unclosed"
+    and find_dropdown(page.controls[0], "上课老师").value == str(t_a)
+    and find_dropdown(page.controls[0], "科目").value == "",
+    "筛选控件显示默认条件",
+)
+app.course_teacher_filter = "all"
+app.render()
+ok(
+    "筛选-王老师-在读" in course_list_text()
+    and "筛选-李老师-MCU" in course_list_text()
+    and "筛选-王老师-已结课" not in course_list_text(),
+    "切到全部老师后，只隐藏已结课",
+)
+app.course_status_filter = "已结课"
+app.render()
+ok(
+    "筛选-王老师-已结课" in course_list_text()
+    and "筛选-王老师-在读" not in course_list_text(),
+    "选择已结课后只看已结课课程",
+)
+app.course_status_filter = "all"
+app.course_subject_filter = "MCU"
+app.render()
+ok(
+    "筛选-李老师-MCU" in course_list_text()
+    and "筛选-王老师-在读" not in course_list_text(),
+    "科目筛选只保留对应科目",
+)
+app.course_month = "2026-09"
+app.course_subject_filter = ""
+app.render()
+ok(
+    "筛选-王老师-已结课" in course_list_text()
+    and "筛选-王老师-在读" not in course_list_text(),
+    "切到上个月后只显示当月有排课的课程",
+)
+for lesson in db.template_lessons(sort_late):
+    db.delete_lesson(lesson["id"])
+for template_id in (sort_early, sort_late, filter_own, filter_ended, filter_other):
+    db.delete_template(template_id)
+app._reset_course_filters()
 
 print("44. 学员按姓名／电话／年级／学校／归属老师筛选")
 f1 = db.create_student(

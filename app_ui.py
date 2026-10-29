@@ -74,6 +74,10 @@ class ClassHoursApp(
         self.lesson_keyword = ""
         self.forum_keyword = ""
         self.lesson_week = ""  # 空着就是本周；否则存那一周的周一（YYYY-MM-DD）
+        self.course_month = date.today().strftime("%Y-%m")
+        self.course_status_filter = "unclosed"
+        self.course_teacher_filter = ""  # 空着按身份：老师看自己，管理员看全部
+        self.course_subject_filter = ""
         self.status_filter = ""
         self.trial_filter = ""
         self.payment_month = ""  # 空着就是本月；否则 YYYY-MM
