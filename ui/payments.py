@@ -318,8 +318,8 @@ class PaymentsMixin:
         day = _tf("日期", payment["paid_on"] if editing else date.today().isoformat(), width=DIALOG_WIDTH)
         note = _tf("备注", payment["note"] if editing else "", width=DIALOG_WIDTH)
         package_dd = _dd(
-            "固定课包（可选）",
-            [ft.DropdownOption(key="", text="不用课包（普通缴费）")]
+            "缴费方式",
+            [ft.DropdownOption(key="", text="普通缴费（按课时录入）")]
             + _opts(
                 [
                     (
@@ -333,7 +333,7 @@ class PaymentsMixin:
             width=DIALOG_WIDTH,
         )
         package_hint = ft.Text(
-            "课包会自动填入固定课时和金额；普通缴费不会送代金券。",
+            "课包会带入固定课时；普通缴费按下方明细计算。",
             size=11,
             color=ft.Colors.GREY_600,
         )
@@ -350,10 +350,16 @@ class PaymentsMixin:
         gift_rows: list[dict] = []
         rows_holder = ft.Column(spacing=8, tight=True)
         rows: list[dict] = []
-        total_text = ft.Text("", size=13, weight=ft.FontWeight.W_600)
+        total_text = ft.Text("", size=18, weight=ft.FontWeight.W_600)
         voucher_hint = ft.Text("", size=12, color=ft.Colors.GREY_600)
         voucher_dd = _dd("用代金券", [], value="", width=DIALOG_WIDTH)
         voucher_dd.options = [ft.DropdownOption(key="", text="不用")]
+        voucher_section = ft.Column(
+            [voucher_dd, voucher_hint],
+            spacing=6,
+            tight=True,
+            visible=False,
+        )
         if editing and payment["voucher_id"]:
             voucher_dd.value = str(payment["voucher_id"])
 
@@ -418,9 +424,11 @@ class PaymentsMixin:
                     "这个孩子还没有可用的代金券（满 3000 元且含正课的固定课包才送，"
                     "但券可以用在任何一笔缴费上）"
                 )
+            voucher_section.visible = bool(list_rows)
             if update:
                 voucher_dd.update()
                 voucher_hint.update()
+                voucher_section.update()
 
         def _number(field) -> float:
             try:
@@ -488,7 +496,8 @@ class PaymentsMixin:
                 )
             else:
                 total_text.value = f"合计 {db.num_text(total)} 元"
-            issue_hint.value = issue_text()
+            issue_hint.value = issue_text() if package else ""
+            issue_hint.visible = package is not None
             if update:
                 total_text.update()
                 issue_hint.update()
@@ -712,7 +721,7 @@ class PaymentsMixin:
         rows_actions = ft.Row(
             [
                 ft.TextButton(
-                    "+ 加一行",
+                    "加一行",
                     icon=ft.Icons.ADD,
                     on_click=lambda e: add_row(),
                 )
@@ -722,7 +731,7 @@ class PaymentsMixin:
         gift_actions = ft.Row(
             [
                 ft.TextButton(
-                    "+ 额外赠送考级／比赛课时",
+                    "额外赠送考级／比赛课时",
                     icon=ft.Icons.CARD_GIFTCARD,
                     on_click=lambda e: add_gift(),
                 )
@@ -825,7 +834,7 @@ class PaymentsMixin:
             package_hint.value = (
                 f"已选「{package['name']}」：固定 {db.num_text(package['price'])} 元。"
                 if package
-                else "课包会自动填入固定课时和金额；普通缴费不会送代金券。"
+                else "课包会带入固定课时；普通缴费按下方明细计算。"
             )
             if update:
                 package_table_holder.update()
@@ -1057,6 +1066,45 @@ class PaymentsMixin:
         # 弹窗还没挂到页面上，先只算数值，别急着刷新
         refresh_vouchers(False)
         refresh_total(False)
+        summary_block = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "本笔合计",
+                        size=12,
+                        color=ft.Colors.BLUE_800,
+                    ),
+                    total_text,
+                    issue_hint,
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            border_radius=10,
+            bgcolor=ft.Colors.BLUE_50,
+        )
+        help_tile = ft.ExpansionTile(
+            "填写说明",
+            controls=[
+                ft.Text(
+                    "「哪门课程」用来关联孩子已经报过的班。新学员还没有报名时"
+                    "选「不指定」，选好等级后会在保存时顺手创建报名。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+                ft.Text(
+                    "可以加多行，把购买的课时和赠送的课时一起记录。"
+                    "手动赠送考级或比赛课时时必须填写备注；正课不能作为赠送课时。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+            ],
+            dense=True,
+            min_tile_height=44,
+            tile_padding=ft.Padding.symmetric(horizontal=0, vertical=4),
+            controls_padding=ft.Padding(left=0, top=4, right=0, bottom=4),
+        )
         body = self._form_column(
             [
                 student_dd,
@@ -1067,32 +1115,18 @@ class PaymentsMixin:
                 package_table_holder,
                 package_level,
                 ft.Text(
-                    "这次买的课时（可以加多行：买的、送的都记上；"
-                    "选上等级就会顺手建好「报名课程」）",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Text(
-                    "「哪门课程」用来关联孩子已经报过的班；新学员还没有报名时"
-                    "选「不指定」，选好每个等级的课时后会顺手创建报名。",
-                    size=11,
-                    color=ft.Colors.GREY_600,
+                    "课时明细",
+                    size=14,
+                    weight=ft.FontWeight.W_600,
                 ),
                 rows_holder,
                 rows_actions,
                 gift_actions,
                 gift_holder,
-                voucher_dd,
-                voucher_hint,
-                total_text,
-                issue_hint,
-                ft.Text(
-                    "手动赠送考级／比赛课时时，必须填写备注原因；"
-                    "正课不能作为赠送课时手动添加。",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                ),
+                voucher_section,
                 note,
+                summary_block,
+                help_tile,
             ]
         )
         self._show(

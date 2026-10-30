@@ -69,7 +69,7 @@ uv run flet run --web main.py
 - `main.py` —— 启动入口（起 Web 服务、打印手机访问地址）
 - `app_ui.py` —— 界面组合入口：定义 `ClassHoursApp`，把 `ui/` 里各功能模块拼起来
 - `ui/` —— 界面代码，按功能拆分：
-  - `common.py` 常量与小工具、`auth.py` 登录、`shell.py` 导航外壳、`widgets.py` 卡片与对话框
+  - `common.py` 常量与小工具、`auth.py` 登录、`shell.py` 导航外壳、`dashboard.py` 员工今日工作台、`widgets.py` 卡片与对话框
   - `students.py` 学员、`schedule.py` 课表、`lessons.py` / `lesson_detail.py` / `lesson_dialogs.py` 上课与点名
   - `payments.py` 缴费、`points.py` 积分、`trials.py` 试听、`hours.py` 课时流水、`enrollment.py` 报名
   - `reports.py` 报表导出、`settings.py` 课程设置

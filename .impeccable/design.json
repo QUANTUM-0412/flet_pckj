@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-30T07:11:02Z",
+  "title": "Design System: 课时记录",
+  "extensions": {
+    "colorMeta": {
+      "action-blue": {
+        "role": "primary",
+        "displayName": "Operational Blue",
+        "canonical": "#1976D2",
+        "tonalRamp": ["#0D2C42", "#124A6C", "#166496", "#1976D2", "#4A97DF", "#80B8E9", "#B6D8F4", "#E3F2FD"]
+      },
+      "action-blue-deep": {
+        "role": "primary",
+        "displayName": "Deep Operational Blue",
+        "canonical": "#1565C0",
+        "tonalRamp": ["#0A263F", "#103E66", "#14538F", "#1565C0", "#4387D8", "#75AAE4", "#ACD0F1", "#E3F2FD"]
+      },
+      "action-blue-soft": {
+        "role": "primary",
+        "displayName": "Quiet Blue Surface",
+        "canonical": "#E3F2FD",
+        "tonalRamp": ["#102C3D", "#1A4A63", "#2B6C8B", "#4B91B2", "#78B1CA", "#A5CCDC", "#D0E6EE", "#E3F2FD"]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Work Canvas",
+        "canonical": "#F5F5F5",
+        "tonalRamp": ["#252525", "#414141", "#5E5E5E", "#7A7A7A", "#A3A3A3", "#C7C7C7", "#E2E2E2", "#F5F5F5"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Record Surface",
+        "canonical": "#FFFFFF",
+        "tonalRamp": ["#262626", "#404040", "#5C5C5C", "#777777", "#A1A1A1", "#C6C6C6", "#E5E5E5", "#FFFFFF"]
+      },
+      "surface-muted": {
+        "role": "neutral",
+        "displayName": "Muted Surface",
+        "canonical": "#FAFAFA",
+        "tonalRamp": ["#262626", "#414141", "#5C5C5C", "#787878", "#A2A2A2", "#C8C8C8", "#ECECEC", "#FAFAFA"]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Rule Line",
+        "canonical": "#E0E0E0",
+        "tonalRamp": ["#252525", "#414141", "#5E5E5E", "#7B7B7B", "#A4A4A4", "#C4C4C4", "#D6D6D6", "#E0E0E0"]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Primary Ink",
+        "canonical": "#000000",
+        "tonalRamp": ["#000000", "#2A2A2A", "#454545", "#616161", "#8A8A8A", "#B6B6B6", "#DDDDDD", "#FFFFFF"]
+      },
+      "text-secondary": {
+        "role": "neutral",
+        "displayName": "Secondary Ink",
+        "canonical": "#757575",
+        "tonalRamp": ["#1E1E1E", "#343434", "#4C4C4C", "#5F5F5F", "#757575", "#9A9A9A", "#C3C3C3", "#EDEDED"]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Confirmed Green",
+        "canonical": "#388E3C",
+        "tonalRamp": ["#102D15", "#1A4C20", "#266B2C", "#2F7D34", "#388E3C", "#65AD68", "#9BCD9D", "#E8F5E9"]
+      },
+      "warning": {
+        "role": "secondary",
+        "displayName": "Action Orange",
+        "canonical": "#F57C00",
+        "tonalRamp": ["#3D2106", "#653708", "#8D4C09", "#C36400", "#F57C00", "#FFA04B", "#FFC78E", "#FFF3E0"]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Risk Red",
+        "canonical": "#E53935",
+        "tonalRamp": ["#40100F", "#661A18", "#912521", "#BD2E2A", "#E53935", "#EF706D", "#F6A8A6", "#FFEBEE"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page names and dialog titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section headings, class names and primary list titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Operational records, descriptions and metadata."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Statuses, navigation labels and compact field labels."
+      }
+    },
+    "breakpoints": [
+      {
+        "name": "mobile",
+        "value": "below 820px"
+      },
+      {
+        "name": "desktop",
+        "value": "820px and above"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The next useful action in a working screen.",
+      "html": "<button class=\"ds-btn-primary\">记一节课</button>",
+      "css": ".ds-btn-primary { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 18px; background: #E3F2FD; color: #1976D2; font: 600 14px/1.2 system-ui, -apple-system, BlinkMacSystemFont, sans-serif; cursor: pointer; transition: background-color 160ms ease, color 160ms ease; } .ds-btn-primary:hover { background: #D3E9FB; } .ds-btn-primary:focus-visible { outline: 2px solid #1976D2; outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary navigation or a reversible action.",
+      "html": "<button class=\"ds-btn-ghost\">完整课程表</button>",
+      "css": ".ds-btn-ghost { min-height: 40px; padding: 8px 12px; border: 0; border-radius: 18px; background: #FFFFFF; color: #1976D2; font: 500 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, sans-serif; cursor: pointer; } .ds-btn-ghost:hover { background: #FAFAFA; } .ds-btn-ghost:focus-visible { outline: 2px solid #1976D2; outline-offset: 2px; }"
+    },
+    {
+      "name": "Record Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A flat grouped section containing operational records.",
+      "html": "<section class=\"ds-card\"><h3>今天的课（1）</h3><div class=\"ds-card-row\"><strong>15:30 测试学生演示课程</strong><span>STEAM-Lvl-02 · 李昂 · 1 人</span></div></section>",
+      "css": ".ds-card { padding: 14px; border: 1px solid #E0E0E0; border-radius: 12px; background: #FFFFFF; color: #000000; font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; } .ds-card h3 { margin: 0 0 10px; font-size: 15px; } .ds-card-row { padding: 12px; border-radius: 10px; background: #FAFAFA; } .ds-card-row strong { display: block; font-size: 15px; } .ds-card-row span { display: block; margin-top: 4px; color: #757575; font-size: 12px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Compact outlined input with a persistent label.",
+      "html": "<label class=\"ds-field\"><span>孩子</span><input value=\"侯庆轩（二年级）\" /></label>",
+      "css": ".ds-field { display: grid; gap: 5px; color: #757575; font: 500 11px/1.3 system-ui, -apple-system, BlinkMacSystemFont, sans-serif; } .ds-field input { min-height: 40px; padding: 10px 12px; border: 1px solid #757575; border-radius: 6px; background: #FFFFFF; color: #000000; font: 400 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, sans-serif; } .ds-field input:focus-visible { outline: 2px solid #1976D2; outline-offset: 1px; }"
+    },
+    {
+      "name": "Active Navigation",
+      "kind": "nav",
+      "refersTo": "navigation-active",
+      "description": "Current destination in the desktop rail or mobile bar.",
+      "html": "<a class=\"ds-nav-active\" href=\"#\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 4h14v16H5z\"/></svg><span>今天</span></a>",
+      "css": ".ds-nav-active { display: inline-flex; min-width: 64px; min-height: 56px; padding: 8px 10px; box-sizing: border-box; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-radius: 16px; background: #E3F2FD; color: #1565C0; text-decoration: none; font: 600 12px/1.2 system-ui, -apple-system, BlinkMacSystemFont, sans-serif; } .ds-nav-active svg { width: 22px; height: 22px; fill: currentColor; } .ds-nav-active:focus-visible { outline: 2px solid #1976D2; outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "description": "Compact state label that never relies on color alone.",
+      "html": "<span class=\"ds-chip-warning\">待点名</span>",
+      "css": ".ds-chip-warning { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 6px; background: #F57C00; color: #FFFFFF; font: 600 11px/1.35 system-ui, -apple-system, BlinkMacSystemFont, sans-serif; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Daily Operations Ledger",
+    "overview": "This system behaves like an institution's daily operations ledger: calm, information-dense surfaces with clear grouping and restrained state color. It prioritizes trust, scanning and fast completion over expressive marketing composition. Desktop pages preserve the complete business directory, while mobile surfaces concentrate on today's work.",
+    "keyCharacteristics": [
+      "Chinese-first operational language.",
+      "Flat surfaces and one-pixel boundaries before shadows.",
+      "Blue for navigation and action, orange for pending work, red only for explicit risk.",
+      "Grouping through spacing and muted surfaces, not stacked decoration."
+    ],
+    "rules": [
+      {
+        "name": "The Scarce Accent Rule",
+        "body": "Blue identifies navigation and action, not decoration; do not wash entire page sections in the accent.",
+        "section": "colors"
+      },
+      {
+        "name": "The Information Before Ornament Rule",
+        "body": "Type hierarchy comes from size, weight, and spacing; decorative lettering is not used for operational data.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-By-Default Rule",
+        "body": "Static records stay flat. Elevation is reserved for overlays and temporary interaction surfaces.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep one visual center for the primary action on each page.",
+      "Do maintain at least 44px touch height with visible text labels on mobile.",
+      "Do use both text and color for pending attendance, makeups and low balances.",
+      "Do place long rules in contextual help or collapsed disclosure.",
+      "Do preserve stable tab identifiers and existing business relationships."
+    ],
+    "donts": [
+      "Don't place every back-office module in the mobile bottom bar.",
+      "Don't let long course codes overpower human-readable class names and urgent status.",
+      "Don't rename the same business action differently across pages.",
+      "Don't add decorative shadows or thick colored edges to static record cards.",
+      "Don't rely on color or icons alone for errors, success or permission meaning."
+    ]
+  }
+}

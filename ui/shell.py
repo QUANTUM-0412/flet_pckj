@@ -6,6 +6,8 @@ import flet as ft
 
 import db
 
+TAB_DASHBOARD = 9
+
 
 class ShellMixin:
     """外壳与导航（ClassHoursApp 的一部分）。"""
@@ -22,6 +24,7 @@ class ShellMixin:
                 (ft.Icons.CALCULATE_OUTLINED, ft.Icons.CALCULATE, "工具"),
             ]
         return [
+            (ft.Icons.TODAY_OUTLINED, ft.Icons.TODAY, "今天"),
             (ft.Icons.PEOPLE_OUTLINE, ft.Icons.PEOPLE, "学员"),
             (ft.Icons.SCHOOL_OUTLINED, ft.Icons.SCHOOL, "课程"),
             (ft.Icons.PERSON_SEARCH, ft.Icons.PERSON_SEARCH, "试听"),
@@ -41,7 +44,25 @@ class ShellMixin:
         """导航顺序和页签编号分开，新增工具时不打乱已有页面。"""
         if self.is_student():
             return [0, 1, 2, 3]
-        return [0, 1, 2, 3, 4, 8, 5, 6, 7]
+        return [TAB_DASHBOARD, 0, 1, 2, 3, 4, 8, 5, 6, 7]
+
+    def _mobile_primary_indices(self) -> list[int]:
+        """手机底栏只放每天最常用的入口，其余收进「更多」。"""
+        if self.is_student():
+            return self._nav_tab_indices()
+        return [TAB_DASHBOARD, 0, 1]
+
+    def _mobile_more_indices(self) -> list[int]:
+        if self.is_student():
+            return []
+        primary = set(self._mobile_primary_indices())
+        return [i for i in self._nav_tab_indices() if i not in primary]
+
+    def _nav_item(self, index: int) -> tuple:
+        for item_index, item in zip(self._nav_tab_indices(), self._nav_items()):
+            if item_index == index:
+                return item
+        raise KeyError(index)
 
     def render(self) -> None:
         self.page.clean()
@@ -53,7 +74,11 @@ class ShellMixin:
         wide = self.is_wide()
         self._last_wide = wide
         body = ft.Container(
-            content=self._body(),
+            content=ft.Column(
+                [self._account_bar(), self._body()],
+                expand=True,
+                spacing=8,
+            ),
             expand=True,
             padding=ft.Padding.symmetric(horizontal=14, vertical=12),
         )
@@ -79,6 +104,79 @@ class ShellMixin:
         if pending is not None:
             self._pending_student_credentials = None
             self._show_student_credentials(*pending)
+
+    def _account_bar(self) -> ft.Row:
+        role = (self.user or {}).get("role")
+        role_label = db.ROLE_NAMES.get(role, "账号")
+        scope_label = {
+            db.ROLE_ROOT: "全部数据与权限",
+            db.ROLE_TEACHER: "可编辑本人负责的记录",
+            db.ROLE_STUDENT: "仅查看本人信息",
+        }.get(role, "")
+        display_name = (
+            (self.user or {}).get("forum_nickname") or ""
+            if self.is_student()
+            else self._whoami()
+        )
+        identity = (
+            role_label
+            if not display_name or display_name == role_label
+            else f"{display_name} · {role_label}"
+        )
+        account_button = ft.PopupMenuButton(
+            content=ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.ACCOUNT_CIRCLE_OUTLINED,
+                            size=18,
+                            color=ft.Colors.BLUE_700,
+                        ),
+                        ft.Text(
+                            identity,
+                            size=12,
+                            weight=ft.FontWeight.W_600,
+                            color=ft.Colors.GREY_800,
+                        ),
+                        ft.Text(
+                            scope_label,
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Icon(
+                            ft.Icons.KEYBOARD_ARROW_DOWN,
+                            size=18,
+                            color=ft.Colors.GREY_500,
+                        ),
+                    ],
+                    spacing=6,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                border=ft.Border.all(1, ft.Colors.GREY_300),
+                border_radius=18,
+                bgcolor=ft.Colors.WHITE,
+            ),
+            items=[
+                ft.PopupMenuItem(
+                    content="修改密码",
+                    icon=ft.Icons.KEY_OUTLINED,
+                    on_click=lambda e: self._open_change_password(),
+                ),
+                ft.PopupMenuItem(
+                    content="退出登录",
+                    icon=ft.Icons.LOGOUT,
+                    on_click=lambda e: self.logout(),
+                ),
+            ],
+            tooltip="当前账号",
+        )
+        return ft.Row(
+            [account_button],
+            alignment=ft.MainAxisAlignment.END,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
     def _on_resize(self, e) -> None:
         if self.is_wide() != self._last_wide:
@@ -107,7 +205,7 @@ class ShellMixin:
                 ft.Icon(selected_icon if active else icon, color=color, size=24),
                 ft.Text(
                     label,
-                    size=11,
+                    size=11 if wide else 12,
                     color=color,
                     weight=ft.FontWeight.W_600 if active else ft.FontWeight.NORMAL,
                 ),
@@ -137,6 +235,8 @@ class ShellMixin:
                     for i, (ic, sic, lb) in items
                 ],
                 spacing=8,
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             width=96,
@@ -145,18 +245,131 @@ class ShellMixin:
         )
 
     def _bottom_bar(self) -> ft.Container:
-        items = list(zip(self._nav_tab_indices(), self._nav_items()))
+        primary = self._mobile_primary_indices()
+        buttons = [
+            self._nav_button(index, *self._nav_item(index), False)
+            for index in primary
+        ]
+        if self._mobile_more_indices():
+            buttons.append(self._mobile_more_button())
         return ft.Container(
             content=ft.Row(
-                [
-                    self._nav_button(i, ic, sic, lb, False)
-                    for i, (ic, sic, lb) in items
-                ],
-                spacing=8,
+                buttons,
+                spacing=4,
             ),
-            padding=ft.Padding.symmetric(horizontal=8, vertical=6),
+            padding=ft.Padding.symmetric(horizontal=6, vertical=4),
             bgcolor=ft.Colors.WHITE,
         )
+
+    def _mobile_more_button(self) -> ft.Container:
+        active = self.tab in self._mobile_more_indices()
+        color = ft.Colors.BLUE_700 if active else ft.Colors.GREY_600
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Icon(
+                        ft.Icons.APPS if active else ft.Icons.APPS_OUTLINED,
+                        color=color,
+                        size=24,
+                    ),
+                    ft.Text(
+                        "更多",
+                        size=12,
+                        color=color,
+                        weight=ft.FontWeight.W_600 if active else ft.FontWeight.NORMAL,
+                    ),
+                ],
+                spacing=3,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            height=56,
+            expand=True,
+            border_radius=12,
+            bgcolor=ft.Colors.BLUE_50 if active else None,
+            ink=True,
+            alignment=ft.Alignment.CENTER,
+            on_click=lambda e: self._open_more_menu(),
+        )
+
+    def _open_more_menu(self) -> None:
+        rows = []
+        for index in self._mobile_more_indices():
+            icon, selected_icon, label = self._nav_item(index)
+            active = self.tab == index
+            color = ft.Colors.BLUE_700 if active else ft.Colors.GREY_800
+
+            def open_page(e, page_index=index) -> None:
+                self.page.pop_dialog()
+                self._goto(page_index)
+
+            rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(
+                                selected_icon if active else icon,
+                                size=22,
+                                color=color,
+                            ),
+                            ft.Text(
+                                label,
+                                size=15,
+                                weight=ft.FontWeight.W_600 if active else ft.FontWeight.NORMAL,
+                                color=color,
+                                expand=True,
+                            ),
+                            ft.Icon(
+                                ft.Icons.CHEVRON_RIGHT,
+                                size=18,
+                                color=ft.Colors.GREY_400,
+                            ),
+                        ],
+                        spacing=12,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    height=56,
+                    padding=ft.Padding.symmetric(horizontal=14, vertical=6),
+                    border_radius=10,
+                    bgcolor=ft.Colors.BLUE_50 if active else ft.Colors.GREY_50,
+                    ink=True,
+                    on_click=open_page,
+                )
+            )
+
+        sheet = ft.BottomSheet(
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Text(
+                                    "更多功能",
+                                    size=20,
+                                    weight=ft.FontWeight.BOLD,
+                                    expand=True,
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.CLOSE,
+                                    tooltip="关闭",
+                                    on_click=self._close,
+                                ),
+                            ],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Column(rows, spacing=6, tight=True),
+                        ft.Container(height=8),
+                    ],
+                    spacing=12,
+                    tight=True,
+                ),
+                padding=ft.Padding(left=16, top=8, right=16, bottom=20),
+            ),
+            show_drag_handle=True,
+            use_safe_area=True,
+            scrollable=True,
+        )
+        self._show(sheet)
 
     def _body(self) -> ft.Control:
         if self.is_student():
@@ -167,6 +380,8 @@ class ShellMixin:
             if self.tab == 3:
                 return self._tools_view()
             return self._student_portal_view()
+        if self.tab == TAB_DASHBOARD:
+            return self._dashboard_view()
         if self.tab == 0:
             # 从学员页点进某节课，看课次详情；返回就回到这个学员
             if self.lesson_id is not None:

@@ -3393,6 +3393,18 @@ def hours_text(accounts: list[dict]) -> str:
     return " · ".join(parts) if parts else "还没有课时"
 
 
+def warning_accounts(accounts: list[dict]) -> list[dict]:
+    """需要提醒补课时的账户；学员卡片和工作台共用同一规则。"""
+    return [
+        account
+        for account in accounts
+        if account.get("warn")
+        and account["charged"]
+        and not account["unlimited"]
+        and account["balance"] <= WARN_BALANCE
+    ]
+
+
 def _num(value: float) -> str:
     value = round(float(value or 0), 2)
     return str(int(value)) if value == int(value) else f"{value:g}"

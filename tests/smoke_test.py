@@ -23,6 +23,7 @@ import flet as ft  # noqa: E402
 
 import db  # noqa: E402
 from app_ui import ClassHoursApp  # noqa: E402
+from ui.shell import TAB_DASHBOARD  # noqa: E402
 from ui.tools import (  # noqa: E402
     calculate_3d_print_points,
     format_print_duration,
@@ -240,9 +241,19 @@ find_field(page.controls[0], "密码").value = db.DEFAULT_ADMIN_PASSWORD
 click(page.controls[0], "登录")
 ok(app.user is not None and app.user["role"] == "root", "管理员登录成功")
 ok(app.is_admin(), "管理员有全部权限")
+ok(
+    app.tab == TAB_DASHBOARD and find_text(page.controls[0], "今天"),
+    "管理员登录后先进入今日工作台",
+)
+ok(find_text(page.controls[0], "今天没有排课"), "没有排课时工作台给出清楚的空状态")
 
+app._goto(0)
 ok(find_text(page.controls[0], "还没有学员"), "宽屏：左侧导航 + 空列表")
 ok(find_text(page.controls[0], "设置"), "左侧导航有「设置」")
+ok(
+    find_text(page.controls[0], "全部数据与权限"),
+    "管理员登录后明确显示当前角色和数据范围",
+)
 ok(
     any(isinstance(c, ft.Container) and c.width == 96 for c in walk(page.controls[0])),
     "宽屏用左侧竖排导航",
@@ -251,12 +262,32 @@ ok(
 phone_page = StubPage(width=390)
 phone_app = ClassHoursApp(phone_page)
 phone_app.user = app.user
+phone_app.tab = TAB_DASHBOARD
 phone_app.render()
 ok(
     any(isinstance(c, ft.Container) and c.height == 56 for c in walk(phone_page.controls[0])),
     "手机用底部横排导航",
 )
-ok(find_text(phone_page.controls[0], "还没有学员"), "手机上也显示学员列表")
+ok(find_text(phone_page.controls[0], "今天"), "手机上也从今日工作台开始")
+ok(
+    phone_app._mobile_primary_indices() == [TAB_DASHBOARD, 0, 1]
+    and phone_app._mobile_more_indices() == [2, 3, 4, 8, 5, 6, 7],
+    "手机后台保留今天、学员、课程，其余收进「更多」",
+)
+ok(find_text(phone_page.controls[0], "更多"), "手机后台有「更多」入口")
+phone_app._goto(0)
+ok(find_text(phone_page.controls[0], "还没有学员"), "手机学员页仍显示完整名册")
+ok(find_button(phone_page.controls[0], "筛选").height == 48, "手机筛选按钮有足够大的触控高度")
+click(phone_page.controls[0], "筛选")
+filter_sheet = top_dialog(phone_page)
+ok(isinstance(filter_sheet, ft.BottomSheet), "手机筛选用底部面板展开")
+ok(
+    find_dropdown(filter_sheet, "年级") is not None
+    and find_dropdown(filter_sheet, "学校") is not None
+    and find_dropdown(filter_sheet, "归属老师") is not None,
+    "手机筛选面板里有完整的筛选条件",
+)
+phone_page.pop_dialog()
 
 app._goto(1)
 ok(find_text(page.controls[0], "课程排课"), "点「课程」能切过去")
@@ -280,6 +311,7 @@ ok(find_text(page.controls[0], "还没有学员"), "点「学员」能切回来"
 menus = [label for _ic, _sic, label in app._nav_items()]
 ok(
     menus == [
+        "今天",
         "学员",
         "课程",
         "试听",
@@ -457,6 +489,14 @@ ok(new_key is not None and dd.value == new_key, "「孩子」默认就是「＋ 
 ok(find_field(dlg, "姓名 *") is not None, "里面直接给了填新学员的地方")
 ok(holder_of(dlg, find_field(dlg, "姓名 *")).visible, "没有学员时，填名字那块是展开的")
 ok(not find_text(dlg, "先添加学员"), "不再弹「先添加学员」把人挡回去")
+ok(find_text(dlg, "本笔合计"), "缴费框把本笔合计单独汇总")
+ok(
+    any(
+        isinstance(c, ft.ExpansionTile) and c.title == "填写说明"
+        for c in walk(dlg)
+    ),
+    "缴费填写说明默认收进可展开区域",
+)
 app._close()
 app._goto(0)  # 看完缴费页记得回来，后面接着测学员
 
@@ -1285,11 +1325,8 @@ app.render()
 app._open_payment_dialog(None, vou_kid)
 dlg = top_dialog(page)
 ok(find_dropdown(dlg, "用代金券") is not None, "缴费框里有「用代金券」")
-ok(
-    find_text(dlg, "只有含正课且满 3000 元的固定课包才送代金券"),
-    "缴费框只提示送券规则，不写“不送券”",
-)
-package_dd = find_dropdown(dlg, "固定课包（可选）")
+ok(find_text(dlg, "本笔合计"), "缴费框把本笔合计单独汇总")
+package_dd = find_dropdown(dlg, "缴费方式")
 package_dd.value = str(default_package["id"])
 package_dd.on_select(Evt(package_dd))
 ok(find_text(dlg, "送 10 张 300 元的代金券"), "选固定课包后当场显示送券")
@@ -1301,10 +1338,10 @@ except AssertionError:
     has_package_input_rows = False
 ok(not has_package_input_rows, "固定课包不再显示不可编辑的整排输入框")
 ok(
-    find_button(dlg, "+ 额外赠送考级／比赛课时") is not None,
+    find_button(dlg, "额外赠送考级／比赛课时") is not None,
     "固定课包仍可额外添加赠送课时",
 )
-find_button(dlg, "+ 额外赠送考级／比赛课时").on_click(None)
+find_button(dlg, "额外赠送考级／比赛课时").on_click(None)
 gift_type = find_dropdown(dlg, "赠送课时类型")
 ok(
     all(str(hour_id) != str(zk_hour) for hour_id in [o.key for o in gift_type.options]),
@@ -2295,7 +2332,7 @@ find_dropdown(dlg, "课时类型").value = str(hour_id)
 find_field(dlg, "数量（课时）").value = "24"
 find_field(dlg, "金额（元）").value = "3000"
 # 加一行赠送的考级
-add_row_btn = find_button(dlg, "+ 加一行")
+add_row_btn = find_button(dlg, "加一行")
 add_row_btn.on_click(None)
 rows = [f for f in walk(dlg) if isinstance(f, ft.Dropdown) and f.label == "课时类型"]
 ok(len(rows) == 2, "能加第二行课时")
@@ -2492,6 +2529,10 @@ other_level_id = db.create_level(
 )
 app.tab = 7
 app.render()
+ok(
+    find_text(page.controls[0], "可编辑本人负责的记录"),
+    "老师登录后明确显示自己的权限范围",
+)
 ok(find_text(page.controls[0], "我的等级"), "普通老师能看到自己的等级入口")
 ok(find_button(page.controls[0], "新增等级"), "普通老师可以新增自己的等级")
 app._open_level_dialog(None)
@@ -2546,6 +2587,103 @@ ok(
     and not app._can_manage_course(other_course_row),
     "自己的课程能管理，别人的课程只读",
 )
+
+# 工作台必须按当前老师收窄，而不是只隐藏操作按钮。
+today_iso = date.today().isoformat()
+dash_own_course = db.create_template(
+    date.today().weekday(),
+    "07:10",
+    45,
+    zhengke["id"],
+    gpl3["id"],
+    start_date=today_iso,
+    end_date=today_iso,
+    teacher_id=teacher_id,
+    name="工作台本人课程",
+)
+dash_other_course = db.create_template(
+    date.today().weekday(),
+    "07:20",
+    45,
+    zhengke["id"],
+    gpl3["id"],
+    start_date=today_iso,
+    end_date=today_iso,
+    teacher_id=teacher2_id,
+    name="工作台他人课程",
+)
+dash_own_trial = db.create_trial(
+    {
+        "name": "工作台本人试听",
+        "status": "待试听",
+        "owner_teacher_id": teacher_id,
+    }
+)
+dash_other_trial = db.create_trial(
+    {
+        "name": "工作台他人试听",
+        "status": "待试听",
+        "owner_teacher_id": teacher2_id,
+    }
+)
+dash_own_student = db.create_student(
+    {
+        "name": "工作台本人低课时",
+        "owner_teacher_id": teacher_id,
+        "owner_manual": True,
+    }
+)
+dash_other_student = db.create_student(
+    {
+        "name": "工作台他人低课时",
+        "owner_teacher_id": teacher2_id,
+        "owner_manual": True,
+    }
+)
+for student_id, owner_id in (
+    (dash_own_student, teacher_id),
+    (dash_other_student, teacher2_id),
+):
+    db.create_payment(
+        student_id,
+        today_iso,
+        [
+            {
+                "hour_type_id": zhengke["id"],
+                "level_id": gpl3["id"],
+                "hours": 2,
+                "amount": 200,
+                "owner_teacher_id": owner_id,
+            }
+        ],
+        "工作台权限测试",
+    )
+app.tab = TAB_DASHBOARD
+app.render()
+ok(
+    find_text(page.controls[0], "工作台本人课程")
+    and not find_text(page.controls[0], "工作台他人课程"),
+    "老师工作台只显示自己的今日课程",
+)
+ok(
+    find_text(page.controls[0], "工作台本人试听")
+    and not find_text(page.controls[0], "工作台他人试听"),
+    "老师工作台只显示自己的试听跟进",
+)
+ok(
+    find_text(page.controls[0], "工作台本人低课时")
+    and not find_text(page.controls[0], "工作台他人低课时"),
+    "老师工作台只显示自己学员的课时预警",
+)
+for trial_id in (dash_own_trial, dash_other_trial):
+    db.delete_trial(trial_id)
+for student_id in (dash_own_student, dash_other_student):
+    db.delete_student(student_id)
+db.delete_template(dash_own_course)
+db.delete_template(dash_other_course)
+app.tab = 7
+app.render()
+
 app._open_template_dialog(own_course_row)
 dlg = top_dialog(page)
 course_teacher = find_dropdown(dlg, "课程老师（这门课归谁）")

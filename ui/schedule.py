@@ -445,6 +445,7 @@ class ScheduleMixin:
             day = date.today()
             self.schedule_date = day.isoformat()
         today_iso = date.today().isoformat()
+        wide = self.is_wide()
 
         keyword = self.lesson_keyword
         search = ft.TextField(
@@ -455,44 +456,59 @@ class ScheduleMixin:
             expand=True,
             on_submit=self._on_lesson_search,
         )
-        head = ft.Row(
-            [
-                ft.Column(
-                    [
-                        ft.Text("课程排课", size=20, weight=ft.FontWeight.BOLD),
-                        ft.Text(
-                            "一门课程 = 名字 + 老师 + 开班／结课日期 + 每周时间 + 学生名单",
-                            size=12,
-                            color=ft.Colors.GREY_600,
-                        ),
-                    ],
-                    spacing=2,
-                    expand=True,
+        actions = [
+            ft.Button(
+                "新增课程",
+                icon=ft.Icons.ADD,
+                on_click=lambda e: self._open_template_dialog(),
+            ),
+            ft.TextButton(
+                "记一节课",
+                icon=ft.Icons.FACT_CHECK_OUTLINED,
+                on_click=lambda e: self._open_lesson_dialog(),
+            ),
+            *(
+                [
+                    ft.TextButton(
+                        "规范课程名",
+                        icon=ft.Icons.RULE,
+                        tooltip="按 年份-学期-等级-类别-Cls-序号 统一改名",
+                        on_click=lambda e: self._normalize_course_names(),
+                    )
+                ]
+                if self.is_admin()
+                else []
+            ),
+        ]
+        title_lines = [
+            ft.Text("课程排课", size=20, weight=ft.FontWeight.BOLD),
+            ft.Text(
+                (
+                    "一门课程 = 名字 + 老师 + 开班／结课日期 + 每周时间 + 学生名单"
+                    if wide
+                    else "课程、老师、周期、上课时间和学生名单"
                 ),
-                ft.Button(
-                    "新增课程",
-                    icon=ft.Icons.ADD,
-                    on_click=lambda e: self._open_template_dialog(),
-                ),
-                ft.TextButton(
-                    "记一节课",
-                    icon=ft.Icons.FACT_CHECK_OUTLINED,
-                    on_click=lambda e: self._open_lesson_dialog(),
-                ),
-                *(
-                    [
-                        ft.TextButton(
-                            "规范课程名",
-                            icon=ft.Icons.RULE,
-                            tooltip="按 年份-学期-等级-类别-Cls-序号 统一改名",
-                            on_click=lambda e: self._normalize_course_names(),
-                        )
-                    ]
-                    if self.is_admin()
-                    else []
-                ),
-            ],
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                size=12,
+                color=ft.Colors.GREY_600,
+            ),
+        ]
+        head = (
+            ft.Row(
+                [
+                    ft.Column(title_lines, spacing=2, expand=True),
+                    *actions,
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            if wide
+            else ft.Column(
+                [
+                    ft.Column(title_lines, spacing=2),
+                    ft.Row(actions, spacing=4, wrap=True),
+                ],
+                spacing=10,
+                tight=True,
+            )
         )
         if keyword:
             cards, count = self._lesson_search_cards()

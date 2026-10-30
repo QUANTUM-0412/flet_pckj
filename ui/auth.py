@@ -8,6 +8,7 @@ import flet as ft
 
 import db
 from .common import DIALOG_WIDTH
+from .shell import TAB_DASHBOARD
 
 # 「记住登录」存在浏览器本地存储里的键：值是上次登录账号的 id
 REMEMBER_KEY = "class_hours_user_id"
@@ -41,6 +42,7 @@ class AuthMixin:
                 "student_id": user["student_id"],
                 "forum_nickname": user["forum_nickname"],
             }
+            self.tab = self._default_tab()
             self._remember_login(user)
             self.render()
             self._toast(f"欢迎，{self._whoami()}")
@@ -127,6 +129,7 @@ class AuthMixin:
                 "student_id": record["student_id"],
                 "forum_nickname": record["forum_nickname"],
             }
+            self.tab = self._default_tab()
             self.render()
 
         self.page.run_task(restore)
@@ -190,6 +193,9 @@ class AuthMixin:
 
     def is_student(self) -> bool:
         return bool(self.user and self.user.get("role") == db.ROLE_STUDENT)
+
+    def _default_tab(self) -> int:
+        return 0 if self.is_student() else TAB_DASHBOARD
 
     def _my_user_id(self) -> int | None:
         return int((self.user or {}).get("id") or 0) or None

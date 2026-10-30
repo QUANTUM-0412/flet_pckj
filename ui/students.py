@@ -165,6 +165,7 @@ class StudentsMixin:
     def _students_view(self) -> ft.Column:
         db.advance_student_grades()
         db.sync_course_statuses()  # 课程到期了就自动结课，进来先过一遍
+        wide = self.is_wide()
         rows = db.list_students_with_summary(
             keyword=self.keyword,
             status=self.status_filter,
@@ -186,16 +187,16 @@ class StudentsMixin:
             "年级",
             [ft.DropdownOption(key="", text="全部")] + _grade_opts(),
             value=self.filter_grade or "",
-            width=110,
-            on_select=lambda e: apply_filters(),
+            width=110 if wide else 280,
+            on_select=lambda e: filter_changed(),
         )
         school_dd = _dd(
             "学校",
             [ft.DropdownOption(key="", text="全部")]
             + _opts([(s, s) for s in db.list_schools()]),
             value=self.filter_school or "",
-            width=130,
-            on_select=lambda e: apply_filters(),
+            width=130 if wide else 280,
+            on_select=lambda e: filter_changed(),
         )
         owner_dd = _dd(
             "归属老师",
@@ -210,22 +211,32 @@ class StudentsMixin:
                 ]
             ),
             value=self.filter_owner or "",
-            width=130,
-            on_select=lambda e: apply_filters(),
+            width=130 if wide else 280,
+            on_select=lambda e: filter_changed(),
         )
         status_dd = _dd(
             "状态",
             _opts(STATUS_FILTERS),
             value=self.status_filter or "全部",
-            width=120,
-            on_select=self._on_status_select,
+            width=120 if wide else 280,
+            on_select=lambda e: filter_changed(),
         )
 
-        def apply_filters() -> None:
+        def store_filters() -> None:
             self.filter_grade = grade_dd.value or ""
             self.filter_school = school_dd.value or ""
             self.filter_owner = owner_dd.value or ""
+            self.status_filter = dict(STATUS_FILTERS).get(status_dd.value or "全部", "")
+
+        def apply_filters() -> None:
+            store_filters()
             self.render()
+
+        def filter_changed() -> None:
+            if wide:
+                apply_filters()
+            else:
+                store_filters()
 
         def clear_filters(e=None) -> None:
             self.keyword = ""
@@ -234,6 +245,91 @@ class StudentsMixin:
             self.filter_owner = ""
             self.status_filter = ""
             self.render()
+
+        def close_filter_sheet() -> None:
+            self.page.pop_dialog()
+
+        def apply_mobile_filters(e=None) -> None:
+            store_filters()
+            close_filter_sheet()
+            self.render()
+
+        def clear_mobile_filters(e=None) -> None:
+            self.keyword = ""
+            self.filter_grade = ""
+            self.filter_school = ""
+            self.filter_owner = ""
+            self.status_filter = ""
+            close_filter_sheet()
+            self.render()
+
+        def active_filter_count() -> int:
+            return sum(
+                bool(value)
+                for value in (
+                    self.filter_grade,
+                    self.filter_school,
+                    self.filter_owner,
+                    self.status_filter,
+                )
+            )
+
+        def open_filter_sheet(e=None) -> None:
+            if not wide:
+                for control in (grade_dd, school_dd, owner_dd, status_dd):
+                    control.col = {"xs": 12, "sm": 6}
+            sheet = ft.BottomSheet(
+                content=ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Text(
+                                        "筛选学员",
+                                        size=20,
+                                        weight=ft.FontWeight.BOLD,
+                                        expand=True,
+                                    ),
+                                    ft.IconButton(
+                                        ft.Icons.CLOSE,
+                                        tooltip="关闭",
+                                        on_click=self._close,
+                                    ),
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.ResponsiveRow(
+                                [grade_dd, school_dd, owner_dd, status_dd],
+                                spacing=8,
+                                run_spacing=8,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.TextButton(
+                                        "清空",
+                                        icon=ft.Icons.FILTER_ALT_OFF,
+                                        on_click=clear_mobile_filters,
+                                    ),
+                                    ft.Container(expand=True),
+                                    ft.Button(
+                                        "查看结果",
+                                        height=48,
+                                        on_click=apply_mobile_filters,
+                                    ),
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                        ],
+                        spacing=14,
+                        tight=True,
+                    ),
+                    padding=ft.Padding(left=16, top=8, right=16, bottom=24),
+                ),
+                show_drag_handle=True,
+                use_safe_area=True,
+                scrollable=True,
+            )
+            self._show(sheet)
 
         filter_row = ft.Row(
             [
@@ -249,15 +345,29 @@ class StudentsMixin:
             wrap=True,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
+        filter_count = active_filter_count()
+        filter_button = ft.Button(
+            f"筛选 · {filter_count}" if filter_count else "筛选",
+            icon=ft.Icons.FILTER_ALT,
+            height=48,
+            on_click=open_filter_sheet,
+        )
         cards = [self._student_card(item, pending_ids) for item in rows]
         if not cards:
+            has_filters = bool(
+                self.keyword
+                or self.status_filter
+                or self.filter_grade
+                or self.filter_school
+                or self.filter_owner
+            )
             cards = [
                 self._card(
                     ft.Column(
                         [
                             ft.Icon(ft.Icons.PERSON_ADD_ALT, size=36, color=ft.Colors.GREY_400),
                             ft.Text(
-                                "还没有学员" if not self.keyword and not self.status_filter else "没有符合条件的学员",
+                                "没有符合条件的学员" if has_filters else "还没有学员",
                                 color=ft.Colors.GREY_600,
                             ),
                         ],
@@ -267,6 +377,15 @@ class StudentsMixin:
                 )
             ]
 
+        search_controls = (
+            ft.Row([search], spacing=10)
+            if wide
+            else ft.Row(
+                [search, filter_button],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
         return ft.Column(
             [
                 self._header(
@@ -280,8 +399,8 @@ class StudentsMixin:
                         )
                     ],
                 ),
-                ft.Row([search], spacing=10),
-                filter_row,
+                search_controls,
+                *([filter_row] if wide else []),
                 *cards,
                 ft.Container(height=8),
             ],
@@ -315,13 +434,7 @@ class StudentsMixin:
         meta = " · ".join(x for x in [s["grade"], s["school"], s["phone"]] if x) or "—"
         hours = db.hours_text(item["accounts"])
         points = db.num_text(item.get("points") or 0)
-        warn = any(
-            a.get("warn")
-            and a["charged"]
-            and not a["unlimited"]
-            and a["balance"] <= WARN_BALANCE
-            for a in item["accounts"]
-        )
+        warn = bool(db.warning_accounts(item["accounts"]))
 
         badges = []
         if s["id"] in pending_ids:

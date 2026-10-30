@@ -12,6 +12,7 @@ import flet as ft
 
 from ui.auth import AuthMixin
 from ui.shell import ShellMixin
+from ui.dashboard import DashboardMixin
 from ui.widgets import WidgetsMixin
 from ui.students import StudentsMixin
 from ui.schedule import ScheduleMixin
@@ -35,6 +36,7 @@ from ui.tools import ToolsMixin
 class ClassHoursApp(
     AuthMixin,
     ShellMixin,
+    DashboardMixin,
     WidgetsMixin,
     StudentsMixin,
     ScheduleMixin,
