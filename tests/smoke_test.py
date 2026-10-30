@@ -2919,8 +2919,9 @@ except AssertionError:
     own_adjust_visible = False
 ok(not own_adjust_visible, "自己学员的账户里也没有调整课时入口")
 ok(
-    find_text(page.controls[0], "需要增加课时请到「缴费」页记一笔"),
-    "学员账户明确提示课时统一走缴费",
+    find_text(page.controls[0], "常规课时统一走缴费")
+    and find_text(page.controls[0], "转学生自带的课时"),
+    "学员账户明确区分缴费和转入课时",
 )
 app._open_hour_ledger(own_student, zhengke_hour_id)
 dlg = top_dialog(page)
@@ -5595,5 +5596,128 @@ ok(
 )
 for kid in (batch_birth, batch_random, batch_dup1, batch_dup2):
     db.delete_student(kid)
+
+print("51. root 转入转学生自带课时")
+transfer_teacher = db.create_user(
+    "transfer_teacher",
+    "pw123456",
+    "转入测试老师",
+    db.ROLE_TEACHER,
+)
+transfer_student = db.create_student(
+    {
+        "name": "转学生课时测试",
+        "grade": "三年级",
+        "owner_teacher_id": transfer_teacher,
+        "owner_manual": True,
+    }
+)
+transfer_root = db.get_user(1)
+try:
+    db.add_hour_transfer(
+        transfer_teacher,
+        transfer_student,
+        today.isoformat(),
+        "原机构转入",
+        "",
+        [{"hour_type_id": zhengke["id"], "hours": 1}],
+    )
+    teacher_transfer_allowed = True
+except ValueError:
+    teacher_transfer_allowed = False
+ok(not teacher_transfer_allowed, "老师不能通过数据接口转入课时")
+
+app.user = {
+    "id": transfer_teacher,
+    "username": "transfer_teacher",
+    "display_name": "转入测试老师",
+    "role": db.ROLE_TEACHER,
+}
+app.tab = 0
+app.student_id = None
+app.open_student(transfer_student)
+try:
+    find_button(page.controls[0], "转入已有课时")
+    teacher_transfer_visible = True
+except AssertionError:
+    teacher_transfer_visible = False
+ok(not teacher_transfer_visible, "老师界面看不到转入课时入口")
+
+app.user = {
+    "id": transfer_root["id"],
+    "username": transfer_root["username"],
+    "display_name": transfer_root["display_name"],
+    "role": transfer_root["role"],
+}
+app.tab = 0
+app.open_student(transfer_student)
+ok(find_button(page.controls[0], "转入已有课时"), "root 能看到转入课时入口")
+click(page.controls[0], "转入已有课时")
+dlg = top_dialog(page)
+find_field(dlg, "转入日期").value = today.isoformat()
+find_field(dlg, "转入来源 *").value = "原机构转入"
+find_dropdown(dlg, "课时类型 *").value = str(zhengke["id"])
+find_field(dlg, "转入数量 *").value = "10"
+find_button(dlg, "加一种课时").on_click(None)
+transfer_types = [
+    control
+    for control in walk(dlg)
+    if isinstance(control, ft.Dropdown) and control.label == "课时类型 *"
+]
+transfer_hours = [
+    control
+    for control in walk(dlg)
+    if isinstance(control, ft.TextField) and control.label == "转入数量 *"
+]
+transfer_types[1].value = str(jingsai["id"])
+transfer_hours[1].value = "2"
+find_field(dlg, "备注").value = "原系统剩余课时"
+click(dlg, "确认转入")
+
+transfer_accounts = {a["name"]: a for a in db.get_accounts(transfer_student)}
+ok(
+    transfer_accounts["正课"]["transferred"] == 10
+    and transfer_accounts["竞赛"]["transferred"] == 2,
+    "一次转入可以记录多种课时",
+)
+ok(
+    db.list_payments(transfer_student) == []
+    and db.income_total(student_id=transfer_student) == 0,
+    "转入课时不生成缴费记录，也不计入收入",
+)
+transfer_txs = [
+    t
+    for t in db.list_hour_transactions(transfer_student)
+    if t["source_type"] == "hour_transfer"
+]
+ok(
+    len(transfer_txs) == 2
+    and all(t["transfer_origin"] == "原机构转入" for t in transfer_txs)
+    and all(t["transfer_created_by_name"] == "管理员" for t in transfer_txs),
+    "转入流水保留来源和 root 经办人",
+)
+app._open_hour_ledger(transfer_student, zhengke["id"])
+ledger = top_dialog(page)
+ok(
+    find_text(ledger, "转入")
+    and find_text(ledger, "原机构转入")
+    and find_text(ledger, "经办 管理员"),
+    "课时明细能区分转入、来源和经办人",
+)
+app._close()
+_account_name, account_headers, account_rows = next(
+    sheet for sheet in db.export_tables() if sheet[0] == "课时账户"
+)
+ok(
+    "转入课时" in account_headers
+    and any(row[0] == "转学生课时测试" and row[5] == 10 for row in account_rows),
+    "导出时能看到转入课时",
+)
+db.delete_student(transfer_student)
+ok(
+    db.list_hour_transactions(transfer_student) == [],
+    "删除学员时转入流水一起清理",
+)
+db.delete_user(transfer_teacher)
 
 print(f"\n全部通过：{checks} 项检查")

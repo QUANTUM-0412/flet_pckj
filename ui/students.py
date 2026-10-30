@@ -862,6 +862,179 @@ class StudentsMixin:
             )
         )
 
+    def _open_hour_transfer_dialog(self, s: dict) -> None:
+        if not self.is_admin():
+            self._toast("只有管理员可以转入已有课时")
+            return
+        hour_types = db.list_hour_types()
+        happened_on = _tf(
+            "转入日期",
+            date.today().isoformat(),
+            width=DIALOG_WIDTH,
+            hint_text="2026-10-30",
+        )
+        origin = _tf(
+            "转入来源 *",
+            "",
+            width=DIALOG_WIDTH,
+            hint_text="例如：原机构转入、家长自带课时",
+        )
+        note = _tf(
+            "备注",
+            "",
+            width=DIALOG_WIDTH,
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+        )
+        rows_holder = ft.Column(spacing=8, tight=True)
+        rows: list[dict] = []
+        total_text = ft.Text("合计 0 课时", size=14, weight=ft.FontWeight.W_600)
+
+        def refresh_total(*_args) -> None:
+            total = 0.0
+            for row in rows:
+                try:
+                    total += float((row["hours"].value or "0").strip() or 0)
+                except ValueError:
+                    pass
+            total_text.value = f"合计 {db.num_text(total)} 课时"
+
+        def add_row(update: bool = True) -> None:
+            type_dd = _dd(
+                "课时类型 *",
+                _opts([(h["id"], h["name"]) for h in hour_types]),
+                value=str(hour_types[0]["id"]) if hour_types else None,
+                width=150,
+            )
+            hours = _tf(
+                "转入数量 *",
+                "",
+                width=90,
+                keyboard_type=ft.KeyboardType.NUMBER,
+                on_change=refresh_total,
+            )
+            row = {"type": type_dd, "hours": hours}
+
+            def remove(e=None) -> None:
+                if len(rows) <= 1:
+                    self._toast("至少留一行")
+                    return
+                rows.remove(row)
+                rows_holder.controls.remove(box)
+                rows_holder.update()
+                refresh_total()
+
+            box = ft.Row(
+                [
+                    type_dd,
+                    hours,
+                    ft.IconButton(
+                        ft.Icons.CLOSE,
+                        tooltip="去掉这一行",
+                        icon_size=18,
+                        on_click=remove,
+                    ),
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            rows.append(row)
+            rows_holder.controls.append(box)
+            if update:
+                rows_holder.update()
+                refresh_total()
+
+        add_row(update=False)
+
+        def save(e=None) -> None:
+            try:
+                date.fromisoformat((happened_on.value or "").strip())
+            except ValueError:
+                happened_on.error = "写成 2026-10-30 这样"
+                happened_on.update()
+                return
+            if not (origin.value or "").strip():
+                origin.error = "请填写课时从哪里转来"
+                origin.update()
+                return
+
+            items = []
+            type_ids: set[int] = set()
+            for row in rows:
+                try:
+                    hours_value = float((row["hours"].value or "").strip())
+                except ValueError:
+                    row["hours"].error = "填数字"
+                    row["hours"].update()
+                    return
+                if hours_value <= 0:
+                    row["hours"].error = "必须大于 0"
+                    row["hours"].update()
+                    return
+                type_id = int(row["type"].value)
+                if type_id in type_ids:
+                    self._toast("同一种课时只能填一行")
+                    return
+                type_ids.add(type_id)
+                items.append({"hour_type_id": type_id, "hours": hours_value})
+            try:
+                db.add_hour_transfer(
+                    self._my_user_id(),
+                    int(s["id"]),
+                    (happened_on.value or "").strip(),
+                    (origin.value or "").strip(),
+                    note.value or "",
+                    items,
+                )
+            except ValueError as err:
+                self._toast(str(err))
+                return
+            total = sum(float(item["hours"]) for item in items)
+            self._finish(f"已转入 {db.num_text(total)} 课时，不计入缴费收入")
+
+        body = self._form_column(
+            [
+                ft.Text(
+                    f"学员：{s['name']}",
+                    size=13,
+                    weight=ft.FontWeight.W_600,
+                ),
+                happened_on,
+                origin,
+                ft.Text("本次转入课时", size=14, weight=ft.FontWeight.W_600),
+                rows_holder,
+                ft.Row(
+                    [
+                        ft.TextButton(
+                            "加一种课时",
+                            icon=ft.Icons.ADD,
+                            on_click=lambda e: add_row(),
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.END,
+                ),
+                total_text,
+                note,
+                ft.Text(
+                    "转入课时会增加余额、参与上课扣课时和低课时提醒，"
+                    "但不会生成缴费记录，也不会计入缴费收入。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+            ]
+        )
+        self._show(
+            self._dialog(
+                "转入已有课时",
+                body,
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("确认转入", on_click=save),
+                ],
+            )
+        )
+
     def _hours_card(self, s: dict, accounts: list[dict]) -> ft.Container:
         admin = self.is_admin()
         # 只显示有记录的账户；一个都没记录时，先显示"正课"
@@ -882,7 +1055,14 @@ class StudentsMixin:
                 balance_color = ft.Colors.ORANGE_700
             else:
                 balance_color = None
-            source_text = f"来源：缴费 {db.num_text(a['paid'])} ＋ 手工 {db.num_text(a['manual'])}"
+            sources = []
+            if a["paid"]:
+                sources.append(f"缴费 {db.num_text(a['paid'])}")
+            if a["transferred"]:
+                sources.append(f"转入 {db.num_text(a['transferred'])}")
+            if a["manual"]:
+                sources.append(f"手工 {db.num_text(a['manual'])}")
+            source_text = "来源：" + (" ＋ ".join(sources) or "暂无")
             rows.append(
                 ft.Container(
                     content=ft.Column(
@@ -944,13 +1124,22 @@ class StudentsMixin:
         body = ft.Column(rows, spacing=10)
         hint = ft.Text(
             "只显示有记录的账户。上竞赛课先扣竞赛课时，竞赛课时不够会自动扣正课；考级课同理。"
-            "需要增加课时请到「缴费」页记一笔。",
+            "常规课时统一走缴费；转学生自带的课时由管理员在这里转入。",
             size=11,
             color=ft.Colors.GREY_600,
         )
         return self._section(
             "课时账户",
             ft.Column([body, hint], spacing=10),
+            action=(
+                ft.Button(
+                    "转入已有课时",
+                    icon=ft.Icons.INPUT,
+                    on_click=lambda e: self._open_hour_transfer_dialog(s),
+                )
+                if admin
+                else None
+            ),
         )
 
     def _enrollments_card(self, student_id: int, enrollments: list[dict]) -> ft.Container:

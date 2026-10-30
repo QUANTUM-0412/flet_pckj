@@ -43,8 +43,9 @@ class HoursMixin:
                     weight=ft.FontWeight.W_600,
                 ),
                 ft.Text(
-                    "这里的流水只供查看；课时统一从「缴费」页增加，"
-                    "缴费产生的记录去「缴费」页修改，上课扣课时去课次里修改。",
+                    "这里的流水只供查看。常规课时统一从「缴费」页增加；"
+                    "转学生自带的课时由管理员在学员档案里转入。"
+                    "缴费记录去「缴费」页修改，上课扣课时去课次里修改。",
                     size=11,
                     color=ft.Colors.GREY_600,
                 ),
@@ -70,8 +71,23 @@ class HoursMixin:
             tag = _chip("缴费", ft.Colors.BLUE_600)
         elif source == "lesson":
             tag = _chip("上课", ft.Colors.GREEN_700)
+        elif source == "hour_transfer":
+            tag = _chip("转入", ft.Colors.BLUE_700)
         else:
             tag = _chip("手记", ft.Colors.GREY_600)
+        if source == "hour_transfer":
+            transfer_bits = [
+                t.get("transfer_origin") or "",
+                (
+                    f"经办 {t['transfer_created_by_name']}"
+                    if t.get("transfer_created_by_name")
+                    else ""
+                ),
+                t.get("transfer_note") or "",
+            ]
+            detail_text = " · ".join(bit for bit in transfer_bits if bit)
+        else:
+            detail_text = t["note"] or (t["hour_type_name"] or "")
         controls: list[ft.Control] = [
             ft.Column(
                 [
@@ -80,7 +96,7 @@ class HoursMixin:
                         spacing=6,
                     ),
                     ft.Text(
-                        t["note"] or (t["hour_type_name"] or ""),
+                        detail_text,
                         size=12,
                         color=ft.Colors.GREY_700,
                     ),

@@ -8,6 +8,7 @@ from __future__ import annotations
 import calendar
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -236,6 +237,26 @@ CREATE TABLE IF NOT EXISTS hour_transactions (
     source_type  TEXT    NOT NULL DEFAULT '',
     source_id    INTEGER,
     created_at   TEXT    NOT NULL DEFAULT ''
+);
+
+-- 转学生自带的课时：一张转入单可以包含多种课时
+CREATE TABLE IF NOT EXISTS hour_transfer_batches (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id         INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    happened_on        TEXT    NOT NULL,
+    origin             TEXT    NOT NULL,
+    note               TEXT    NOT NULL DEFAULT '',
+    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_by_name    TEXT    NOT NULL DEFAULT '',
+    created_at         TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS hour_transfer_items (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id     INTEGER NOT NULL REFERENCES hour_transfer_batches(id) ON DELETE CASCADE,
+    hour_type_id INTEGER NOT NULL REFERENCES hour_types(id),
+    hours        REAL    NOT NULL CHECK(hours > 0),
+    UNIQUE(batch_id, hour_type_id)
 );
 
 -- 积分流水：正数是赚的，负数是兑换掉的
@@ -525,6 +546,7 @@ CREATE TABLE IF NOT EXISTS course_skips (
 
 CREATE INDEX IF NOT EXISTS idx_enroll_student ON enrollments(student_id);
 CREATE INDEX IF NOT EXISTS idx_hour_tx_student ON hour_transactions(student_id);
+CREATE INDEX IF NOT EXISTS idx_hour_transfer_student ON hour_transfer_batches(student_id);
 CREATE INDEX IF NOT EXISTS idx_point_tx_student ON point_transactions(student_id);
 CREATE INDEX IF NOT EXISTS idx_lesson_date ON lessons(lesson_date);
 CREATE INDEX IF NOT EXISTS idx_attendance_lesson ON attendance(lesson_id);
@@ -3244,6 +3266,9 @@ def get_accounts(student_id: int) -> list[dict]:
                       COALESCE(SUM(CASE WHEN t.change > 0
                                          AND (t.source_type = '' OR t.source_type = 'manual')
                                         THEN t.change ELSE 0 END), 0) AS manual,
+                      COALESCE(SUM(CASE WHEN t.change > 0
+                                         AND t.source_type = 'hour_transfer'
+                                        THEN t.change ELSE 0 END), 0) AS transferred,
                       COALESCE(SUM(CASE WHEN t.change < 0 THEN -t.change ELSE 0 END), 0) AS used,
                       COALESCE(SUM(t.change), 0) AS balance,
                       COALESCE(a.unlimited, 0) AS unlimited
@@ -3316,12 +3341,109 @@ def add_hours(
     return new_id
 
 
+def add_hour_transfer(
+    actor_user_id: int,
+    student_id: int,
+    happened_on: str,
+    origin: str,
+    note: str,
+    items: list[dict],
+) -> int:
+    """root 记录转学生自带的课时；不计入缴费和收入。"""
+    origin = (origin or "").strip()
+    if not origin:
+        raise ValueError("请填写转入来源")
+    try:
+        happened_on = date.fromisoformat((happened_on or "").strip()).isoformat()
+    except ValueError:
+        raise ValueError("转入日期写成 2026-10-30 这样") from None
+
+    clean: list[tuple[int, float]] = []
+    seen_types: set[int] = set()
+    for item in items or []:
+        try:
+            hour_type_id = int(item.get("hour_type_id"))
+            hours = float(item.get("hours"))
+        except (TypeError, ValueError):
+            raise ValueError("课时类型或数量填得不对") from None
+        if not math.isfinite(hours) or hours <= 0:
+            raise ValueError("转入数量必须大于 0")
+        if hour_type_id in seen_types:
+            raise ValueError("同一种课时只能填一行")
+        seen_types.add(hour_type_id)
+        clean.append((hour_type_id, hours))
+    if not clean:
+        raise ValueError("至少填写一种转入课时")
+
+    with _connect() as con:
+        actor = con.execute(
+            "SELECT * FROM users WHERE id = ? AND active = 1",
+            (int(actor_user_id or 0),),
+        ).fetchone()
+        if actor is None or actor["role"] != ROLE_ROOT:
+            raise ValueError("只有管理员可以转入课时")
+        if con.execute("SELECT 1 FROM students WHERE id = ?", (student_id,)).fetchone() is None:
+            raise ValueError("学员不存在")
+        valid_hour_types = {
+            int(row["id"])
+            for row in con.execute("SELECT id FROM hour_types").fetchall()
+        }
+        if any(hour_type_id not in valid_hour_types for hour_type_id, _ in clean):
+            raise ValueError("课时类型不存在")
+
+        created_at = _today()
+        cur = con.execute(
+            """INSERT INTO hour_transfer_batches
+                   (student_id, happened_on, origin, note,
+                    created_by_user_id, created_by_name, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?)""",
+            (
+                student_id,
+                happened_on,
+                origin,
+                (note or "").strip(),
+                int(actor["id"]),
+                actor["display_name"] or actor["username"],
+                created_at,
+            ),
+        )
+        batch_id = int(cur.lastrowid)
+        for hour_type_id, hours in clean:
+            con.execute(
+                """INSERT INTO hour_transfer_items(batch_id, hour_type_id, hours)
+                   VALUES(?, ?, ?)""",
+                (batch_id, hour_type_id, hours),
+            )
+            con.execute(
+                """INSERT INTO hour_transactions
+                       (student_id, hour_type_id, change, kind, happened_on, note,
+                        source_type, source_id, created_at)
+                   VALUES(?, ?, ?, '转入', ?, '', 'hour_transfer', ?, ?)""",
+                (
+                    student_id,
+                    hour_type_id,
+                    hours,
+                    happened_on,
+                    batch_id,
+                    created_at,
+                ),
+            )
+    recompute_student(student_id)
+    return batch_id
+
+
 def list_hour_transactions(student_id: int, limit: int = 50) -> list[dict]:
     with _connect() as con:
         rows = con.execute(
-            """SELECT t.*, ht.name AS hour_type_name
+            """SELECT t.*, ht.name AS hour_type_name,
+                      b.origin AS transfer_origin,
+                      b.note AS transfer_note,
+                      b.created_by_name AS transfer_created_by_name,
+                      b.created_at AS transfer_created_at
                  FROM hour_transactions t
                  JOIN hour_types ht ON ht.id = t.hour_type_id
+                 LEFT JOIN hour_transfer_batches b
+                        ON t.source_type = 'hour_transfer' AND b.id = t.source_id
                 WHERE t.student_id = ?
                 ORDER BY t.happened_on DESC, t.id DESC
                 LIMIT ?""",
@@ -6445,6 +6567,7 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
                     a["charged"],
                     a["paid"],
                     a["manual"],
+                    a["transferred"],
                     a["used"],
                     a["balance"],
                     "是" if a["unlimited"] else "",
@@ -6453,7 +6576,17 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
     sheets.append(
         (
             "课时账户",
-            ["学员", "账户", "总课时", "缴费买入", "手工调整", "已用", "剩余", "不限课时"],
+            [
+                "学员",
+                "账户",
+                "总课时",
+                "缴费买入",
+                "手工调整",
+                "转入课时",
+                "已用",
+                "剩余",
+                "不限课时",
+            ],
             rows,
         )
     )
@@ -6530,7 +6663,15 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
     for s in students:
         for t in list_hour_transactions(s["id"], limit=100000):
             source = t["source_type"] or "manual"
-            kind = "缴费" if source.startswith("payment") else ("上课" if source == "lesson" else "手记")
+            kind = (
+                "缴费"
+                if source.startswith("payment")
+                else (
+                    "上课"
+                    if source == "lesson"
+                    else ("转入" if source == "hour_transfer" else "手记")
+                )
+            )
             hour_rows.append(
                 [
                     t["happened_on"],
