@@ -2675,6 +2675,25 @@ ok(
     and not find_text(page.controls[0], "工作台他人低课时"),
     "老师工作台只显示自己学员的课时预警",
 )
+app.filter_owner = None
+app._apply_user_defaults()
+app.tab = 0
+app.student_id = None
+app.render()
+ok(
+    app.filter_owner == str(teacher_id)
+    and find_text(page.controls[0], "我的学员")
+    and find_text(page.controls[0], "工作台本人低课时")
+    and not find_text(page.controls[0], "工作台他人低课时"),
+    "老师进入学员页默认只显示自己名下学员",
+)
+app.filter_owner = ""
+app.render()
+ok(
+    find_text(page.controls[0], "工作台本人低课时")
+    and find_text(page.controls[0], "工作台他人低课时"),
+    "老师仍可主动切换到全部学员",
+)
 for trial_id in (dash_own_trial, dash_other_trial):
     db.delete_trial(trial_id)
 for student_id in (dash_own_student, dash_other_student):
@@ -4335,6 +4354,16 @@ app.course_status_filter = "unclosed"
 app.course_teacher_filter = str(t_a)
 app.course_subject_filter = ""
 app.render()
+ok(
+    any(
+        isinstance(control, ft.Container)
+        and isinstance(control.content, ft.Column)
+        and find_text(control.content, "课程筛选")
+        and find_text(control.content, "课程（")
+        for control in walk(page.controls[0])
+    ),
+    "课程筛选和课程列表放在同一张卡片里",
+)
 def course_list_text() -> str:
     controls = list(walk(page.controls[0]))
     title_index = next(
@@ -4673,6 +4702,48 @@ portal_upcoming_lesson = db.create_lesson(
     rolled=0,
 )
 db.add_attendance(portal_upcoming_lesson, portal_student)
+
+future_history_student = db.create_student(
+    {
+        "name": "未来课程过滤测试",
+        "grade": "四年级",
+        "owner_teacher_id": portal_teacher,
+        "owner_manual": True,
+    }
+)
+past_history_lesson = db.create_lesson(
+    (date.today() - timedelta(days=1)).isoformat(),
+    "17:00",
+    90,
+    zhengke["id"],
+    portal_level["id"],
+    "已经上过的课",
+    teacher_id=portal_teacher,
+)
+future_history_lesson = db.create_lesson(
+    (date.today() + timedelta(days=90)).isoformat(),
+    "17:00",
+    90,
+    zhengke["id"],
+    portal_level["id"],
+    "未来已经点名的课",
+    teacher_id=portal_teacher,
+)
+for history_lesson in (past_history_lesson, future_history_lesson):
+    db.add_attendance(history_lesson, future_history_student)
+ok(
+    [row["lesson_id"] for row in db.student_recent_lessons(future_history_student, 10)]
+    == [past_history_lesson],
+    "最近上课记录不包含未来课程",
+)
+ok(
+    [row["lesson_id"] for row in db.student_course_lessons(future_history_student)]
+    == [past_history_lesson],
+    "学生课程历史不包含未来课程",
+)
+db.delete_lesson(past_history_lesson)
+db.delete_lesson(future_history_lesson)
+db.delete_student(future_history_student)
 
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
 app.tab = 0

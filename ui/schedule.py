@@ -651,6 +651,18 @@ class ScheduleMixin:
                     color=ft.Colors.GREY_600,
                 )
             ]
+        if isinstance(filter_panel.content, ft.Column):
+            filter_panel.content.controls.extend(
+                [
+                    ft.Divider(height=1, thickness=1, color=ft.Colors.GREY_200),
+                    ft.Text(
+                        f"课程（{len(filtered_courses)} 个）",
+                        size=15,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Column(template_rows, spacing=10),
+                ]
+            )
 
         return ft.Column(
             [
@@ -664,10 +676,6 @@ class ScheduleMixin:
                     ft.Column(rows, spacing=10),
                 ),
                 filter_panel,
-                self._section(
-                    f"课程（{len(filtered_courses)} 个）",
-                    ft.Column(template_rows, spacing=10),
-                ),
                 ft.Container(height=8),
             ],
             expand=True,

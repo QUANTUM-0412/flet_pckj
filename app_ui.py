@@ -72,7 +72,7 @@ class ClassHoursApp(
         self.filter_phone = ""
         self.filter_grade = ""
         self.filter_school = ""
-        self.filter_owner = ""
+        self.filter_owner: str | None = None
         self.lesson_keyword = ""
         self.forum_keyword = ""
         self.lesson_week = ""  # 空着就是本周；否则存那一周的周一（YYYY-MM-DD）

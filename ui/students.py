@@ -166,6 +166,8 @@ class StudentsMixin:
         db.advance_student_grades()
         db.sync_course_statuses()  # 课程到期了就自动结课，进来先过一遍
         wide = self.is_wide()
+        if self.filter_owner is None:
+            self._apply_user_defaults()
         rows = db.list_students_with_summary(
             keyword=self.keyword,
             status=self.status_filter,
@@ -386,11 +388,20 @@ class StudentsMixin:
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
         )
+        is_my_default = (
+            self.user
+            and self.user.get("role") == db.ROLE_TEACHER
+            and self.filter_owner == str(self._my_user_id())
+        )
         return ft.Column(
             [
                 self._header(
                     "学员",
-                    f"共 {len(rows)} 人",
+                    (
+                        f"我的学员 · {len(rows)} 人"
+                        if is_my_default
+                        else f"共 {len(rows)} 人"
+                    ),
                     [
                         ft.Button(
                             "新增学员",

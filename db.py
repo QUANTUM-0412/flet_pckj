@@ -4433,6 +4433,7 @@ def points_balances() -> list[dict]:
 
 
 def student_recent_lessons(student_id: int, limit: int = 5) -> list[dict]:
+    today = date.today().isoformat()
     with _connect() as con:
         rows = con.execute(
             """SELECT a.attendance, a.discipline, a.discipline_score,
@@ -4448,14 +4449,17 @@ def student_recent_lessons(student_id: int, limit: int = 5) -> list[dict]:
                  LEFT JOIN class_types ct ON ct.id = l.class_type_id
                  LEFT JOIN levels lv ON lv.id = l.level_id
                 WHERE a.student_id = ?
+                  AND l.rolled = 1
+                  AND l.lesson_date <= ?
                 ORDER BY l.lesson_date DESC, l.id DESC LIMIT ?""",
-            (student_id, limit),
+            (student_id, today, limit),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def student_course_lessons(student_id: int, limit: int = 200) -> list[dict]:
     """学生端课程记录：只取这个孩子自己的出勤、积分、课评和教案。"""
+    today = date.today().isoformat()
     with _connect() as con:
         rows = con.execute(
             """SELECT a.attendance, a.discipline, a.performance,
@@ -4475,9 +4479,11 @@ def student_course_lessons(student_id: int, limit: int = 200) -> list[dict]:
                  LEFT JOIN schedule_templates t ON t.id = l.template_id
                  LEFT JOIN users u ON u.id = l.teacher_id
                 WHERE a.student_id = ?
+                  AND l.rolled = 1
+                  AND l.lesson_date <= ?
                 ORDER BY l.lesson_date DESC, l.start_time DESC, l.id DESC
                 LIMIT ?""",
-            (student_id, limit),
+            (student_id, today, limit),
         ).fetchall()
     out = []
     for row in rows:

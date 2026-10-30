@@ -42,6 +42,7 @@ class AuthMixin:
                 "student_id": user["student_id"],
                 "forum_nickname": user["forum_nickname"],
             }
+            self._apply_user_defaults()
             self.tab = self._default_tab()
             self._remember_login(user)
             self.render()
@@ -129,6 +130,7 @@ class AuthMixin:
                 "student_id": record["student_id"],
                 "forum_nickname": record["forum_nickname"],
             }
+            self._apply_user_defaults()
             self.tab = self._default_tab()
             self.render()
 
@@ -141,6 +143,7 @@ class AuthMixin:
         self.student_id = None
         self.lesson_id = None
         self.show_schedule = False
+        self.filter_owner = ""
         self.render()
 
     def _open_change_password(self, user_id: int | None = None) -> None:
@@ -196,6 +199,14 @@ class AuthMixin:
 
     def _default_tab(self) -> int:
         return 0 if self.is_student() else TAB_DASHBOARD
+
+    def _apply_user_defaults(self) -> None:
+        """老师默认只筛自己名下的学员；管理员保持查看全部。"""
+        self.filter_owner = (
+            str(self._my_user_id())
+            if self.user and self.user.get("role") == db.ROLE_TEACHER
+            else ""
+        )
 
     def _my_user_id(self) -> int | None:
         return int((self.user or {}).get("id") or 0) or None
