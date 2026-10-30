@@ -453,7 +453,14 @@ class StudentsMixin:
         if all_enrollments and all(e["status"] == "结课" for e in all_enrollments):
             badges.append(_chip("课都结课了", ft.Colors.GREY_500))
         if s["status"] != "在读":
-            badges.append(_chip(s["status"], ft.Colors.GREY_500))
+            badges.append(
+                _chip(
+                    s["status"],
+                    ft.Colors.ORANGE_700
+                    if s["status"] == "停课"
+                    else ft.Colors.GREY_500,
+                )
+            )
         if warn:
             badges.append(ft.Icon(ft.Icons.ERROR_OUTLINE, size=16, color=ft.Colors.ORANGE_700))
 
@@ -1151,6 +1158,7 @@ class StudentsMixin:
             status_color = {
                 "在读": ft.Colors.GREEN_700,
                 "停课": ft.Colors.ORANGE_700,
+                "离校": ft.Colors.GREY_600,
                 "结课": ft.Colors.GREY_500,
             }.get(e["status"], ft.Colors.GREY_600)
             cls_label = db.enrollment_class_label(e)

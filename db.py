@@ -59,7 +59,7 @@ DEFAULT_LEVELS: list[tuple[str, str, int]] = [
     ("MCU", "Lvl-02", 120),
 ]
 
-STUDENT_STATUS = ["在读", "停课"]
+STUDENT_STATUS = ["在读", "停课", "离校"]
 GENDER_OPTIONS = ["男", "女"]
 GRADE_OPTIONS = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "初一", "初二", "初三"]
 BADGE_CATEGORIES = ["竞赛", "考级"]
@@ -1553,6 +1553,9 @@ def recompute_student_status(
             "SELECT status FROM students WHERE id = ?", (student_id,)
         ).fetchone()
         if row is None:
+            return
+        if row["status"] == "离校":
+            # 已离校是明确的业务结论，不能被仍在读的旧报名自动改回来。
             return
         statuses = [
             r["status"]
@@ -6335,6 +6338,8 @@ def hour_alerts() -> list[dict]:
     """剩余课时不够、需要提醒的孩子（只看设置了提醒的账户）。"""
     out = []
     for student in list_students():
+        if student["status"] == "离校":
+            continue
         for account in get_accounts(student["id"]):
             if not account["warn"] or account["unlimited"]:
                 continue

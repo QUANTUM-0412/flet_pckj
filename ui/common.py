@@ -14,7 +14,7 @@ import db
 DIALOG_WIDTH = 300
 WARN_BALANCE = db.WARN_BALANCE  # 剩余课时少于这个数就标红提醒
 WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-STATUS_FILTERS = [("全部", ""), ("在读", "在读"), ("停课", "停课")]
+STATUS_FILTERS = [("全部", "")] + [(status, status) for status in db.STUDENT_STATUS]
 HOUR_MODE = [("充值", 1), ("扣减", -1)]
 
 

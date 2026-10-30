@@ -292,6 +292,8 @@ class DashboardMixin:
         rows = []
         for item in db.list_students_with_summary():
             student = item["student"]
+            if student["status"] == "离校":
+                continue
             if not self.is_admin() and not self._can_manage_student(student["id"]):
                 continue
             warnings = db.warning_accounts(item["accounts"])

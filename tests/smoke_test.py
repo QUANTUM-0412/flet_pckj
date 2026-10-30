@@ -3594,15 +3594,18 @@ app.tab = 0
 
 print("31. 学员状态不带结课 / 监护人 / 上课记录点进详情")
 app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
-ok(db.STUDENT_STATUS == ["在读", "停课"], "学员档案的状态只有「在读／停课」")
+ok(
+    db.STUDENT_STATUS == ["在读", "停课", "离校"],
+    "学员档案区分在读、暂时停课和已经离校",
+)
 
 app.tab = 0
 app.student_id = None
 app.render()
 status_dd = find_dropdown(page.controls[0], "状态")
 ok(
-    [o.key for o in status_dd.options] == ["全部", "在读", "停课"],
-    "学员列表的状态筛选也没有「结课」",
+    [o.key for o in status_dd.options] == ["全部", "在读", "停课", "离校"],
+    "学员列表可以筛选在读、停课和离校",
 )
 
 g_kid = db.create_student({"name": "监护娃", "grade": "二年级", "guardian": "张爸爸"})
@@ -3614,9 +3617,61 @@ tree = page.controls[0]
 ok(find_field(tree, "监护人姓名").value == "张爸爸", "学员档案上能看到监护人")
 profile_status = find_dropdown(tree, "状态")
 ok(
-    [o.text for o in profile_status.options] == ["在读", "停课"],
-    "学员基本档案的状态里没有「结课」",
+    [o.text for o in profile_status.options] == ["在读", "停课", "离校"],
+    "学员基本档案能明确选择离校",
 )
+
+away_kid = db.create_student(
+    {"name": "已离校测试", "grade": "三年级", "status": "离校"}
+)
+away_enrollment = db.create_enrollment(
+    away_kid,
+    gpl3["id"],
+    zhengke["id"],
+    90,
+    owner_teacher_id=t_a,
+)
+db.refresh_student(away_kid)
+ok(
+    db.get_student(away_kid)["status"] == "离校"
+    and db.list_students(status="离校")[0]["id"] == away_kid,
+    "离校状态不会被仍然在读的旧报名自动改回来",
+)
+db.delete_enrollment(away_enrollment)
+db.delete_student(away_kid)
+
+stopped_alert_kid = db.create_student(
+    {"name": "停课但要提醒", "grade": "三年级", "status": "停课"}
+)
+left_alert_kid = db.create_student(
+    {"name": "离校不要提醒", "grade": "三年级", "status": "离校"}
+)
+warn_hour_id = next(
+    account["hour_type_id"]
+    for account in db.get_accounts(stopped_alert_kid)
+    if account["name"] == "正课"
+)
+for kid in (stopped_alert_kid, left_alert_kid):
+    db.add_hours(
+        kid,
+        warn_hour_id,
+        2,
+        kind="充值",
+        source_type="manual",
+    )
+alert_names = {row["student"] for row in db.hour_alerts()}
+dashboard_alert_names = {
+    row["title"] for row in app._dashboard_shortages()
+}
+ok(
+    "停课但要提醒" in alert_names
+    and "停课但要提醒" in dashboard_alert_names
+    and "离校不要提醒" not in alert_names
+    and "离校不要提醒" not in dashboard_alert_names,
+    "课时不足统计保留停课，但排除离校",
+)
+db.delete_student(stopped_alert_kid)
+db.delete_student(left_alert_kid)
 
 g_lesson = db.create_lesson(today.isoformat(), "10:00", 90, zhengke["id"], gpl3["id"])
 db.add_attendance(g_lesson, g_kid)
