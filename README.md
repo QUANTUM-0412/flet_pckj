@@ -38,6 +38,7 @@ uv run flet run --web main.py
 
 - **Mac**：双击 `start.command`（或者 `uv run python main.py`）
 - **Ubuntu Server / Linux**：`./start.sh`，第一次会自己 `uv sync`；
+  重启用 `./restart.sh`（会自动处理旧进程、端口释放和 systemd 服务）；
   做成开机自启的常驻服务：`sudo ./scripts/install-service.sh`，
   完整步骤见 [docs/UbuntuServer-deploy.md](docs/UbuntuServer-deploy.md)
 - **从 Windows WSL 迁到树莓派**：按

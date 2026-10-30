@@ -171,6 +171,15 @@ sudo systemctl restart class-hours      # 重启
 sudo systemctl stop class-hours         # 停止
 ```
 
+前台运行时需要重启，统一用：
+
+```bash
+./restart.sh
+```
+
+如果已经装了上面的 systemd 服务，脚本会自动转去重启服务；
+如果没装，则会按端口找到旧实例、等待端口释放后重新启动。
+
 服务器重启、或者程序崩了，都会自动起来（`Restart=always`）。
 
 **改了代码之后**，让它生效：
