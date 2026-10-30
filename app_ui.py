@@ -80,7 +80,7 @@ class ClassHoursApp(
         self.course_status_filter = "unclosed"
         self.course_teacher_filter = ""  # 空着按身份：老师看自己，管理员看全部
         self.course_subject_filter = ""
-        self.status_filter = ""
+        self.status_filter = "在读"
         self.trial_filter = ""
         self.payment_month = ""  # 空着就是本月；否则 YYYY-MM
         self._last_wide: bool | None = None

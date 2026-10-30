@@ -356,20 +356,14 @@ class StudentsMixin:
         )
         cards = [self._student_card(item, pending_ids) for item in rows]
         if not cards:
-            has_filters = bool(
-                self.keyword
-                or self.status_filter
-                or self.filter_grade
-                or self.filter_school
-                or self.filter_owner
-            )
+            has_any_student = bool(db.list_students())
             cards = [
                 self._card(
                     ft.Column(
                         [
                             ft.Icon(ft.Icons.PERSON_ADD_ALT, size=36, color=ft.Colors.GREY_400),
                             ft.Text(
-                                "没有符合条件的学员" if has_filters else "还没有学员",
+                                "没有符合条件的学员" if has_any_student else "还没有学员",
                                 color=ft.Colors.GREY_600,
                             ),
                         ],

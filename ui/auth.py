@@ -144,6 +144,7 @@ class AuthMixin:
         self.lesson_id = None
         self.show_schedule = False
         self.filter_owner = ""
+        self.status_filter = "在读"
         self.render()
 
     def _open_change_password(self, user_id: int | None = None) -> None:
@@ -207,6 +208,7 @@ class AuthMixin:
             if self.user and self.user.get("role") == db.ROLE_TEACHER
             else ""
         )
+        self.status_filter = "在读"
 
     def _my_user_id(self) -> int | None:
         return int((self.user or {}).get("id") or 0) or None

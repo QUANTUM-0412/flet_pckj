@@ -249,6 +249,11 @@ ok(find_text(page.controls[0], "今天没有排课"), "没有排课时工作台�
 
 app._goto(0)
 ok(find_text(page.controls[0], "还没有学员"), "宽屏：左侧导航 + 空列表")
+status_default = find_dropdown(page.controls[0], "状态")
+ok(
+    app.status_filter == "在读" and status_default.value == "在读",
+    "学员列表默认只显示在读学员",
+)
 ok(find_text(page.controls[0], "设置"), "左侧导航有「设置」")
 ok(
     find_text(page.controls[0], "全部数据与权限"),
@@ -277,8 +282,14 @@ ok(
 ok(find_text(phone_page.controls[0], "更多"), "手机后台有「更多」入口")
 phone_app._goto(0)
 ok(find_text(phone_page.controls[0], "还没有学员"), "手机学员页仍显示完整名册")
-ok(find_button(phone_page.controls[0], "筛选").height == 48, "手机筛选按钮有足够大的触控高度")
-click(phone_page.controls[0], "筛选")
+phone_filter_button = next(
+    control
+    for control in walk(phone_page.controls[0])
+    if isinstance(control, (ft.Button, ft.TextButton))
+    and str(control.content or "").startswith("筛选")
+)
+ok(phone_filter_button.height == 48, "手机筛选按钮有足够大的触控高度")
+phone_filter_button.on_click(None)
 filter_sheet = top_dialog(phone_page)
 ok(isinstance(filter_sheet, ft.BottomSheet), "手机筛选用底部面板展开")
 ok(
