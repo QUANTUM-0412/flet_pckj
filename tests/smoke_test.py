@@ -4467,6 +4467,22 @@ filter_other = db.create_template(
     start_date="2026-10-01",
     end_date="2026-10-31",
 )
+filter_comp_level = next(
+    level
+    for level in db.list_levels()
+    if db.level_full_name(level) == "GPL-竞赛-小低组"
+)
+filter_comp = db.create_template(
+    0,
+    "16:00",
+    60,
+    rules["竞赛"]["id"],
+    filter_comp_level["id"],
+    name="筛选-王老师-竞赛",
+    teacher_id=t_a,
+    start_date="2026-10-01",
+    end_date="2026-10-31",
+)
 ok(
     app.course_month == date.today().strftime("%Y-%m")
     and app.course_status_filter == "unclosed",
@@ -4519,6 +4535,7 @@ ok(
 ok(
     find_dropdown(page.controls[0], "课程状态").value == "unclosed"
     and find_dropdown(page.controls[0], "上课老师").value == str(t_a)
+    and find_dropdown(page.controls[0], "类别").value == ""
     and find_dropdown(page.controls[0], "科目").value == "",
     "筛选控件显示默认条件",
 )
@@ -4538,6 +4555,14 @@ ok(
     "选择已结课后只看已结课课程",
 )
 app.course_status_filter = "all"
+app.course_category_filter = "竞赛"
+app.render()
+ok(
+    "筛选-王老师-竞赛" in course_list_text()
+    and "筛选-王老师-在读" not in course_list_text(),
+    "类别筛选只保留对应类别的课程",
+)
+app.course_category_filter = ""
 app.course_subject_filter = "MCU"
 app.render()
 ok(
@@ -4555,7 +4580,14 @@ ok(
 )
 for lesson in db.template_lessons(sort_late):
     db.delete_lesson(lesson["id"])
-for template_id in (sort_early, sort_late, filter_own, filter_ended, filter_other):
+for template_id in (
+    sort_early,
+    sort_late,
+    filter_own,
+    filter_ended,
+    filter_other,
+    filter_comp,
+):
     db.delete_template(template_id)
 app._reset_course_filters()
 

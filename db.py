@@ -4848,6 +4848,7 @@ _TEMPLATE_SELECT = """
            ct.name AS class_type_name,
            lv.subject AS subject,
            lv.name AS level_name,
+           lv.level_type AS level_type,
            u.display_name AS teacher_name,
            (SELECT COUNT(*) FROM schedule_students ss WHERE ss.template_id = t.id) AS student_count
       FROM schedule_templates t

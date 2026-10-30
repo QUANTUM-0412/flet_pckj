@@ -214,6 +214,7 @@ class ScheduleMixin:
         self.course_month = date.today().strftime("%Y-%m")
         self.course_status_filter = "unclosed"
         self.course_teacher_filter = ""
+        self.course_category_filter = ""
         self.course_subject_filter = ""
         self.render()
 
@@ -280,16 +281,41 @@ class ScheduleMixin:
                 if int(course.get("teacher_id") or 0) == teacher_id
             ]
 
+        categories = sorted(
+            {
+                (course.get("level_type") or "").strip()
+                for course in teacher_rows
+            }
+        )
+        category_keys = {category or "__none__" for category in categories}
+        if (
+            self.course_category_filter
+            and self.course_category_filter not in category_keys
+        ):
+            self.course_category_filter = ""
+        category_rows = teacher_rows
+        if self.course_category_filter:
+            wanted_category = (
+                ""
+                if self.course_category_filter == "__none__"
+                else self.course_category_filter
+            )
+            category_rows = [
+                course
+                for course in teacher_rows
+                if (course.get("level_type") or "").strip() == wanted_category
+            ]
+
         subjects = sorted(
             {
                 (course.get("subject") or "").strip()
-                for course in teacher_rows
+                for course in category_rows
             }
         )
         subject_keys = {subject or "__none__" for subject in subjects}
         if self.course_subject_filter and self.course_subject_filter not in subject_keys:
             self.course_subject_filter = ""
-        subject_rows = teacher_rows
+        subject_rows = category_rows
         if self.course_subject_filter:
             wanted = (
                 ""
@@ -298,7 +324,7 @@ class ScheduleMixin:
             )
             subject_rows = [
                 course
-                for course in teacher_rows
+                for course in category_rows
                 if (course.get("subject") or "").strip() == wanted
             ]
 
@@ -350,6 +376,21 @@ class ScheduleMixin:
             value=effective_teacher,
             width=180,
             on_select=lambda e: self._set_course_teacher(e.control.value or ""),
+        )
+        category_dd = _dd(
+            "类别",
+            [ft.DropdownOption(key="", text="全部类别")]
+            + _opts(
+                [
+                    (category or "__none__", category or "未设置类别")
+                    for category in categories
+                ]
+            ),
+            value=self.course_category_filter,
+            width=180,
+            on_select=lambda e: self._set_course_filter(
+                "course_category_filter", e.control.value or ""
+            ),
         )
         subject_dd = _dd(
             "科目",
@@ -416,7 +457,7 @@ class ScheduleMixin:
                     ),
                     month_bar,
                     ft.Row(
-                        [status_dd, teacher_dd, subject_dd],
+                        [status_dd, teacher_dd, category_dd, subject_dd],
                         spacing=8,
                         run_spacing=8,
                         wrap=True,
@@ -434,6 +475,7 @@ class ScheduleMixin:
 
     def _set_course_teacher(self, value: str) -> None:
         self.course_teacher_filter = value
+        self.course_category_filter = ""
         self.course_subject_filter = ""
         self.render()
 

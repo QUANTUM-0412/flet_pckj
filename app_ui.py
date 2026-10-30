@@ -79,6 +79,7 @@ class ClassHoursApp(
         self.course_month = date.today().strftime("%Y-%m")
         self.course_status_filter = "unclosed"
         self.course_teacher_filter = ""  # 空着按身份：老师看自己，管理员看全部
+        self.course_category_filter = ""
         self.course_subject_filter = ""
         self.status_filter = "在读"
         self.trial_filter = ""
