@@ -634,6 +634,21 @@ class ScheduleMixin:
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
+        day_card = self._card(
+            ft.Column(
+                [
+                    date_row,
+                    ft.Divider(height=1, thickness=1, color=ft.Colors.GREY_200),
+                    ft.Text(
+                        f"这天的课（{_date_text(self.schedule_date)}）",
+                        size=15,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Column(rows, spacing=10),
+                ],
+                spacing=12,
+            )
+        )
 
         all_courses = db.list_templates()
         filtered_courses, filter_panel = self._course_filter_panel(all_courses)
@@ -670,11 +685,7 @@ class ScheduleMixin:
                 ft.Row([search], spacing=10),
                 *([self._makeups_card(db.list_makeups("待补"))] if db.list_makeups("待补") else []),
                 self._week_view(),
-                self._card(date_row),
-                self._section(
-                    f"这天的课（{_date_text(self.schedule_date)}）",
-                    ft.Column(rows, spacing=10),
-                ),
+                day_card,
                 filter_panel,
                 ft.Container(height=8),
             ],

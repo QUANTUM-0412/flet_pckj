@@ -4185,6 +4185,23 @@ app.lesson_id = None
 app.schedule_date = "2026-10-05"
 app.render()
 ok(find_text(page.controls[0], "这天的课（10月5日 周一）"), "有「这天的课」这一块")
+ok(
+    any(
+        isinstance(control, ft.Container)
+        and isinstance(control.content, ft.Column)
+        and any(
+            isinstance(child, ft.Text) and child.value == "10月5日 周一"
+            for child in walk(control.content)
+        )
+        and any(
+            isinstance(child, ft.Text)
+            and child.value == "这天的课（10月5日 周一）"
+            for child in walk(control.content)
+        )
+        for control in walk(page.controls[0])
+    ),
+    "日期切换和当天的课在同一张卡片里",
+)
 ok(not find_text(page.controls[0], "这天另外记的课"), "不再单开「这天另外记的课」")
 ok(find_text(page.controls[0], "GPL-03 周一班"), "课程的那一节在「这天的课」里")
 ok(find_text(page.controls[0], "16:00"), "临时加的那一节也在同一块里")
