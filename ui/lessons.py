@@ -325,7 +325,7 @@ class LessonsMixin:
     def _makeup_rows(self, makeups: list[dict]) -> list[ft.Control]:
         rows = []
         for m in makeups:
-            can_edit = self._can_manage_student(int(m.get("student_id") or 0))
+            can_edit = self._can_manage_makeup(m)
             rows.append(
                 ft.Container(
                     content=ft.Column(
@@ -385,6 +385,18 @@ class LessonsMixin:
             )
         return rows
 
+    def _can_manage_makeup(self, makeup: dict) -> bool:
+        if self.is_admin():
+            return True
+        me = self._my_user_id()
+        return bool(
+            me
+            and (
+                int(makeup.get("origin_teacher_id") or 0) == me
+                or self._can_manage_student(int(makeup.get("student_id") or 0))
+            )
+        )
+
     def _student_makeups_card(self, s: dict) -> ft.Container:
         """这个孩子要不要补课，一眼能看出来。"""
         pending = db.list_makeups("待补", s["id"])
@@ -412,8 +424,8 @@ class LessonsMixin:
         return self._section(title, ft.Column(body, spacing=10))
 
     def _open_arrange_makeup_dialog(self, makeup: dict) -> None:
-        if not self._can_manage_student(int(makeup.get("student_id") or 0)):
-            self._toast("这是其他老师的学员，只能查看")
+        if not self._can_manage_makeup(makeup):
+            self._toast("这节课和学员都不归你管理，只能查看")
             return
         day = _tf("补课日期", date.today().isoformat(), width=DIALOG_WIDTH)
         start = _tf("开始时间", makeup["start_time"] or _now_time(), width=DIALOG_WIDTH)

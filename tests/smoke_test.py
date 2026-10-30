@@ -3119,6 +3119,50 @@ att_t = db.list_attendance(lesson_t)[0]
 ok(att_t["owner_teacher_id"] == t_a, "点名上的归属还是报名的王老师")
 ok(db.get_lesson(lesson_t)["teacher_id"] == t_b, "这节课的「上课老师」是代课的李老师")
 
+# 原课老师即使不是学员归属老师，也应当能安排自己课上的补课。
+cross_makeup_student = db.create_student(
+    {
+        "name": "跨归属补课测试",
+        "grade": "三年级",
+        "owner_teacher_id": t_a,
+        "owner_manual": True,
+    }
+)
+cross_makeup_lesson = db.create_lesson(
+    "2026-10-05",
+    "11:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    teacher_id=t_b,
+)
+cross_attendance = db.add_attendance(cross_makeup_lesson, cross_makeup_student)
+db.update_attendance(cross_attendance, attendance=0)
+db.sync_makeup_for_attendance(cross_attendance)
+cross_makeup = db.list_makeups("待补", cross_makeup_student)[0]
+app.user = {
+    "id": t_b,
+    "username": "li",
+    "display_name": "李老师",
+    "role": db.ROLE_TEACHER,
+}
+app.tab = 0
+app.student_id = None
+app.open_student(cross_makeup_student)
+ok(
+    find_button(page.controls[0], "安排补课"),
+    "原课老师能安排补课，即使学员归属是另一位老师",
+)
+find_button(page.controls[0], "安排补课").on_click(None)
+ok(
+    find_field(top_dialog(page), "补课日期") is not None,
+    "原课老师点击安排补课能打开表单",
+)
+app._close()
+db.delete_student(cross_makeup_student)
+db.delete_lesson(cross_makeup_lesson)
+app.user = {"id": 1, "username": "root", "display_name": "管理员", "role": db.ROLE_ROOT}
+
 h_zk = next(h for h in db.list_hour_types() if h["name"] == "正课")
 h_js = next(h for h in db.list_hour_types() if h["name"] == "竞赛")
 pay_mix = db.create_payment(
