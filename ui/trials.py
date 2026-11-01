@@ -518,10 +518,13 @@ class TrialsMixin:
             ),
             "",
         )
-        today = date.today()
+        try:
+            selected_week_day = date.fromisoformat(self.trial_schedule_day)
+        except ValueError:
+            selected_week_day = date.today()
         week_anchor = _tf(
             "选择一周（填其中任意一天）",
-            today.isoformat(),
+            selected_week_day.isoformat(),
             width=DIALOG_WIDTH,
             hint_text="例如 2026-11-04；会自动生成周一到周日",
         )
