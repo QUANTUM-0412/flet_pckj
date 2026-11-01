@@ -10,58 +10,57 @@ import db
 from .common import DIALOG_WIDTH, _tf
 
 
-def print_half_hour_units(duration_minutes) -> int:
+PRINT_POINTS_PER_GRAM = Decimal("4")
+PRINT_POINTS_PER_HALF_HOUR = Decimal("20")
+
+
+def print_half_hour_units(duration_hours) -> int:
     """每开始一个 30 分钟按一档，不足 30 分钟也按一档。"""
     try:
-        duration = Decimal(str(duration_minutes))
+        duration = Decimal(str(duration_hours))
     except (InvalidOperation, TypeError, ValueError) as err:
         raise ValueError("请填写打印时长") from err
     if duration <= 0:
         raise ValueError("打印时长必须大于 0")
     return int(
-        (duration / Decimal("30")).to_integral_value(rounding=ROUND_CEILING)
+        (duration / Decimal("0.5")).to_integral_value(rounding=ROUND_CEILING)
     )
 
 
-def calculate_3d_print_points(weight_g, duration_minutes) -> float:
-    """按耗材重量、半小时档数计算 3D 打印消耗的积分。"""
+def calculate_3d_print_points(weight_g, duration_hours) -> float:
+    """按耗材重量和打印时长分别计分，避免连乘后消耗过高。"""
     try:
         weight = Decimal(str(weight_g))
     except (InvalidOperation, TypeError, ValueError) as err:
         raise ValueError("请填写耗材重量") from err
     if weight <= 0:
         raise ValueError("耗材重量必须大于 0")
-    units = print_half_hour_units(duration_minutes)
-    return float(weight * Decimal("10") * units)
+    units = print_half_hour_units(duration_hours)
+    raw_points = (
+        weight * PRINT_POINTS_PER_GRAM
+        + Decimal(units) * PRINT_POINTS_PER_HALF_HOUR
+    )
+    return float(raw_points.to_integral_value(rounding=ROUND_CEILING))
 
 
-def format_print_duration(duration_minutes) -> str:
-    """把总分钟数写成人容易核对的小时／分钟。"""
-    hours, minutes = divmod(int(duration_minutes), 60)
-    if hours and minutes:
-        return f"{hours} 小时 {minutes} 分钟"
-    if hours:
-        return f"{hours} 小时"
-    return f"{minutes} 分钟"
+def format_print_hours(duration_hours) -> str:
+    """把时长写成简洁的小时数字，例如 1.8 小时。"""
+    hours = Decimal(str(duration_hours))
+    return f"{hours.normalize():f} 小时"
 
 
-def parse_print_duration(value) -> int:
-    """把 3:00 这样的「小时:分钟」转成总分钟。"""
-    text = str(value or "").strip().replace("：", ":")
-    if ":" not in text:
-        raise ValueError("请按「小时:分钟」填写，例如 3:00")
-    hour_text, minute_text = text.split(":", 1)
+def parse_print_hours(value) -> Decimal:
+    """把 1.8 这样的小时数转成计算结果使用的数字。"""
+    text = str(value or "").strip()
+    if text.endswith("小时"):
+        text = text[:-2].strip()
     try:
-        hours = int(hour_text.strip())
-        minutes = int(minute_text.strip())
-    except ValueError as err:
-        raise ValueError("请按「小时:分钟」填写，例如 3:00") from err
-    if hours < 0 or minutes < 0 or minutes > 59:
-        raise ValueError("小时不能小于 0，分钟请填 0～59")
-    duration = hours * 60 + minutes
-    if duration <= 0:
+        hours = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError) as err:
+        raise ValueError("请填写小时数，例如 1.8") from err
+    if hours <= 0:
         raise ValueError("打印时长必须大于 0")
-    return duration
+    return hours
 
 
 class ToolsMixin:
@@ -286,8 +285,8 @@ class ToolsMixin:
             expand=True,
         )
         duration = _tf(
-            "打印时长（小时:分钟）",
-            hint_text="例如 3:00",
+            "打印时长（小时）",
+            hint_text="例如 1.8",
             prefix_icon=ft.Icons.SCHEDULE,
             expand=True,
         )
@@ -312,7 +311,7 @@ class ToolsMixin:
                 weight.update()
                 return
             try:
-                duration_value = parse_print_duration(duration.value)
+                duration_value = parse_print_hours(duration.value)
                 units = print_half_hour_units(duration_value)
                 points = calculate_3d_print_points(weight_value, duration_value)
             except ValueError as err:
@@ -327,8 +326,10 @@ class ToolsMixin:
             result.weight = ft.FontWeight.BOLD
             result.color = ft.Colors.BLUE_700
             formula.value = (
-                f"{format_print_duration(duration_value)}（{duration_value} 分钟）"
-                f" · {db.num_text(weight_value)}g × 10 × {units} 档"
+                f"{format_print_hours(duration_value)} · "
+                f"{db.num_text(weight_value)}g × "
+                f"{db.num_text(float(PRINT_POINTS_PER_GRAM))} + {units} 档 × "
+                f"{db.num_text(float(PRINT_POINTS_PER_HALF_HOUR))}"
                 f" = {db.num_text(points)} 积分"
             )
             result.update()
@@ -344,16 +345,22 @@ class ToolsMixin:
 
         rules = ft.Row(
             [
-                rule_chip("每克 10 积分"),
-                rule_chip("每 30 分钟 ×1 档"),
+                rule_chip(
+                    f"每克 {db.num_text(float(PRINT_POINTS_PER_GRAM))} 积分"
+                ),
+                rule_chip(
+                    "每半小时 "
+                    f"+{db.num_text(float(PRINT_POINTS_PER_HALF_HOUR))} 积分"
+                ),
                 rule_chip("不足半小时按 1 档"),
+                rule_chip("结果向上取整"),
             ],
             spacing=8,
             run_spacing=8,
             wrap=True,
         )
         duration_help = ft.Text(
-            "格式：小时:分钟 · 例如 3:00、1:30；不足半小时也按半小时算。",
+            "直接填小时数 · 例如 1.8、2.5；不足半小时也按半小时算。",
             size=12,
             color=ft.Colors.GREY_600,
         )

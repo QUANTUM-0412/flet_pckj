@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import tempfile
 from datetime import date, timedelta
+from decimal import Decimal
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -26,8 +27,8 @@ from app_ui import ClassHoursApp  # noqa: E402
 from ui.shell import TAB_DASHBOARD  # noqa: E402
 from ui.tools import (  # noqa: E402
     calculate_3d_print_points,
-    format_print_duration,
-    parse_print_duration,
+    format_print_hours,
+    parse_print_hours,
     print_half_hour_units,
 )
 
@@ -339,18 +340,19 @@ ok("上课记录" not in menus, "「上课记录」栏目并入「课程」了")
 ok("积分" not in menus, "积分不再单占一个菜单（挪进学员页和报表页了）")
 
 print("2b. 3D 打印积分工具")
-ok(print_half_hour_units(1) == 1, "不足半小时按 1 档")
-ok(print_half_hour_units(30) == 1, "正好半小时按 1 档")
-ok(print_half_hour_units(31) == 2, "超过半小时按 2 档")
-ok(print_half_hour_units(60) == 2, "1 小时按 2 档")
-ok(print_half_hour_units(61) == 3, "超过 1 小时按 3 档")
-ok(calculate_3d_print_points(10, 30) == 100, "10 克打印半小时消耗 100 积分")
-ok(calculate_3d_print_points(10, 61) == 300, "10 克打印 61 分钟消耗 300 积分")
-ok(format_print_duration(180) == "3 小时", "180 分钟显示成 3 小时")
-ok(format_print_duration(90) == "1 小时 30 分钟", "90 分钟显示成 1 小时 30 分钟")
-ok(parse_print_duration("3:00") == 180, "时长 3:00 能解析成 180 分钟")
-ok(parse_print_duration("1:30") == 90, "时长 1:30 能解析成 90 分钟")
-ok(parse_print_duration("1：01") == 61, "中文冒号也能识别")
+ok(print_half_hour_units(0.01) == 1, "不足半小时按 1 档")
+ok(print_half_hour_units(0.5) == 1, "正好半小时按 1 档")
+ok(print_half_hour_units(0.51) == 2, "超过半小时按 2 档")
+ok(print_half_hour_units(1) == 2, "1 小时按 2 档")
+ok(print_half_hour_units(1.01) == 3, "超过 1 小时按 3 档")
+ok(calculate_3d_print_points(10, 0.5) == 60, "第一档 10 克打印半小时消耗 60 积分")
+ok(calculate_3d_print_points(10, 1.01) == 100, "10 克打印 1.01 小时消耗 100 积分")
+ok(calculate_3d_print_points(100, 4) == 560, "100 克打印 4 小时消耗 560 积分")
+ok(calculate_3d_print_points(12.5, 1.01) == 110, "小数重量正确参与积分计算")
+ok(format_print_hours(3) == "3 小时", "整数时长显示成 3 小时")
+ok(format_print_hours(1.8) == "1.8 小时", "小数时长显示成 1.8 小时")
+ok(parse_print_hours("1.8") == Decimal("1.8"), "能解析 1.8 小时")
+ok(parse_print_hours("2.5小时") == Decimal("2.5"), "也兼容带「小时」的写法")
 try:
     calculate_3d_print_points(10, 0)
     zero_duration_allowed = True
@@ -369,20 +371,20 @@ page.width = 1200
 app.render()
 ok(find_text(page.controls[0], "等待计算"), "还没填写时结果是清楚的等待状态")
 find_field(page.controls[0], "耗材重量（克）").value = "12.5"
-find_field(page.controls[0], "打印时长（小时:分钟）").value = "1:01"
+find_field(page.controls[0], "打印时长（小时）").value = "1.01"
 click(page.controls[0], "计算积分")
 ok(
-    find_text(page.controls[0], "375 积分")
-    and find_text(page.controls[0], "1 小时 1 分钟（61 分钟）")
-    and find_text(page.controls[0], "12.5g × 10 × 3 档"),
-    "用 1:01 输入，也能正确按半小时档数算积分",
+    find_text(page.controls[0], "110 积分")
+    and find_text(page.controls[0], "1.01 小时")
+    and find_text(page.controls[0], "12.5g × 4 + 3 档 × 20"),
+    "用 1.01 小时也能正确按半小时档数算积分",
 )
-find_field(page.controls[0], "打印时长（小时:分钟）").value = "3:00"
+find_field(page.controls[0], "打印时长（小时）").value = "3"
 click(page.controls[0], "计算积分")
 ok(
-    find_text(page.controls[0], "750 积分")
-    and find_text(page.controls[0], "3 小时（180 分钟）"),
-    "打印 3 小时不用自己换算分钟",
+    find_text(page.controls[0], "170 积分")
+    and find_text(page.controls[0], "3 小时"),
+    "直接填写小时数也能计算积分",
 )
 
 print("2c. 网站工具")
