@@ -1699,21 +1699,16 @@ ok(
 )
 
 app.trial_schedule_day = trial_date
-app._open_trial_times_dialog(trial_teacher)
-times_dialog = top_dialog(page)
-ok(find_text(times_dialog, "不会显示班级、孩子姓名"), "家长时段图明确保护内部信息")
-week_field = find_field(times_dialog, "选择一周（填其中任意一天）")
-ok(
-    week_field.value == trial_date,
-    "生成家长图默认跟随当前正在查看的那一周",
-)
-ok(
-    find_text(times_dialog, "11月2日 周一 ~ 11月8日 周日"),
-    "家长时段图固定生成周一到周日",
-)
-click(times_dialog, "生成图片")
+app._generate_trial_times_image(trial_teacher)
 times_image_dialog = top_dialog(page)
 ok(find_text(times_image_dialog, "试听可约时段"), "能预览生成的家长时段图")
+ok(
+    find_text(
+        times_image_dialog,
+        "已按时间表当前显示的一周生成：11月2日 周一 ~ 11月8日 周日",
+    ),
+    "点一次就直接生成当前正在查看的整周",
+)
 times_image = next(
     (
         control

@@ -274,7 +274,7 @@ class TrialsMixin:
         generate_button = ft.Button(
             "生成家长时段图",
             icon=ft.Icons.IMAGE_OUTLINED,
-            on_click=lambda e: self._open_trial_times_dialog(teacher_id),
+            on_click=lambda e: self._generate_trial_times_image(teacher_id),
         )
         teacher_summary = f"{teacher_name} · 每次 1 小时"
         teacher_controls: ft.Control
@@ -508,9 +508,16 @@ class TrialsMixin:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _open_trial_times_dialog(self, teacher_id: int) -> None:
+    def _generate_trial_times_image(self, teacher_id: int) -> None:
+        """直接用时间表当前显示的一周生成家长图，不再让用户二次选周。"""
+        try:
+            anchor = date.fromisoformat(self.trial_schedule_day)
+        except ValueError:
+            anchor = date.today()
+        first = anchor - timedelta(days=anchor.weekday())
+        last = first + timedelta(days=6)
         teachers = db.list_teachers()
-        teacher_name = next(
+        selected_name = next(
             (
                 item["display_name"] or item["username"]
                 for item in teachers
@@ -518,154 +525,57 @@ class TrialsMixin:
             ),
             "",
         )
-        try:
-            selected_week_day = date.fromisoformat(self.trial_schedule_day)
-        except ValueError:
-            selected_week_day = date.today()
-        week_anchor = _tf(
-            "选择一周（填其中任意一天）",
-            selected_week_day.isoformat(),
-            width=DIALOG_WIDTH,
-            hint_text="例如 2026-11-04；会自动生成周一到周日",
-        )
-        teacher = _dd(
-            "试听老师",
-            _opts(
-                [
-                    (item["id"], item["display_name"] or item["username"])
-                    for item in teachers
-                ]
-            ),
-            value=str(teacher_id),
-            width=DIALOG_WIDTH,
-        )
-        week_preview = ft.Text(
-            "",
-            size=12,
-            color=ft.Colors.GREY_600,
-        )
-
-        def refresh_week_preview() -> None:
-            try:
-                anchor = date.fromisoformat(
-                    (week_anchor.value or "").strip()
-                )
-            except ValueError:
-                week_preview.value = "日期写成 2026-11-04 这样"
-                week_preview.color = ft.Colors.RED_600
-                return
-            monday = anchor - timedelta(days=anchor.weekday())
-            sunday = monday + timedelta(days=6)
-            week_preview.value = (
-                f"固定生成 {monday.month}月{monday.day}日 周一 ~ "
-                f"{sunday.month}月{sunday.day}日 周日"
-            )
-            week_preview.color = ft.Colors.GREY_600
-
-        week_anchor.on_change = lambda e: refresh_week_preview()
-        refresh_week_preview()
-
-        def generate(e) -> None:
-            try:
-                anchor = date.fromisoformat(
-                    (week_anchor.value or "").strip()
-                )
-            except ValueError:
-                week_anchor.error = "日期写成 2026-11-03 这样"
-                week_anchor.update()
-                return
-            first = anchor - timedelta(days=anchor.weekday())
-            last = first + timedelta(days=6)
-            selected_teacher = int(teacher.value or 0)
-            selected_name = next(
-                (
-                    item["display_name"] or item["username"]
-                    for item in teachers
-                    if int(item["id"]) == selected_teacher
-                ),
-                teacher_name,
-            )
-            days = []
-            missing_calendar_days = []
-            current = first
-            while current <= last:
-                info = db.trial_calendar_day(current.isoformat())
-                if info.get("warning"):
-                    missing_calendar_days.append(current.isoformat())
-                days.append(
-                    {
-                        **info,
-                        "slots": db.trial_slot_candidates(
-                            current.isoformat(), selected_teacher
-                        ),
-                    }
-                )
-                current += timedelta(days=1)
-            if missing_calendar_days:
-                self._toast(
-                    f"节假日库还没有 {missing_calendar_days[0][:4]} 年数据，"
-                    "请更新节假日库，或先在试听日历里设置这段日期"
-                )
-                return
-            blob = trial_times.build_trial_times_image(
-                first.isoformat(),
-                last.isoformat(),
-                selected_name,
-                days,
-                brand=db.get_meta("poster_brand"),
-                contact=db.get_meta("poster_contact"),
-                qr_code=self._poster_qr_bytes(),
-                logo=self._poster_logo_bytes(),
-            )
-            stored = _stored_name(
-                "trial_times.jpg",
-                suffix=".jpg",
-                prefix=f"trial_times_t{selected_teacher}",
-            )
-            target = self._trial_image_dir() / stored
-            try:
-                target.write_bytes(blob)
-            except OSError:
-                self._toast("试听时段图存不下来，检查 data 文件夹权限")
-                return
-            self.page.pop_dialog()
-            self._show_trial_times_image(target)
-
-        self._show(
-            self._dialog(
-                "生成家长时段图",
-                self._form_column(
-                    [
-                        ft.Text(
-                            "只生成这位老师当前真正空着的 1 小时时段；"
-                            "不会显示班级、孩子姓名或已有预约。",
-                            size=11,
-                            color=ft.Colors.GREY_600,
-                        ),
-                        teacher,
-                        week_anchor,
-                        week_preview,
-                        ft.Text(
-                            "试听从 19:30 下班时间往前每小时一档，例如 "
-                            "17:30–18:30、18:30–19:30；"
-                            "图片固定覆盖周一到周日。",
-                            size=11,
-                            color=ft.Colors.GREY_600,
-                        ),
-                    ]
-                ),
-                [
-                    ft.TextButton("取消", on_click=self._close),
-                    ft.Button(
-                        "生成图片",
-                        icon=ft.Icons.IMAGE_OUTLINED,
-                        on_click=generate,
+        if not selected_name:
+            self._toast("请先选择试听老师")
+            return
+        days = []
+        missing_calendar_days = []
+        current = first
+        while current <= last:
+            info = db.trial_calendar_day(current.isoformat())
+            if info.get("warning"):
+                missing_calendar_days.append(current.isoformat())
+            days.append(
+                {
+                    **info,
+                    "slots": db.trial_slot_candidates(
+                        current.isoformat(), int(teacher_id)
                     ),
-                ],
+                }
             )
+            current += timedelta(days=1)
+        if missing_calendar_days:
+            self._toast(
+                f"节假日库还没有 {missing_calendar_days[0][:4]} 年数据，"
+                "请更新节假日库，或先在试听日历里设置这段日期"
+            )
+            return
+        blob = trial_times.build_trial_times_image(
+            first.isoformat(),
+            last.isoformat(),
+            selected_name,
+            days,
+            brand=db.get_meta("poster_brand"),
+            contact=db.get_meta("poster_contact"),
+            qr_code=self._poster_qr_bytes(),
+            logo=self._poster_logo_bytes(),
         )
+        stored = _stored_name(
+            "trial_times.jpg",
+            suffix=".jpg",
+            prefix=f"trial_times_t{int(teacher_id)}",
+        )
+        target = self._trial_image_dir() / stored
+        try:
+            target.write_bytes(blob)
+        except OSError:
+            self._toast("试听时段图存不下来，检查 data 文件夹权限")
+            return
+        self._show_trial_times_image(target, first, last)
 
-    def _show_trial_times_image(self, path: Path) -> None:
+    def _show_trial_times_image(
+        self, path: Path, first: date, last: date
+    ) -> None:
         width = min(560, (self.page.width or 900) - 80)
         url = f"/trial_times/{path.name}"
         dlg = ft.AlertDialog(
@@ -677,7 +587,10 @@ class TrialsMixin:
                     [
                         ft.Image(src=url, width=width, fit=ft.BoxFit.CONTAIN),
                         ft.Text(
-                            "手机上可长按图片保存；电脑上可用「在新窗口打开」后保存。",
+                            f"已按时间表当前显示的一周生成："
+                            f"{first.month}月{first.day}日 周一 ~ "
+                            f"{last.month}月{last.day}日 周日。"
+                            "手机可长按保存，电脑可用「在新窗口打开」后保存。",
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),
