@@ -2228,6 +2228,18 @@ app.render()
 ok(find_text(page.controls[0], "这一周的课"), "排课表里有周视图")
 ok(find_text(page.controls[0], "周六"), "周视图里有周六这一列")
 ok(find_text(page.controls[0], "待点名"), "周视图上标着还没点名的课")
+week_pending_texts = [
+    str(control.value)
+    for control in walk(app._week_view())
+    if isinstance(control, ft.Text)
+    and "待点名" in str(control.value or "")
+    and "·" in str(control.value or "")
+]
+ok(
+    week_pending_texts
+    and all(text.endswith("待点名") for text in week_pending_texts),
+    "周视图的待点名信息顺序一致",
+)
 open_lesson = find_button(page.controls[0], "去点名")
 open_lesson.on_click(None)
 ok(app.lesson_id == after[1]["id"], "点「去点名」能进那节课")
@@ -3547,6 +3559,7 @@ ok(find_field(dlg, "课程名（自动生成，也可自己改）") is not None,
 app._close()
 
 app.tab = 3
+app.payment_month = "2026-10"
 app.render()
 app._open_payment_dialog(None, dual_kid)
 dlg = top_dialog(page)
@@ -4228,6 +4241,7 @@ ok(
     "界面上选「不指定」，存下来就是时间不定",
 )
 app.schedule_date = "2026-10-05"
+app.course_month = "2026-10"
 app.render()
 ok(find_text(page.controls[0], "时间不定"), "课程列表上写着「时间不定」")
 
@@ -4443,7 +4457,7 @@ filter_own = db.create_template(
     name="筛选-王老师-在读",
     teacher_id=t_a,
     start_date="2026-10-01",
-    end_date="2026-10-31",
+    end_date="2026-12-31",
 )
 filter_ended = db.create_template(
     0,
@@ -4465,7 +4479,7 @@ filter_other = db.create_template(
     name="筛选-李老师-MCU",
     teacher_id=t_b,
     start_date="2026-10-01",
-    end_date="2026-10-31",
+    end_date="2026-12-31",
 )
 filter_comp_level = next(
     level
@@ -4481,16 +4495,15 @@ filter_comp = db.create_template(
     name="筛选-王老师-竞赛",
     teacher_id=t_a,
     start_date="2026-10-01",
-    end_date="2026-10-31",
+    end_date="2026-12-31",
 )
 ok(
-    app.course_month == date.today().strftime("%Y-%m")
-    and app.course_status_filter == "unclosed",
-    "课程筛选默认显示本月且隐藏已结课",
+    app.course_status_filter == "unclosed",
+    "课程筛选默认隐藏已结课",
 )
 ok(
     db.course_in_month(db.get_template(filter_own), "2026-10")
-    and not db.course_in_month(db.get_template(filter_own), "2026-11"),
+    and not db.course_in_month(db.get_template(filter_own), "2027-01"),
     "月份按课程实际排课区间判断",
 )
 app.course_month = "2026-10"
@@ -4842,8 +4855,8 @@ portal_enrollment = db.create_enrollment(
     owner_teacher_id=portal_teacher,
 )
 portal_lesson = db.create_lesson(
-    "2026-10-20",
-    "16:00",
+    date.today().isoformat(),
+    "00:00",
     90,
     zhengke["id"],
     portal_level["id"],

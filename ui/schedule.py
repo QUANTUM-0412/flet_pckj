@@ -69,37 +69,14 @@ class ScheduleMixin:
                         0,
                         int(lesson.get("template_id") or 0),
                         int(lesson["id"]),
-                        ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Text(
-                                    f"{lesson['start_time']} "
-                                    + (
-                                        db.lesson_class_label(lesson)
-                                        or db.lesson_label(lesson)
-                                    ),
-                                    size=12,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                ft.Text(
-                                    db.lesson_label(lesson)
-                                    + f" · {lesson['student_count']} 人"
-                                    + (" · 待点名" if pending else ""),
-                                    size=11,
-                                    color=ft.Colors.ORANGE_700
-                                    if pending
-                                    else ft.Colors.GREY_600,
-                                ),
-                            ],
-                            spacing=1,
-                            tight=True,
-                        ),
-                        padding=6,
-                        border_radius=8,
-                        bgcolor=ft.Colors.WHITE,
-                        border=ft.Border.all(1, ft.Colors.GREY_300),
-                        ink=True,
-                        on_click=lambda e, lid=lesson["id"]: self.open_lesson(lid),
+                        self._week_course_card(
+                            lesson["start_time"],
+                            db.lesson_class_label(lesson)
+                            or db.lesson_label(lesson),
+                            db.lesson_label(lesson),
+                            int(lesson["student_count"] or 0),
+                            pending,
+                            lambda e, lid=lesson["id"]: self.open_lesson(lid),
                         ),
                     )
                 )
@@ -113,32 +90,14 @@ class ScheduleMixin:
                         1,
                         int(template["id"]),
                         0,
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(
-                                        f"{template['start_time']} "
-                                        + (
-                                            (template.get("name") or "").strip()
-                                            or db.lesson_label(template)
-                                        ),
-                                        size=12,
-                                        weight=ft.FontWeight.W_600,
-                                        color=ft.Colors.GREY_700,
-                                    ),
-                                    ft.Text(
-                                        "待点名 · " + db.lesson_label(template),
-                                        size=11,
-                                        color=ft.Colors.ORANGE_700,
-                                    ),
-                                ],
-                                spacing=1,
-                                tight=True,
-                            ),
-                            padding=6,
-                            border_radius=8,
-                            bgcolor=ft.Colors.GREY_50,
-                            border=ft.Border.all(1, ft.Colors.GREY_300),
+                        self._week_course_card(
+                            template["start_time"],
+                            (template.get("name") or "").strip()
+                            or db.lesson_label(template),
+                            db.lesson_label(template),
+                            int(template.get("student_count") or 0),
+                            True,
+                            lambda e, day_iso=iso: self._goto_day(day_iso),
                         ),
                     )
                 )
@@ -201,6 +160,46 @@ class ScheduleMixin:
         )
         body = ft.Row(blocks, spacing=8, vertical_alignment=ft.CrossAxisAlignment.START) if wide else ft.Column(blocks, spacing=8)
         return self._section("这一周的课", ft.Column([head, body], spacing=10))
+
+    def _week_course_card(
+        self,
+        start_time: str,
+        title: str,
+        course_label: str,
+        student_count: int,
+        pending: bool,
+        on_click,
+    ) -> ft.Container:
+        """周视图里的课程卡统一从这里生成，保证信息顺序一致。"""
+        status = "待点名" if pending else "已点名"
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        f"{start_time} {title}",
+                        size=12,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Text(
+                        f"{course_label} · {student_count} 人 · {status}",
+                        size=11,
+                        color=(
+                            ft.Colors.ORANGE_700
+                            if pending
+                            else ft.Colors.GREEN_700
+                        ),
+                    ),
+                ],
+                spacing=1,
+                tight=True,
+            ),
+            padding=6,
+            border_radius=8,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(1, ft.Colors.GREY_300),
+            ink=True,
+            on_click=on_click,
+        )
 
     def _shift_course_month(self, delta: int) -> None:
         self.course_month = _shift_month(self.course_month, delta)
