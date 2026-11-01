@@ -6176,7 +6176,7 @@ def _minutes_time(value: int) -> str:
 
 
 def trial_calendar_day(day: str) -> dict:
-    """按机构例外优先、法定节假日库其次，算某天最早能约几点。"""
+    """按机构例外、周一休息、法定节假日依次判断当天的试听规则。"""
     try:
         current = date.fromisoformat((day or "").strip())
     except ValueError as exc:
@@ -6198,6 +6198,13 @@ def trial_calendar_day(day: str) -> dict:
         note = str(override["note"] or "")
         holiday = ""
         label = kind if kind != "上学日" else "上学日"
+    elif current.weekday() == 0:
+        kind = "机构休息"
+        earliest = ""
+        source = "默认营业规则"
+        note = "周一休息"
+        holiday = ""
+        label = "周一休息"
     else:
         note = ""
         try:

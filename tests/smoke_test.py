@@ -1620,6 +1620,7 @@ ok(find_text(page.controls[0], "徐在贤"), "试听列表上能看到")
 ok(find_text(page.controls[0], "试过核桃，妈妈是老师"), "备注也能看到")
 ok(find_text(page.controls[0], "试听时间表"), "试听模块里有老师时间表")
 ok(find_button(page.controls[0], "生成家长时段图") is not None, "能生成家长时段图")
+ok(find_text(page.controls[0], "周一休息"), "试听时间表默认显示周一休息")
 
 ok(
     db.trial_calendar_day("2026-02-14")["label"].endswith("调休上学日")
@@ -1639,7 +1640,17 @@ ok(
     "机构日期例外会覆盖法定日历",
 )
 db.delete_trial_calendar_range("2026-12-07", "2026-12-07")
-future_calendar = db.trial_calendar_day("2027-01-04")
+monday_rule = db.trial_calendar_day("2026-11-02")
+ok(
+    not monday_rule["is_open"]
+    and monday_rule["label"] == "周一休息"
+    and db.trial_slot_candidates(
+        "2026-11-02", trial_teacher, include_past=True
+    )
+    == [],
+    "周一默认不生成任何试听时段",
+)
+future_calendar = db.trial_calendar_day("2027-01-05")
 ok(
     not future_calendar["is_open"]
     and bool(future_calendar["warning"]),

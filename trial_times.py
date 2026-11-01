@@ -70,7 +70,6 @@ def build_trial_times_image(
             + ((len(day.get("slots") or []) + 3) // 4) * 62,
         }
         for day in days
-        if day.get("slots")
     ]
     body_height = max(
         144,
@@ -182,6 +181,18 @@ def build_trial_times_image(
                     fill=BLUE,
                 )
             slots = day["slot_lines"]
+            if not slots:
+                empty_text = (
+                    "当天不安排试听"
+                    if not day.get("is_open", True)
+                    else "暂无可约时段"
+                )
+                draw.text(
+                    (PADDING + 28, y + 70),
+                    empty_text,
+                    font=body_font,
+                    fill=GREY,
+                )
             chip_width = 218
             chip_height = 54
             gap = 12
