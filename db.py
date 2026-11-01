@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlsplit, urlunsplit
 
+import chinese_calendar
 from slugify import slugify
 
 APP_DIR = Path(__file__).resolve().parent
@@ -79,6 +80,12 @@ GRADE_PROGRESSION = {
 }
 WEEKDAY_NAMES = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 TRIAL_STATUS = ["待试听", "已试听", "已报名", "没意向"]
+TRIAL_APPOINTMENT_STATUS = ["未安排", "已预约", "已到访", "爽约", "已取消"]
+TRIAL_MINUTES = 60
+TRIAL_CLOSE_TIME = "19:30"
+TRIAL_WORKDAY_START = "16:00"
+TRIAL_HOLIDAY_START = "08:00"
+TRIAL_CALENDAR_KINDS = ["上学日", "非上学日", "机构休息"]
 ROLE_ROOT = "root"
 ROLE_TEACHER = "teacher"
 ROLE_STUDENT = "student"
@@ -398,10 +405,23 @@ CREATE TABLE IF NOT EXISTS trials (
     source      TEXT    NOT NULL DEFAULT '',
     status      TEXT    NOT NULL DEFAULT '待试听',
     trial_on    TEXT    NOT NULL DEFAULT '',
+    trial_start_time TEXT NOT NULL DEFAULT '',
+    trial_minutes INTEGER NOT NULL DEFAULT 60,
+    trial_teacher_id INTEGER REFERENCES users(id),
+    appointment_status TEXT NOT NULL DEFAULT '未安排',
     note        TEXT    NOT NULL DEFAULT '',
     student_id  INTEGER REFERENCES students(id) ON DELETE SET NULL,
     owner_teacher_id INTEGER REFERENCES users(id),
     created_at  TEXT    NOT NULL DEFAULT ''
+);
+
+-- 法定节假日库之外的机构例外：寒暑假、调休差异、临时休息等
+CREATE TABLE IF NOT EXISTS trial_calendar_overrides (
+    calendar_date TEXT PRIMARY KEY,
+    day_kind      TEXT NOT NULL DEFAULT '非上学日',
+    earliest_time TEXT NOT NULL DEFAULT '',
+    note          TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL DEFAULT ''
 );
 
 -- 照片和附件
@@ -413,6 +433,8 @@ CREATE TABLE IF NOT EXISTS files (
     filename    TEXT    NOT NULL DEFAULT '',
     stored_name TEXT    NOT NULL DEFAULT '',
     size        INTEGER NOT NULL DEFAULT 0,
+    uploaded_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    student_id  INTEGER REFERENCES students(id) ON DELETE CASCADE,
     uploaded_at TEXT    NOT NULL DEFAULT ''
 );
 
@@ -837,6 +859,32 @@ def _migrate(con: sqlite3.Connection) -> None:
     _ensure_column(con, "payments", "teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "payment_items", "owner_teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "trials", "owner_teacher_id", "INTEGER REFERENCES users(id)")
+    _ensure_column(con, "trials", "trial_start_time", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "trials", "trial_minutes", "INTEGER NOT NULL DEFAULT 60")
+    _ensure_column(
+        con,
+        "trials",
+        "trial_teacher_id",
+        "INTEGER REFERENCES users(id) ON DELETE SET NULL",
+    )
+    _ensure_column(
+        con,
+        "trials",
+        "appointment_status",
+        "TEXT NOT NULL DEFAULT '未安排'",
+    )
+    _ensure_column(
+        con,
+        "files",
+        "uploaded_by_user_id",
+        "INTEGER REFERENCES users(id) ON DELETE SET NULL",
+    )
+    _ensure_column(
+        con,
+        "files",
+        "student_id",
+        "INTEGER REFERENCES students(id) ON DELETE CASCADE",
+    )
     _ensure_column(con, "schedule_templates", "teacher_id", "INTEGER REFERENCES users(id)")
     _ensure_column(con, "help_tickets", "cost_points", "REAL NOT NULL DEFAULT 0")
     _ensure_column(con, "help_tickets", "rejected_reason", "TEXT NOT NULL DEFAULT ''")
@@ -883,6 +931,9 @@ def _migrate(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_payitem_owner ON payment_items(owner_teacher_id)",
         "CREATE INDEX IF NOT EXISTS idx_payitem_enroll ON payment_items(enrollment_id)",
         "CREATE INDEX IF NOT EXISTS idx_trials_owner ON trials(owner_teacher_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trials_time "
+        "ON trials(trial_on, trial_start_time)",
+        "CREATE INDEX IF NOT EXISTS idx_files_student ON files(student_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student "
         "ON users(student_id) WHERE student_id IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_forum_nickname "
@@ -2228,6 +2279,7 @@ def delete_user(user_id: int) -> None:
             ("payments", "teacher_id"),
             ("payment_items", "owner_teacher_id"),
             ("trials", "owner_teacher_id"),
+            ("trials", "trial_teacher_id"),
             ("schedule_templates", "teacher_id"),
             ("students", "owner_teacher_id"),
             ("levels", "default_teacher_id"),
@@ -2454,7 +2506,21 @@ def update_student(student_id: int, data: dict) -> None:
 
 def delete_student(student_id: int) -> None:
     with _connect() as con:
+        work_files = [
+            str(row["stored_name"])
+            for row in con.execute(
+                "SELECT stored_name FROM files WHERE student_id = ?",
+                (int(student_id),),
+            ).fetchall()
+            if row["stored_name"]
+        ]
+    with _connect() as con:
         con.execute("DELETE FROM students WHERE id = ?", (student_id,))
+    for stored_name in work_files:
+        try:
+            (UPLOAD_DIR / Path(stored_name).name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def list_student_badges(student_id: int) -> list[dict]:
@@ -6083,17 +6149,358 @@ def deduct_forum_bounty_points(
 # ------------------------------------------------------------------ 试听跟进
 
 
+_HOLIDAY_NAMES = {
+    "New Year's Day": "元旦",
+    "Spring Festival": "春节",
+    "Tomb-sweeping Day": "清明",
+    "Labour Day": "劳动节",
+    "Dragon Boat Festival": "端午",
+    "Mid-autumn Festival": "中秋",
+    "National Day": "国庆",
+}
+
+
+def _time_minutes(value: str) -> int:
+    """把 HH:MM 转成当天第几分钟；时间格式不对时直接报错。"""
+    match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", value or "")
+    if match is None:
+        raise ValueError("时间要写成 16:00 这样")
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        raise ValueError("时间要写成 16:00 这样")
+    return hour * 60 + minute
+
+
+def _minutes_time(value: int) -> str:
+    return f"{int(value) // 60:02d}:{int(value) % 60:02d}"
+
+
+def trial_calendar_day(day: str) -> dict:
+    """按机构例外优先、法定节假日库其次，算某天最早能约几点。"""
+    try:
+        current = date.fromisoformat((day or "").strip())
+    except ValueError as exc:
+        raise ValueError("日期要写成 2026-11-03 这样") from exc
+    text = current.isoformat()
+    with _connect() as con:
+        override = con.execute(
+            "SELECT * FROM trial_calendar_overrides WHERE calendar_date = ?",
+            (text,),
+        ).fetchone()
+    warning = ""
+    if override is not None:
+        kind = str(override["day_kind"] or "非上学日")
+        earliest = (
+            (override["earliest_time"] or "").strip()
+            or (TRIAL_WORKDAY_START if kind == "上学日" else TRIAL_HOLIDAY_START)
+        )
+        source = "机构设置"
+        note = str(override["note"] or "")
+        holiday = ""
+        label = kind if kind != "上学日" else "上学日"
+    else:
+        note = ""
+        try:
+            is_school_day = bool(chinese_calendar.is_workday(current))
+            _is_holiday, holiday_value = chinese_calendar.get_holiday_detail(
+                current
+            )
+            holiday = _HOLIDAY_NAMES.get(
+                str(holiday_value or ""),
+                str(holiday_value or ""),
+            )
+            source = "法定节假日库"
+        except (NotImplementedError, ValueError):
+            is_school_day = current.weekday() < 5
+            holiday = ""
+            source = "默认星期规则"
+            kind = "数据待更新"
+            earliest = ""
+            label = "节假日数据待更新"
+            warning = (
+                f"节假日库还没有 {current.year} 年数据，"
+                "请更新节假日库，或在试听日历里逐日设置例外"
+            )
+        if not warning:
+            kind = "上学日" if is_school_day else "非上学日"
+            earliest = (
+                TRIAL_WORKDAY_START
+                if is_school_day
+                else TRIAL_HOLIDAY_START
+            )
+            if is_school_day and current.weekday() >= 5:
+                label = f"{holiday}调休上学日" if holiday else "调休上学日"
+            elif not is_school_day and holiday:
+                label = f"{holiday} · 非上学日"
+            else:
+                label = kind
+    if earliest:
+        _time_minutes(earliest)
+    return {
+        "date": text,
+        "weekday": current.weekday(),
+        "kind": kind,
+        "label": label,
+        "earliest_time": earliest,
+        "close_time": TRIAL_CLOSE_TIME,
+        "is_open": kind != "机构休息" and not bool(warning),
+        "source": source,
+        "note": note,
+        "holiday": holiday,
+        "warning": warning,
+    }
+
+
+def list_trial_calendar_overrides(
+    start: str = "", end: str = "", limit: int = 500
+) -> list[dict]:
+    sql = "SELECT * FROM trial_calendar_overrides WHERE 1 = 1"
+    args: list[Any] = []
+    if start:
+        sql += " AND calendar_date >= ?"
+        args.append(start)
+    if end:
+        sql += " AND calendar_date <= ?"
+        args.append(end)
+    sql += " ORDER BY calendar_date LIMIT ?"
+    args.append(max(1, int(limit)))
+    with _connect() as con:
+        rows = con.execute(sql, args).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_trial_calendar_range(
+    start: str,
+    end: str,
+    day_kind: str,
+    earliest_time: str = "",
+    note: str = "",
+) -> int:
+    """给一段日期设置上学／放假／休息例外，返回写入天数。"""
+    try:
+        first = date.fromisoformat((start or "").strip())
+        last = date.fromisoformat((end or "").strip())
+    except ValueError as exc:
+        raise ValueError("日期要写成 2026-11-03 这样") from exc
+    if last < first:
+        raise ValueError("结束日期不能早于开始日期")
+    if (last - first).days > 366:
+        raise ValueError("一次最多设置 366 天")
+    if day_kind not in TRIAL_CALENDAR_KINDS:
+        raise ValueError("请选择上学日、非上学日或机构休息")
+    earliest = (earliest_time or "").strip()
+    if earliest:
+        _time_minutes(earliest)
+    saved = 0
+    current = first
+    with _connect() as con:
+        while current <= last:
+            con.execute(
+                """INSERT INTO trial_calendar_overrides
+                       (calendar_date, day_kind, earliest_time, note, updated_at)
+                   VALUES(?, ?, ?, ?, ?)
+                   ON CONFLICT(calendar_date) DO UPDATE SET
+                       day_kind = excluded.day_kind,
+                       earliest_time = excluded.earliest_time,
+                       note = excluded.note,
+                       updated_at = excluded.updated_at""",
+                (
+                    current.isoformat(),
+                    day_kind,
+                    earliest,
+                    (note or "").strip(),
+                    _today(),
+                ),
+            )
+            current += timedelta(days=1)
+            saved += 1
+    return saved
+
+
+def delete_trial_calendar_override(day: str) -> None:
+    with _connect() as con:
+        con.execute(
+            "DELETE FROM trial_calendar_overrides WHERE calendar_date = ?",
+            ((day or "").strip(),),
+        )
+
+
+def delete_trial_calendar_range(start: str, end: str) -> None:
+    with _connect() as con:
+        con.execute(
+            """DELETE FROM trial_calendar_overrides
+                WHERE calendar_date BETWEEN ? AND ?""",
+            ((start or "").strip(), (end or "").strip()),
+        )
+
+
+def trial_busy_intervals(
+    day: str,
+    teacher_id: int,
+    exclude_trial_id: int | None = None,
+) -> list[dict]:
+    """同一老师当天所有占用区间：正式课次、待生成课程、已有试听。"""
+    intervals: list[dict] = []
+    seen_lessons: set[int] = set()
+    done_templates: set[int] = set()
+    for lesson in lessons_on(day):
+        if int(lesson.get("teacher_id") or 0) != int(teacher_id):
+            continue
+        seen_lessons.add(int(lesson["id"]))
+        if lesson.get("template_id"):
+            done_templates.add(int(lesson["template_id"]))
+        try:
+            start = _time_minutes(str(lesson.get("start_time") or ""))
+        except ValueError:
+            continue
+        intervals.append(
+            {
+                "kind": "课程",
+                "start": start,
+                "end": start + max(1, int(lesson.get("minutes") or 0)),
+                "label": lesson.get("class_name")
+                or lesson.get("class_type_name")
+                or "已有课程",
+            }
+        )
+    for template in templates_on(day):
+        if int(template.get("id") or 0) in done_templates:
+            continue
+        if int(template.get("teacher_id") or 0) != int(teacher_id):
+            continue
+        try:
+            start = _time_minutes(str(template.get("start_time") or ""))
+        except ValueError:
+            continue
+        intervals.append(
+            {
+                "kind": "课程",
+                "start": start,
+                "end": start + max(1, int(template.get("minutes") or 0)),
+                "label": template.get("name") or "当天课程",
+            }
+        )
+    sql = """SELECT t.*, u.display_name AS trial_teacher_name
+               FROM trials t
+               LEFT JOIN users u ON u.id = t.trial_teacher_id
+              WHERE t.trial_on = ?
+                AND t.trial_teacher_id = ?
+                AND t.appointment_status NOT IN ('爽约', '已取消')
+                AND t.trial_start_time <> ''"""
+    args: list[Any] = [day, int(teacher_id)]
+    if exclude_trial_id is not None:
+        sql += " AND t.id <> ?"
+        args.append(int(exclude_trial_id))
+    with _connect() as con:
+        rows = con.execute(sql, args).fetchall()
+    for row in rows:
+        try:
+            start = _time_minutes(str(row["trial_start_time"] or ""))
+        except ValueError:
+            continue
+        intervals.append(
+            {
+                "kind": "试听",
+                "start": start,
+                "end": start + int(row["trial_minutes"] or TRIAL_MINUTES),
+                "label": row["name"] or "已有试听",
+                "trial_id": int(row["id"]),
+            }
+        )
+    return intervals
+
+
+def trial_conflict_reason(
+    day: str,
+    start_time: str,
+    teacher_id: int | None,
+    exclude_trial_id: int | None = None,
+) -> str:
+    """返回不能预约的原因；空字符串表示这个时段可以约。"""
+    if not teacher_id:
+        return "请选择试听老师"
+    info = trial_calendar_day(day)
+    if not info["is_open"]:
+        return info.get("warning") or "这天已设为机构休息"
+    try:
+        start = _time_minutes(start_time)
+    except ValueError as exc:
+        return str(exc)
+    earliest = _time_minutes(info["earliest_time"])
+    close = _time_minutes(info["close_time"])
+    end = start + TRIAL_MINUTES
+    if start % 60:
+        return "试听只支持整点开始"
+    if start < earliest:
+        return f"{info['label']}最早从 {info['earliest_time']} 开始"
+    if end > close:
+        return f"试听固定 1 小时，必须在 {info['close_time']} 前结束"
+    for busy in trial_busy_intervals(day, int(teacher_id), exclude_trial_id):
+        if start < busy["end"] and end > busy["start"]:
+            return (
+                f"{busy['kind']}「{busy['label']}」"
+                f"{_minutes_time(busy['start'])}–{_minutes_time(busy['end'])}"
+                " 已占用"
+            )
+    return ""
+
+
+def trial_slot_candidates(
+    day: str,
+    teacher_id: int | None,
+    exclude_trial_id: int | None = None,
+    include_past: bool = False,
+) -> list[str]:
+    """某位老师当天所有可开始的 1 小时试听时段。"""
+    if not teacher_id:
+        return []
+    info = trial_calendar_day(day)
+    if not info["is_open"]:
+        return []
+    earliest = _time_minutes(info["earliest_time"])
+    close = _time_minutes(info["close_time"])
+    now_floor = 0
+    if not include_past and day == date.today().isoformat():
+        now = datetime.now()
+        now_floor = now.hour * 60 + now.minute
+    busy = trial_busy_intervals(day, int(teacher_id), exclude_trial_id)
+    out: list[str] = []
+    current = ((earliest + 59) // 60) * 60
+    while current + TRIAL_MINUTES <= close:
+        end = current + TRIAL_MINUTES
+        if current >= now_floor and not any(
+            current < item["end"] and end > item["start"] for item in busy
+        ):
+            out.append(_minutes_time(current))
+        current += 60
+    return out
+
+
 def create_trial(data: dict) -> int:
     name = (data.get("name") or "").strip()
     if not name:
         raise ValueError("姓名不能为空")
     owner = data.get("owner_teacher_id")
+    trial_on = (data.get("trial_on") or "").strip()
+    trial_start = (data.get("trial_start_time") or "").strip()
+    trial_teacher = data.get("trial_teacher_id")
+    if trial_on and trial_start:
+        reason = trial_conflict_reason(trial_on, trial_start, trial_teacher)
+        if reason:
+            raise ValueError(reason)
+    elif trial_start:
+        raise ValueError("请先选择试听日期")
+    appointment_status = (
+        data.get("appointment_status")
+        or ("已预约" if trial_start else "未安排")
+    )
     with _connect() as con:
         cur = con.execute(
             """INSERT INTO trials
                    (name, gender, grade, school, parent_name, phone, source, status,
-                    trial_on, note, owner_teacher_id, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    trial_on, trial_start_time, trial_minutes, trial_teacher_id,
+                    appointment_status, note, owner_teacher_id, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name,
                 data.get("gender", ""),
@@ -6103,7 +6510,11 @@ def create_trial(data: dict) -> int:
                 data.get("phone", ""),
                 data.get("source", ""),
                 data.get("status") or "待试听",
-                data.get("trial_on", ""),
+                trial_on,
+                trial_start,
+                TRIAL_MINUTES,
+                int(trial_teacher) if trial_teacher else None,
+                appointment_status,
                 data.get("note", ""),
                 int(owner) if owner else None,
                 _today(),
@@ -6117,11 +6528,31 @@ def update_trial(trial_id: int, data: dict) -> None:
     if not name:
         raise ValueError("姓名不能为空")
     owner = data.get("owner_teacher_id")
+    trial_on = (data.get("trial_on") or "").strip()
+    trial_start = (data.get("trial_start_time") or "").strip()
+    trial_teacher = data.get("trial_teacher_id")
+    if trial_on and trial_start:
+        reason = trial_conflict_reason(
+            trial_on,
+            trial_start,
+            trial_teacher,
+            exclude_trial_id=trial_id,
+        )
+        if reason:
+            raise ValueError(reason)
+    elif trial_start:
+        raise ValueError("请先选择试听日期")
+    appointment_status = (
+        data.get("appointment_status")
+        or ("已预约" if trial_start else "未安排")
+    )
     with _connect() as con:
         con.execute(
             """UPDATE trials
                   SET name = ?, gender = ?, grade = ?, school = ?, parent_name = ?, phone = ?,
-                      source = ?, status = ?, trial_on = ?, note = ?, owner_teacher_id = ?
+                      source = ?, status = ?, trial_on = ?, trial_start_time = ?,
+                      trial_minutes = ?, trial_teacher_id = ?, appointment_status = ?,
+                      note = ?, owner_teacher_id = ?
                 WHERE id = ?""",
             (
                 name,
@@ -6132,7 +6563,11 @@ def update_trial(trial_id: int, data: dict) -> None:
                 data.get("phone", ""),
                 data.get("source", ""),
                 data.get("status") or "待试听",
-                data.get("trial_on", ""),
+                trial_on,
+                trial_start,
+                TRIAL_MINUTES,
+                int(trial_teacher) if trial_teacher else None,
+                appointment_status,
                 data.get("note", ""),
                 int(owner) if owner else None,
                 trial_id,
@@ -6143,9 +6578,11 @@ def update_trial(trial_id: int, data: dict) -> None:
 def get_trial(trial_id: int) -> dict | None:
     with _connect() as con:
         row = con.execute(
-            """SELECT t.*, u.display_name AS owner_teacher_name
+            """SELECT t.*, u.display_name AS owner_teacher_name,
+                      tt.display_name AS trial_teacher_name
                  FROM trials t
                  LEFT JOIN users u ON u.id = t.owner_teacher_id
+                 LEFT JOIN users tt ON tt.id = t.trial_teacher_id
                 WHERE t.id = ?""",
             (trial_id,),
         ).fetchone()
@@ -6153,9 +6590,11 @@ def get_trial(trial_id: int) -> dict | None:
 
 
 def list_trials(status: str = "", keyword: str = "") -> list[dict]:
-    sql = """SELECT t.*, u.display_name AS owner_teacher_name
+    sql = """SELECT t.*, u.display_name AS owner_teacher_name,
+                    tt.display_name AS trial_teacher_name
                FROM trials t
                LEFT JOIN users u ON u.id = t.owner_teacher_id
+               LEFT JOIN users tt ON tt.id = t.trial_teacher_id
               WHERE 1 = 1"""
     args: list[Any] = []
     if status:
@@ -6176,6 +6615,39 @@ def list_trials(status: str = "", keyword: str = "") -> list[dict]:
     with _connect() as con:
         rows = con.execute(sql, args).fetchall()
     return [dict(r) for r in rows]
+
+
+def trials_for_day(day: str) -> list[dict]:
+    sql = """SELECT t.*, u.display_name AS owner_teacher_name,
+                    tt.display_name AS trial_teacher_name
+               FROM trials t
+               LEFT JOIN users u ON u.id = t.owner_teacher_id
+               LEFT JOIN users tt ON tt.id = t.trial_teacher_id
+              WHERE t.trial_on = ?
+              ORDER BY t.trial_start_time, t.id"""
+    with _connect() as con:
+        rows = con.execute(sql, ((day or "").strip(),)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_trial_appointment_status(trial_id: int, status: str) -> None:
+    if status not in TRIAL_APPOINTMENT_STATUS:
+        raise ValueError("试听预约状态不对")
+    with _connect() as con:
+        row = con.execute(
+            "SELECT status FROM trials WHERE id = ?", (int(trial_id),)
+        ).fetchone()
+        if row is None:
+            return
+        con.execute(
+            "UPDATE trials SET appointment_status = ? WHERE id = ?",
+            (status, int(trial_id)),
+        )
+        if status == "已到访":
+            con.execute(
+                "UPDATE trials SET status = '已试听' WHERE id = ?",
+                (int(trial_id),),
+            )
 
 
 def trial_counts() -> dict[str, int]:
@@ -6238,15 +6710,40 @@ def add_file(
     filename: str,
     stored_name: str,
     size: int,
+    uploaded_by_user_id: int | None = None,
+    student_id: int | None = None,
 ) -> int:
     with _connect() as con:
         cur = con.execute(
             """INSERT INTO files
-                   (owner_type, owner_id, kind, filename, stored_name, size, uploaded_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?)""",
-            (owner_type, owner_id, kind, filename, stored_name, int(size), _today()),
+                   (owner_type, owner_id, kind, filename, stored_name, size,
+                    uploaded_by_user_id, student_id, uploaded_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                owner_type,
+                owner_id,
+                kind,
+                filename,
+                stored_name,
+                int(size),
+                int(uploaded_by_user_id) if uploaded_by_user_id else None,
+                int(student_id) if student_id else None,
+                _today(),
+            ),
         )
         return int(cur.lastrowid)
+
+
+def list_student_works(student_id: int, lesson_id: int) -> list[dict]:
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT * FROM files
+                WHERE owner_type = 'lesson' AND owner_id = ?
+                  AND kind = '学生作品' AND student_id = ?
+                ORDER BY id""",
+            (int(lesson_id), int(student_id)),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_files(owner_type: str, owner_id: int, kind: str | None = None) -> list[dict]:
@@ -6719,7 +7216,23 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
     sheets.append(
         (
             "试听记录",
-            ["姓名", "年级", "学校", "家长", "电话", "来源", "跟进老师", "状态", "试听日期", "备注", "是否转正"],
+            [
+                "姓名",
+                "年级",
+                "学校",
+                "家长",
+                "电话",
+                "来源",
+                "跟进老师",
+                "试听老师",
+                "状态",
+                "预约状态",
+                "试听日期",
+                "开始时间",
+                "时长(分钟)",
+                "备注",
+                "是否转正",
+            ],
             [
                 [
                     t["name"],
@@ -6729,8 +7242,12 @@ def export_tables() -> list[tuple[str, list[str], list[list]]]:
                     t["phone"],
                     t["source"],
                     t["owner_teacher_name"] or "",
+                    t["trial_teacher_name"] or "",
                     t["status"],
+                    t["appointment_status"],
                     t["trial_on"],
+                    t["trial_start_time"],
+                    t["trial_minutes"],
                     t["note"],
                     "已转正式" if t["student_id"] else "",
                 ]

@@ -427,4 +427,5 @@ class ShellMixin:
         if student_id != self.student_id:
             self._student_edit_id = None
         self.student_id = student_id
+        self.lesson_id = None
         self.render()

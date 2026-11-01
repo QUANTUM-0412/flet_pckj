@@ -1566,6 +1566,10 @@ for l in db.list_lessons():
 ok(zhengke_balance() == 24, "把课次都删掉，课时回到 24")
 
 print("15. 试听跟进")
+trial_teacher = db.create_user(
+    "trial_demo", "pw123456", "周老师", db.ROLE_TEACHER
+)
+trial_date = (date.today() + timedelta(days=3)).isoformat()
 app.tab = 2
 app.trial_filter = ""
 app.render()
@@ -1577,7 +1581,24 @@ type_school(dlg, "育才小学")  # 手打，试一下试听记录这条也能�
 find_field(dlg, "家长称呼（妈妈／爸爸）").value = "妈妈"
 find_field(dlg, "联系电话").value = "13900000000"
 find_field(dlg, "来源").value = "朋友介绍"
-find_field(dlg, "试听日期（可不填）").value = "2026-09-30"
+trial_date_field = find_field(dlg, "试听日期 *")
+trial_date_field.value = trial_date
+trial_date_field.on_change(Evt(trial_date_field))
+trial_teacher_dd = find_dropdown(dlg, "试听老师 *")
+trial_teacher_dd.value = str(trial_teacher)
+trial_teacher_dd.on_select(Evt(trial_teacher_dd))
+trial_time_dd = find_dropdown(dlg, "试听开始时间 *")
+ok(bool(trial_time_dd.options), "选定日期和老师后会出现可约时段")
+ok(
+    all(
+        int((option.key or "00:00").split(":")[1]) == 0
+        for option in trial_time_dd.options
+    )
+    and "18:00" in {option.key for option in trial_time_dd.options}
+    and "18:30" not in {option.key for option in trial_time_dd.options},
+    "试听只提供整点档位，最后一个整点是 18:00",
+)
+trial_time_dd.value = trial_time_dd.options[0].key
 find_field(dlg, "备注（孩子情况、家长想法…）").value = "试过核桃，妈妈是老师"
 click(dlg, "保存")
 trials = db.list_trials()
@@ -1587,9 +1608,113 @@ ok(
 )
 ok(len(trials) == 1 and trials[0]["name"] == "徐在贤", "试听记录建好了")
 ok(trials[0]["status"] == "待试听", "默认是待试听")
+ok(
+    trials[0]["trial_start_time"] == trial_time_dd.value
+    and trials[0]["trial_minutes"] == 60
+    and trials[0]["trial_teacher_id"] == trial_teacher
+    and trials[0]["appointment_status"] == "已预约",
+    "试听固定保存为 1 小时，并记住试听老师",
+)
 ok(db.trial_counts()["待试听"] == 1, "按状态数得出来")
 ok(find_text(page.controls[0], "徐在贤"), "试听列表上能看到")
 ok(find_text(page.controls[0], "试过核桃，妈妈是老师"), "备注也能看到")
+ok(find_text(page.controls[0], "试听时间表"), "试听模块里有老师时间表")
+ok(find_button(page.controls[0], "生成家长时段图") is not None, "能生成家长时段图")
+
+ok(
+    db.trial_calendar_day("2026-02-14")["label"].endswith("调休上学日")
+    and db.trial_calendar_day("2026-02-14")["earliest_time"] == "16:00",
+    "法定节假日库能识别周六调休上学",
+)
+db.set_trial_calendar_range(
+    "2026-12-07",
+    "2026-12-07",
+    "非上学日",
+    note="测试学校活动",
+)
+calendar_override = db.trial_calendar_day("2026-12-07")
+ok(
+    calendar_override["earliest_time"] == "08:00"
+    and calendar_override["source"] == "机构设置",
+    "机构日期例外会覆盖法定日历",
+)
+db.delete_trial_calendar_range("2026-12-07", "2026-12-07")
+future_calendar = db.trial_calendar_day("2027-01-04")
+ok(
+    not future_calendar["is_open"]
+    and bool(future_calendar["warning"]),
+    "节假日库没有下一年数据时停止猜测并提示更新",
+)
+
+trial_lesson = db.create_lesson(
+    trial_date,
+    "17:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    teacher_id=trial_teacher,
+)
+ok(
+    "课程" in db.trial_conflict_reason(
+        trial_date, "17:00", trial_teacher
+    )
+    and "17:00" not in db.trial_slot_candidates(
+        trial_date, trial_teacher, include_past=True
+    ),
+    "同一位老师已有课程时，重叠时段被拦住",
+)
+db.delete_lesson(trial_lesson)
+trial_calendar_weekday = date.fromisoformat(trial_date).weekday()
+trial_template = db.create_template(
+    trial_calendar_weekday,
+    "18:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    start_date=trial_date,
+    end_date=trial_date,
+    teacher_id=trial_teacher,
+    name="试听冲突模板课",
+)
+ok(
+    "18:00–19:00 已占用"
+    in db.trial_conflict_reason(
+        trial_date, "18:00", trial_teacher
+    ),
+    "尚未生成课次的固定课程也会拦住试听",
+)
+db.delete_template(trial_template)
+ok(
+    "19:30 前结束"
+    in db.trial_conflict_reason(
+        trial_date, "19:00", trial_teacher
+    ),
+    "固定 1 小时的试听不能超过 19:30",
+)
+ok(
+    "整点" in db.trial_conflict_reason(
+        trial_date, "16:30", trial_teacher
+    ),
+    "绕过界面也不能保存半小时试听",
+)
+
+app._open_trial_times_dialog(trial_teacher)
+times_dialog = top_dialog(page)
+ok(find_text(times_dialog, "不会显示班级、孩子姓名"), "家长时段图明确保护内部信息")
+click(times_dialog, "生成图片")
+times_image_dialog = top_dialog(page)
+ok(find_text(times_image_dialog, "试听可约时段"), "能预览生成的家长时段图")
+times_image = next(
+    (
+        control
+        for control in walk(times_image_dialog)
+        if isinstance(control, ft.Image)
+        and str(control.src).startswith("/trial_times/")
+    ),
+    None,
+)
+ok(times_image is not None, "家长时段图保存在可直接打开的地址")
+app._close()
 
 trial = trials[0]
 app._set_trial_filter("已报名")
@@ -1621,6 +1746,7 @@ db.delete_trial(trial["id"])
 ok(db.list_trials() == [], "试听记录能删掉")
 ok(len(db.list_students()) == student_count + 1, "删试听记录不影响正式档案")
 db.delete_student(new_sid)
+db.delete_user(trial_teacher)
 
 print("16. 教案、照片、附件")
 
@@ -3337,6 +3463,7 @@ app.tab = 7
 app.render()
 ok(find_text(page.controls[0], "老师账号"), "设置页有老师账号")
 ok(find_text(page.controls[0], "默认老师 王老师"), "课程设置里能看到默认老师")
+ok(find_text(page.controls[0], "试听与营业日历"), "设置页能维护试听日历例外")
 
 app.tab = 5
 app.render()
@@ -4984,13 +5111,80 @@ ok(
 )
 ok(
     not find_text(page.controls[0], "这节课学习循环嵌套")
-    and find_button(page.controls[0], "查看课评 / 教案") is not None,
+    and find_button(page.controls[0], "查看课程内容与作品") is not None,
     "我的课程默认只显示简单信息，课评收进详情",
 )
-click(page.controls[0], "查看课评 / 教案")
+click(page.controls[0], "查看课程内容与作品")
 dlg = top_dialog(page)
 ok(find_text(dlg, "这节课学习循环嵌套"), "学生能在详情里查看课评")
 ok(find_text(dlg, "先复习循环，再完成嵌套练习"), "学生能在详情里查看教案")
+ok(find_text(dlg, "我的作品（0/4）"), "学生课程详情里有自己的作品区")
+upload_work = find_button(dlg, "上传作品")
+upload_work.on_click(Evt(upload_work))
+ok(app._files_callback is not None, "学生点上传作品后准备好接收图片")
+work_buf = _io.BytesIO()
+_Image.new("RGB", (640, 480), (92, 170, 220)).save(
+    work_buf, "JPEG", quality=90
+)
+app._on_files_picked(
+    FakeEvent([FakeFile("循环作品.jpg", work_buf.getvalue())])
+)
+portal_works = db.list_student_works(portal_student, portal_lesson)
+ok(
+    len(portal_works) == 1
+    and portal_works[0]["student_id"] == portal_student
+    and portal_works[0]["uploaded_by_user_id"] == student_login["id"]
+    and portal_works[0]["kind"] == "学生作品",
+    "学生上传的作品绑定到本人和这节课",
+)
+ok(
+    (db.UPLOAD_DIR / portal_works[0]["stored_name"]).is_file()
+    and portal_works[0]["stored_name"].startswith(
+        f"student_work_s{portal_student}_l{portal_lesson}_"
+    ),
+    "学生作品使用安全文件名并真正写入磁盘",
+)
+app._save_student_work_uploads(
+    portal_student,
+    portal_lesson,
+    [
+        FakeFile(f"作品{i}.jpg", work_buf.getvalue())
+        for i in range(2, 7)
+    ],
+)
+ok(
+    len(db.list_student_works(portal_student, portal_lesson)) == 4,
+    "每个孩子每节课最多保留 4 张作品",
+)
+app.user = {
+    "id": 1,
+    "username": "root",
+    "display_name": "管理员",
+    "role": db.ROLE_ROOT,
+}
+app.open_lesson(portal_lesson)
+ok(find_text(page.controls[0], "学生作品（4 张）"), "老师能在课次详情看到学生作品")
+portal_attendance = db.list_attendance(portal_lesson)[0]["id"]
+app._open_poster_for(portal_attendance, portal_lesson)
+poster_choose = top_dialog(page)
+ok(
+    any(
+        isinstance(control, ft.Checkbox)
+        and control.label == "学生作品"
+        for control in walk(poster_choose)
+    ),
+    "老师做孩子海报时能选用学生作品",
+)
+app._close()
+app.user = {
+    "id": student_login["id"],
+    "username": student_login["username"],
+    "display_name": student_login["display_name"],
+    "role": student_login["role"],
+    "student_id": student_login["student_id"],
+}
+app.tab = 1
+app.render()
 app._close()
 ok(not find_text(page.controls[0], "缴费"), "学生课程页不展示费用")
 

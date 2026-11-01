@@ -83,6 +83,8 @@ class ClassHoursApp(
         self.course_subject_filter = ""
         self.status_filter = "在读"
         self.trial_filter = ""
+        self.trial_schedule_day = date.today().isoformat()
+        self.trial_schedule_teacher_id = ""
         self.payment_month = ""  # 空着就是本月；否则 YYYY-MM
         self._last_wide: bool | None = None
         self._row_refs: dict[int, dict] = {}

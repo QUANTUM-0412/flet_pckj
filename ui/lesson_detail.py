@@ -234,6 +234,11 @@ class LessonDetailMixin:
                 *([makeup_card] if makeup_card else []),
                 info,
                 self._lesson_content_card(lesson),
+                *(
+                    [self._lesson_student_works_card(lesson)]
+                    if can_edit
+                    else []
+                ),
                 self._lesson_files_card(lesson),
                 roll,
                 ft.Container(height=8),

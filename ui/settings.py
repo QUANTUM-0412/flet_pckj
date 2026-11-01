@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from datetime import date, timedelta
 from pathlib import Path
 
 import flet as ft
@@ -18,7 +19,12 @@ class SettingsMixin:
     def _settings_view(self) -> ft.Column:
         cards: list[ft.Control] = [self._account_card()]
         if self.is_admin():
-            cards.append(self._poster_card())
+            cards.extend(
+                [
+                    self._poster_card(),
+                    self._trial_calendar_card(),
+                ]
+            )
         cards.append(self._levels_card())
         if self.is_admin():
             cards += [
@@ -42,6 +48,196 @@ class SettingsMixin:
             expand=True,
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
+        )
+
+    def _trial_calendar_card(self) -> ft.Container:
+        first = date.today()
+        last = first + timedelta(days=6)
+        day_rows = [
+            db.trial_calendar_day((first + timedelta(days=index)).isoformat())
+            for index in range(7)
+        ]
+        current_bits = [
+            (
+                f"{date.fromisoformat(info['date']).month}/"
+                f"{date.fromisoformat(info['date']).day} "
+                f"{info['label']} · "
+                + (
+                    "休息"
+                    if not info["is_open"]
+                    else f"{info['earliest_time']} 起"
+                )
+            )
+            for info in day_rows
+        ]
+        overrides = db.list_trial_calendar_overrides(
+            start=first.isoformat(),
+            end=(first + timedelta(days=120)).isoformat(),
+            limit=500,
+        )
+        grouped: list[dict] = []
+        for row in overrides:
+            current = date.fromisoformat(row["calendar_date"])
+            signature = (
+                row["day_kind"],
+                row["earliest_time"],
+                row["note"],
+            )
+            if (
+                grouped
+                and grouped[-1]["signature"] == signature
+                and current
+                == date.fromisoformat(grouped[-1]["end"]) + timedelta(days=1)
+            ):
+                grouped[-1]["end"] = current.isoformat()
+            else:
+                grouped.append(
+                    {
+                        "start": current.isoformat(),
+                        "end": current.isoformat(),
+                        "signature": signature,
+                    }
+                )
+        rows: list[ft.Control] = []
+        for item in grouped:
+            day_kind, earliest, note_value = item["signature"]
+            detail = day_kind
+            if earliest:
+                detail += f" · {earliest} 起"
+            if note_value:
+                detail += f" · {note_value}"
+            label = (
+                item["start"]
+                if item["start"] == item["end"]
+                else f"{item['start']} ~ {item['end']}"
+            )
+            rows.append(
+                ft.Row(
+                    [
+                        ft.Text(label, size=12, weight=ft.FontWeight.W_600),
+                        ft.Text(detail, size=11, color=ft.Colors.GREY_600, expand=True),
+                        ft.IconButton(
+                            ft.Icons.RESTORE,
+                            tooltip="恢复自动判断",
+                            icon_size=18,
+                            on_click=lambda e, start=item["start"], end=item["end"]: self._confirm(
+                                "恢复自动判断",
+                                f"恢复 {start}"
+                                + ("" if start == end else f" 至 {end}")
+                                + "，这些日期会重新按法定节假日判断。",
+                                lambda: db.delete_trial_calendar_range(start, end),
+                                ok_text="恢复",
+                                done_text="已恢复自动判断",
+                            ),
+                        ),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+        return self._section(
+            "试听与营业日历",
+            ft.Column(
+                [
+                    ft.Text(
+                        "法定节假日和调休补班日自动判断；寒暑假、学校活动或临时休息"
+                        "在这里覆盖。工作日 16:00 后、非上学日 08:00 后可约，"
+                        "试听固定 1 小时，19:30 前结束。",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text(item, size=11, color=ft.Colors.GREY_700)
+                            for item in current_bits
+                        ],
+                        spacing=6,
+                        wrap=True,
+                    ),
+                    *(
+                        rows
+                        or [
+                            ft.Text(
+                                "未来 120 天没有机构例外，全部按法定节假日库判断。",
+                                size=11,
+                                color=ft.Colors.GREY_500,
+                            )
+                        ]
+                    ),
+                ],
+                spacing=8,
+            ),
+            action=ft.Button(
+                "设置例外",
+                icon=ft.Icons.CALENDAR_MONTH,
+                on_click=lambda e: self._open_trial_calendar_dialog(),
+            ),
+        )
+
+    def _open_trial_calendar_dialog(self) -> None:
+        if not self.is_admin():
+            self._toast("只有管理员能设置试听日历")
+            return
+        today = date.today()
+        start = _tf("开始日期", today.isoformat(), width=DIALOG_WIDTH)
+        end = _tf("结束日期", today.isoformat(), width=DIALOG_WIDTH)
+        kind = _dd(
+            "日期类型",
+            _opts([(value, value) for value in db.TRIAL_CALENDAR_KINDS]),
+            value="非上学日",
+            width=DIALOG_WIDTH,
+        )
+        earliest = _tf(
+            "当天最早开始时间（可空）",
+            "",
+            width=DIALOG_WIDTH,
+            hint_text="例如 08:00；留空按日期类型",
+        )
+        note = _tf(
+            "原因",
+            "",
+            width=DIALOG_WIDTH,
+            hint_text="例如 寒假、学校活动、临时休息",
+        )
+
+        def save(e) -> None:
+            try:
+                saved = db.set_trial_calendar_range(
+                    (start.value or "").strip(),
+                    (end.value or "").strip(),
+                    kind.value or "非上学日",
+                    (earliest.value or "").strip(),
+                    note.value or "",
+                )
+            except ValueError as err:
+                start.error = str(err)
+                start.update()
+                return
+            self._finish(f"已设置 {saved} 天的试听日历")
+
+        self._show(
+            self._dialog(
+                "设置试听日历",
+                self._form_column(
+                    [
+                        ft.Text(
+                            "周六／周日倒休上学时选「上学日」；寒暑假的周一到周五"
+                            "选「非上学日」；整天不开放选「机构休息」。",
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        start,
+                        end,
+                        kind,
+                        earliest,
+                        note,
+                    ]
+                ),
+                [
+                    ft.TextButton("取消", on_click=self._close),
+                    ft.Button("保存", on_click=save),
+                ],
+            )
         )
 
     def _poster_card(self) -> ft.Container:

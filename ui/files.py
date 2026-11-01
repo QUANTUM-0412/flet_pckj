@@ -238,6 +238,260 @@ def _shrink_photo_with_system_tool(data: bytes, suffix: str) -> tuple[bytes, str
 class FilesMixin:
     """上传与打开附件（ClassHoursApp 的一部分）。"""
 
+    def _student_work_upload_button(
+        self, student_id: int, lesson_id: int
+    ) -> ft.Button:
+        def picked(files: list) -> None:
+            self._save_student_work_uploads(student_id, lesson_id, files)
+
+        def open_picker(e) -> None:
+            if not self.is_student():
+                self._toast("请从学生账号上传作品")
+                return
+            own_student = int((self.user or {}).get("student_id") or 0)
+            if own_student != int(student_id):
+                self._toast("只能上传自己的作品")
+                return
+            rows = db.list_attendance(int(lesson_id))
+            own = next(
+                (
+                    row
+                    for row in rows
+                    if int(row["student_id"]) == int(student_id)
+                ),
+                None,
+            )
+            if own is None or not int(own.get("attendance") or 0):
+                self._toast("只有实际出勤的课才能上传作品")
+                return
+            if len(db.list_student_works(student_id, lesson_id)) >= 4:
+                self._toast("这节课最多上传 4 张作品")
+                return
+            self._files_callback = picked
+
+        return ft.Button(
+            "上传作品",
+            icon=ft.Icons.ADD_A_PHOTO,
+            action=ft.PickFiles(
+                self.picker,
+                allow_multiple=True,
+                with_data=True,
+                compression_quality=0,
+                file_type=ft.FilePickerFileType.IMAGE,
+            ),
+            on_click=open_picker,
+        )
+
+    def _save_student_work_uploads(
+        self, student_id: int, lesson_id: int, files: list
+    ) -> None:
+        if not self.is_student():
+            self._toast("只有学生账号能上传作品")
+            return
+        if int((self.user or {}).get("student_id") or 0) != int(student_id):
+            self._toast("只能上传自己的作品")
+            return
+        rows = db.list_attendance(int(lesson_id))
+        own = next(
+            (
+                row
+                for row in rows
+                if int(row["student_id"]) == int(student_id)
+            ),
+            None,
+        )
+        if own is None or not int(own.get("attendance") or 0):
+            self._toast("只有实际出勤的课才能上传作品")
+            return
+        existing = len(db.list_student_works(student_id, lesson_id))
+        room = max(0, 4 - existing)
+        if room <= 0:
+            self._toast("这节课最多上传 4 张作品")
+            return
+        saved = 0
+        skipped = 0
+        for source in files:
+            if saved >= room:
+                break
+            data = getattr(source, "bytes", None)
+            name = getattr(source, "name", "") or "作品.jpg"
+            if not data:
+                skipped += 1
+                continue
+            raw = bytes(data)
+            image = _decode_photo(raw)
+            if image is None:
+                skipped += 1
+                continue
+            suffix = Path(name).suffix.lower()[:10]
+            stored_data, stored_suffix = _shrink_photo(raw, suffix)
+            stored_name = _stored_name(
+                name,
+                suffix=stored_suffix or ".jpg",
+                prefix=f"student_work_s{int(student_id)}_l{int(lesson_id)}",
+            )
+            try:
+                (db.UPLOAD_DIR / stored_name).write_bytes(stored_data)
+            except OSError:
+                skipped += 1
+                continue
+            db.add_file(
+                "lesson",
+                int(lesson_id),
+                "学生作品",
+                name,
+                stored_name,
+                len(stored_data),
+                uploaded_by_user_id=int((self.user or {}).get("id") or 0) or None,
+                student_id=int(student_id),
+            )
+            saved += 1
+        self.render()
+        if saved:
+            self._toast(
+                f"作品传好了 {saved} 张"
+                + (f"，{skipped} 张不是可识别的图片" if skipped else "")
+            )
+        else:
+            self._toast("没有收到可识别的图片")
+
+    def _student_work_thumb(self, row: dict) -> ft.Control:
+        return ft.Container(
+            ft.Image(
+                src=db.file_url(row),
+                width=84,
+                height=84,
+                fit=ft.BoxFit.COVER,
+                border_radius=8,
+            ),
+            border_radius=8,
+            ink=True,
+            tooltip=row["filename"],
+            on_click=lambda e, item=row: self._open_student_work(item),
+        )
+
+    def _open_student_work(self, file_row: dict) -> None:
+        width = min(520, (self.page.width or 900) - 100)
+        role = (self.user or {}).get("role")
+        own = int((self.user or {}).get("student_id") or 0)
+        editable = role == db.ROLE_ROOT or (
+            role == db.ROLE_STUDENT
+            and int(file_row.get("student_id") or 0) == own
+        )
+
+        def remove(e) -> None:
+            db.delete_file(file_row["id"])
+            self.page.pop_dialog()
+            self.render()
+            self._toast("作品已删除")
+
+        self._show(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(file_row["filename"] or "学生作品"),
+                content=ft.Container(
+                    ft.Image(
+                        src=db.file_url(file_row),
+                        width=width,
+                        fit=ft.BoxFit.CONTAIN,
+                    ),
+                    width=width,
+                ),
+                actions=[
+                    *(
+                        [
+                            ft.TextButton(
+                                "删除",
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                on_click=remove,
+                            )
+                        ]
+                        if editable
+                        else []
+                    ),
+                    ft.TextButton("关闭", on_click=self._close),
+                ],
+            )
+        )
+
+    def _student_works_card(
+        self, student_id: int, lesson_id: int
+    ) -> ft.Container:
+        works = db.list_student_works(student_id, lesson_id)
+        thumbs = [self._student_work_thumb(row) for row in works]
+        if self.is_student() and int(
+            (self.user or {}).get("student_id") or 0
+        ) == int(student_id):
+            thumbs.append(
+                self._student_work_upload_button(student_id, lesson_id)
+            )
+        return ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text(
+                            f"我的作品（{len(works)}/4）",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                            expand=True,
+                        ),
+                        ft.Text(
+                            "可上传这节课完成的作品照片，老师做海报时会选用。",
+                            size=10,
+                            color=ft.Colors.GREY_500,
+                        ),
+                    ],
+                    spacing=6,
+                    wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Row(thumbs, spacing=8, wrap=True, run_spacing=8),
+            ],
+            spacing=8,
+        )
+
+    def _lesson_student_works_card(self, lesson: dict) -> ft.Container:
+        works = db.list_files("lesson", int(lesson["id"]), "学生作品")
+        attendance = db.list_attendance(int(lesson["id"]))
+        name_by_student = {
+            int(row["student_id"]): row["student_name"] for row in attendance
+        }
+        grouped: dict[int, list[dict]] = {}
+        for row in works:
+            grouped.setdefault(int(row.get("student_id") or 0), []).append(row)
+        body = []
+        for student_id, rows in grouped.items():
+            body.append(
+                ft.Column(
+                    [
+                        ft.Text(
+                            name_by_student.get(student_id, "学生作品"),
+                            size=12,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                        ft.Row(
+                            [self._student_work_thumb(row) for row in rows],
+                            spacing=8,
+                            wrap=True,
+                            run_spacing=8,
+                        ),
+                    ],
+                    spacing=5,
+                )
+            )
+        if not body:
+            body = [
+                ft.Text(
+                    "还没收到学生上传的作品。学生可在自己的课程详情里上传。",
+                    size=12,
+                    color=ft.Colors.GREY_500,
+                )
+            ]
+        return self._section(
+            f"学生作品（{len(works)} 张）",
+            ft.Column(body, spacing=8),
+        )
+
     def _can_edit_file_owner(self, owner_type: str, owner_id: int) -> bool:
         if owner_type == "lesson":
             lesson = db.get_lesson(int(owner_id))
@@ -831,6 +1085,11 @@ class FilesMixin:
         # 每个孩子的海报都能用上，不用挨个重复上传。
         photos = db.list_files("attendance", attendance_id, "照片")
         photos += db.list_files("lesson", lesson_id, "照片")
+        photos += [
+            row
+            for row in db.list_files("lesson", lesson_id, "学生作品")
+            if int(row.get("student_id") or 0) == int(a["student_id"])
+        ]
         if len(photos) > 1:
             self._choose_poster_photos(
                 photos,
@@ -989,7 +1248,12 @@ class FilesMixin:
         photo_options: list[ft.DropdownOption] = []
         cards = []
         for index, row in enumerate(photos):
-            tag = "作品／课堂" if row.get("owner_type") == "lesson" else "孩子人像"
+            if row.get("kind") == "学生作品":
+                tag = "学生作品"
+            elif row.get("owner_type") == "lesson":
+                tag = "课堂照片"
+            else:
+                tag = "孩子人像"
             box = ft.Checkbox(label=tag, value=index < 4)
             picked.append((box, row))
             photo_options.append(

@@ -441,10 +441,11 @@ class StudentPortalMixin:
         if not compact and (
             (lesson.get("comment") or "").strip()
             or (lesson.get("plan") or "").strip()
+            or present
         ):
             details.append(
                 ft.TextButton(
-                    "查看课评 / 教案",
+                    "查看课程内容与作品",
                     icon=ft.Icons.ARTICLE_OUTLINED,
                     on_click=lambda e, row=lesson: self._open_student_lesson_detail(
                         row
@@ -456,6 +457,8 @@ class StudentPortalMixin:
     def _open_student_lesson_detail(self, lesson: dict) -> None:
         comment = (lesson.get("comment") or "").strip()
         plan = (lesson.get("plan") or "").strip()
+        student_id = int((self.user or {}).get("student_id") or 0)
+        lesson_id = int(lesson.get("lesson_id") or 0)
         self._show(
             self._dialog(
                 "课程内容",
@@ -502,6 +505,16 @@ class StudentPortalMixin:
                                     color=ft.Colors.GREY_500,
                                 )
                             ]
+                        ),
+                        *(
+                            [
+                                ft.Divider(height=1, color=ft.Colors.GREY_200),
+                                self._student_works_card(
+                                    student_id, lesson_id
+                                ),
+                            ]
+                            if student_id and lesson_id
+                            else []
                         ),
                     ],
                     spacing=8,
