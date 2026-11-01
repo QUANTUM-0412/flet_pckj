@@ -519,11 +519,11 @@ class TrialsMixin:
             "",
         )
         today = date.today()
-        start = _tf("开始日期", today.isoformat(), width=DIALOG_WIDTH)
-        end = _tf(
-            "结束日期",
-            (today + timedelta(days=6)).isoformat(),
+        week_anchor = _tf(
+            "选择一周（填其中任意一天）",
+            today.isoformat(),
             width=DIALOG_WIDTH,
+            hint_text="例如 2026-11-04；会自动生成周一到周日",
         )
         teacher = _dd(
             "试听老师",
@@ -536,23 +536,43 @@ class TrialsMixin:
             value=str(teacher_id),
             width=DIALOG_WIDTH,
         )
+        week_preview = ft.Text(
+            "",
+            size=12,
+            color=ft.Colors.GREY_600,
+        )
+
+        def refresh_week_preview() -> None:
+            try:
+                anchor = date.fromisoformat(
+                    (week_anchor.value or "").strip()
+                )
+            except ValueError:
+                week_preview.value = "日期写成 2026-11-04 这样"
+                week_preview.color = ft.Colors.RED_600
+                return
+            monday = anchor - timedelta(days=anchor.weekday())
+            sunday = monday + timedelta(days=6)
+            week_preview.value = (
+                f"固定生成 {monday.month}月{monday.day}日 周一 ~ "
+                f"{sunday.month}月{sunday.day}日 周日"
+            )
+            week_preview.color = ft.Colors.GREY_600
+
+        week_anchor.on_change = lambda e: refresh_week_preview()
+        refresh_week_preview()
 
         def generate(e) -> None:
             try:
-                first = date.fromisoformat((start.value or "").strip())
-                last = date.fromisoformat((end.value or "").strip())
+                anchor = date.fromisoformat(
+                    (week_anchor.value or "").strip()
+                )
             except ValueError:
-                start.error = "日期写成 2026-11-03 这样"
-                start.update()
+                week_anchor.error = "日期写成 2026-11-03 这样"
+                week_anchor.update()
                 return
-            if last < first:
-                end.error = "结束日期不能早于开始日期"
-                end.update()
-                return
-            if (last - first).days > 31:
-                end.error = "一次最多生成 31 天"
-                end.update()
-                return
+            first = anchor - timedelta(days=anchor.weekday())
+            last = first + timedelta(days=6)
             selected_teacher = int(teacher.value or 0)
             selected_name = next(
                 (
@@ -620,11 +640,12 @@ class TrialsMixin:
                             color=ft.Colors.GREY_600,
                         ),
                         teacher,
-                        start,
-                        end,
+                        week_anchor,
+                        week_preview,
                         ft.Text(
-                            "试听只排整点；工作日 16:00 后，"
-                            "调休和寒暑假以试听日历为准。",
+                            "试听从 19:30 下班时间往前每小时一档，例如 "
+                            "17:30–18:30、18:30–19:30；"
+                            "图片固定覆盖周一到周日。",
                             size=11,
                             color=ft.Colors.GREY_600,
                         ),
@@ -1060,7 +1081,8 @@ class TrialsMixin:
                 trial_time,
                 appointment,
                 ft.Text(
-                    "试听统一 1 小时，只选整点；工作日 16:00 后，最晚 18:00 开始。"
+                    "试听统一 1 小时，从 19:30 往前每小时一档；"
+                    "工作日从 16:30 开始。"
                     "周末和假期按试听日历判断。",
                     size=11,
                     color=ft.Colors.GREY_600,

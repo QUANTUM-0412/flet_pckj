@@ -1591,12 +1591,12 @@ trial_time_dd = find_dropdown(dlg, "试听开始时间 *")
 ok(bool(trial_time_dd.options), "选定日期和老师后会出现可约时段")
 ok(
     all(
-        int((option.key or "00:00").split(":")[1]) == 0
+        int((option.key or "00:00").split(":")[1]) == 30
         for option in trial_time_dd.options
     )
-    and "18:00" in {option.key for option in trial_time_dd.options}
-    and "18:30" not in {option.key for option in trial_time_dd.options},
-    "试听只提供整点档位，最后一个整点是 18:00",
+    and [option.key for option in trial_time_dd.options]
+    == ["16:30", "17:30", "18:30"],
+    "试听从 19:30 往前每小时一档",
 )
 trial_time_dd.value = trial_time_dd.options[0].key
 find_field(dlg, "备注（孩子情况、家长想法…）").value = "试过核桃，妈妈是老师"
@@ -1656,9 +1656,9 @@ trial_lesson = db.create_lesson(
 )
 ok(
     "课程" in db.trial_conflict_reason(
-        trial_date, "17:00", trial_teacher
+        trial_date, "17:30", trial_teacher
     )
-    and "17:00" not in db.trial_slot_candidates(
+    and "17:30" not in db.trial_slot_candidates(
         trial_date, trial_teacher, include_past=True
     ),
     "同一位老师已有课程时，重叠时段被拦住",
@@ -1679,7 +1679,7 @@ trial_template = db.create_template(
 ok(
     "18:00–19:00 已占用"
     in db.trial_conflict_reason(
-        trial_date, "18:00", trial_teacher
+        trial_date, "18:30", trial_teacher
     ),
     "尚未生成课次的固定课程也会拦住试听",
 )
@@ -1687,20 +1687,27 @@ db.delete_template(trial_template)
 ok(
     "19:30 前结束"
     in db.trial_conflict_reason(
-        trial_date, "19:00", trial_teacher
+        trial_date, "19:30", trial_teacher
     ),
     "固定 1 小时的试听不能超过 19:30",
 )
 ok(
-    "整点" in db.trial_conflict_reason(
-        trial_date, "16:30", trial_teacher
+    "16:30" in db.trial_conflict_reason(
+        trial_date, "17:00", trial_teacher
     ),
-    "绕过界面也不能保存半小时试听",
+    "绕过界面也不能保存非半点开始的试听",
 )
 
 app._open_trial_times_dialog(trial_teacher)
 times_dialog = top_dialog(page)
 ok(find_text(times_dialog, "不会显示班级、孩子姓名"), "家长时段图明确保护内部信息")
+week_field = find_field(times_dialog, "选择一周（填其中任意一天）")
+week_field.value = trial_date
+week_field.on_change(Evt(week_field))
+ok(
+    find_text(times_dialog, "11月2日 周一 ~ 11月8日 周日"),
+    "家长时段图固定生成周一到周日",
+)
 click(times_dialog, "生成图片")
 times_image_dialog = top_dialog(page)
 ok(find_text(times_image_dialog, "试听可约时段"), "能预览生成的家长时段图")

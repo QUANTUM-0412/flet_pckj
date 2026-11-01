@@ -6429,8 +6429,11 @@ def trial_conflict_reason(
     earliest = _time_minutes(info["earliest_time"])
     close = _time_minutes(info["close_time"])
     end = start + TRIAL_MINUTES
-    if start % 60:
-        return "试听只支持整点开始"
+    if start % 60 != 30:
+        return (
+            "试听时段从下班时间往前每小时一档，开始时间应为 "
+            "16:30、17:30、18:30 这样"
+        )
     if start < earliest:
         return f"{info['label']}最早从 {info['earliest_time']} 开始"
     if end > close:
@@ -6464,15 +6467,26 @@ def trial_slot_candidates(
         now = datetime.now()
         now_floor = now.hour * 60 + now.minute
     busy = trial_busy_intervals(day, int(teacher_id), exclude_trial_id)
-    out: list[str] = []
-    current = ((earliest + 59) // 60) * 60
+    starts: list[int] = []
+    remainder = earliest % 60
+    current = (
+        earliest
+        if remainder == 30
+        else earliest + (30 - remainder if remainder < 30 else 90 - remainder)
+    )
     while current + TRIAL_MINUTES <= close:
-        end = current + TRIAL_MINUTES
-        if current >= now_floor and not any(
-            current < item["end"] and end > item["start"] for item in busy
-        ):
-            out.append(_minutes_time(current))
+        starts.append(current)
         current += 60
+    last_start = close - TRIAL_MINUTES
+    if last_start >= earliest and last_start not in starts:
+        starts.append(last_start)
+    out: list[str] = []
+    for start in sorted(starts):
+        end = start + TRIAL_MINUTES
+        if start >= now_floor and not any(
+            start < item["end"] and end > item["start"] for item in busy
+        ):
+            out.append(_minutes_time(start))
     return out
 
 
