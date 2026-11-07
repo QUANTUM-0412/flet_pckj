@@ -1737,9 +1737,10 @@ class ScheduleMixin:
                 "seq": seq_value,
                 "weekday_times": day_times,
             }
+            removed_pending = 0
             try:
                 if editing:
-                    db.update_template(
+                    removed_pending = db.update_template(
                         template["id"], *args, teacher_id=teacher_id, **extra
                     )
                     template_id = template["id"]
@@ -1752,7 +1753,14 @@ class ScheduleMixin:
                 name.update()
                 return
             db.set_template_students(template_id, [sid for sid, cb, _m in picked if cb.value])
-            self._finish("课表存好了")
+            self._finish(
+                (
+                    f"课表存好了；已自动取消结课日后的 "
+                    f"{removed_pending} 节未完成课次"
+                )
+                if removed_pending
+                else "课表存好了"
+            )
 
         name_rules_tile = ft.ExpansionTile(
             title=ft.Text(

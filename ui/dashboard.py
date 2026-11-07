@@ -242,6 +242,7 @@ class DashboardMixin:
 
         def open_class(e=None) -> None:
             if row["lesson"] is not None:
+                self.tab = 1
                 self.open_lesson(int(row["lesson"]["id"]))
                 return
             self.schedule_date = date.today().isoformat()

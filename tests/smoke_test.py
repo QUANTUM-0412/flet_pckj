@@ -339,6 +339,29 @@ ok(
 ok("上课记录" not in menus, "「上课记录」栏目并入「课程」了")
 ok("积分" not in menus, "积分不再单占一个菜单（挪进学员页和报表页了）")
 
+dashboard_lesson = db.create_lesson(
+    date.today().isoformat(),
+    "23:59",
+    60,
+    db.list_class_types()[0]["id"],
+    None,
+    comment="工作台查看课堂跳转测试",
+)
+app.tab = TAB_DASHBOARD
+app.lesson_id = None
+app.render()
+click(page.controls[0], "查看课堂")
+ok(
+    app.tab == 1
+    and app.lesson_id == dashboard_lesson
+    and find_text(page.controls[0], "点名（0 人）"),
+    "今日工作台点「查看课堂」会进入课次详情",
+)
+db.delete_lesson(dashboard_lesson)
+app.lesson_id = None
+app.tab = TAB_DASHBOARD
+app.render()
+
 print("2b. 3D 打印积分工具")
 ok(print_half_hour_units(0.01) == 1, "不足半小时按 1 档")
 ok(print_half_hour_units(0.5) == 1, "正好半小时按 1 档")
@@ -3839,6 +3862,67 @@ ok(
     "把结课日改到以后，自动结课的报名又回到在读",
 )
 ok(db.get_student(old_kid)["status"] == "在读", "学生状态也跟着回来")
+
+early_end_cls = db.create_template(
+    0,
+    "10:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    name="提前结课清理测试",
+    start_date="2026-09-01",
+    end_date="2026-10-31",
+)
+early_end_before = db.create_lesson_from_template(early_end_cls, "2026-10-05")
+early_end_done = db.create_lesson_from_template(early_end_cls, "2026-10-12")
+early_end_pending = db.create_lesson_from_template(early_end_cls, "2026-10-19")
+db.roll_call(early_end_done)
+removed_early = db.update_template(
+    early_end_cls,
+    0,
+    "10:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    start_date="2026-09-01",
+    end_date="2026-10-05",
+    name="提前结课清理测试",
+)
+remaining_after_early_end = {
+    lesson["id"]: lesson
+    for lesson in db.template_lessons(early_end_cls)
+}
+ok(
+    early_end_before in remaining_after_early_end
+    and early_end_done in remaining_after_early_end
+    and early_end_pending not in remaining_after_early_end
+    and removed_early == 1,
+    "提前结课后自动取消后面尚未完成的课，已完成的课保留",
+)
+
+legacy_end_cls = db.create_template(
+    0,
+    "11:00",
+    90,
+    zhengke["id"],
+    gpl3["id"],
+    name="旧数据结课清理测试",
+    start_date="2026-09-01",
+    end_date="2026-10-31",
+)
+legacy_pending = db.create_lesson_from_template(
+    legacy_end_cls, "2026-10-26"
+)
+with sqlite3.connect(db.DB_PATH) as legacy_con:
+    legacy_con.execute(
+        "UPDATE schedule_templates SET end_date = ? WHERE id = ?",
+        ("2026-10-19", legacy_end_cls),
+    )
+db.sync_course_statuses()
+ok(
+    db.get_lesson(legacy_pending) is None,
+    "进入课程页时也会清理旧数据里结课日后的未完成课次",
+)
 
 future_cls = db.create_template(
     4,

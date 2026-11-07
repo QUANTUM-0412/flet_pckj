@@ -1587,13 +1587,62 @@ def _apply_course_dates(con: sqlite3.Connection, course_id: int) -> int:
     return changed
 
 
+def purge_pending_lessons_after_course_end(
+    course_id: int,
+    con: sqlite3.Connection | None = None,
+) -> int:
+    """删除结课日之后尚未完成的课次，保留已经完成的历史记录。"""
+
+    def run(c: sqlite3.Connection) -> int:
+        course = c.execute(
+            "SELECT end_date FROM schedule_templates WHERE id = ?",
+            (int(course_id),),
+        ).fetchone()
+        if course is None or not (course["end_date"] or "").strip():
+            return 0
+        lessons = c.execute(
+            """SELECT id
+                 FROM lessons
+                WHERE template_id = ? AND lesson_date > ? AND rolled = 0""",
+            (int(course_id), course["end_date"]),
+        ).fetchall()
+        for row in lessons:
+            lesson_id = int(row["id"])
+            attendance_rows = c.execute(
+                "SELECT id FROM attendance WHERE lesson_id = ?",
+                (lesson_id,),
+            ).fetchall()
+            for attendance in attendance_rows:
+                _remove_files(c, "attendance", int(attendance["id"]))
+            _remove_files(c, "lesson", lesson_id)
+            c.execute(
+                "DELETE FROM hour_transactions "
+                "WHERE source_type = 'lesson' AND source_id = ?",
+                (lesson_id,),
+            )
+            c.execute(
+                "DELETE FROM point_transactions "
+                "WHERE source_type = 'lesson' AND source_id = ?",
+                (lesson_id,),
+            )
+            c.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
+        return len(lessons)
+
+    if con is not None:
+        return run(con)
+    with _connect() as c:
+        return run(c)
+
+
 def sync_course_statuses(con: sqlite3.Connection | None = None) -> int:
     """把所有课程的起止日期过一遍，到期就自动结课。"""
 
     def run(c: sqlite3.Connection) -> int:
         changed = 0
         for row in c.execute("SELECT id FROM schedule_templates").fetchall():
-            changed += _apply_course_dates(c, int(row["id"]))
+            course_id = int(row["id"])
+            changed += _apply_course_dates(c, course_id)
+            purge_pending_lessons_after_course_end(course_id, c)
         return changed
 
     if con is not None:
@@ -5085,7 +5134,7 @@ def update_template(
     term: str = "",
     seq: int | None = None,
     weekday_times: dict | None = None,
-) -> None:
+) -> int:
     name = (name or "").strip()
     if not name:
         raise ValueError("课程名不能为空")
@@ -5150,12 +5199,16 @@ def update_template(
             )
         # 起止日期变了，跟着同步"是不是已经结课"
         _apply_course_dates(con, template_id)
+        removed_pending = purge_pending_lessons_after_course_end(
+            template_id, con
+        )
         # 换了课程老师，学员档案上的归属也跟着更新
         for row in con.execute(
             "SELECT DISTINCT student_id FROM enrollments WHERE class_id = ?",
             (template_id,),
         ):
             refresh_student(int(row["student_id"]), con)
+    return removed_pending
 
 
 def delete_template(template_id: int) -> None:
