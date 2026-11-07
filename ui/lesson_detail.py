@@ -5,7 +5,7 @@ from __future__ import annotations
 import flet as ft
 
 import db
-from .common import _attendance_calc, _date_text, _lessons_stats
+from .common import _attendance_calc, _chip, _date_text, _lessons_stats
 
 
 class LessonDetailMixin:
@@ -21,6 +21,25 @@ class LessonDetailMixin:
 
         stats = ft.Text(_lessons_stats(lesson), size=12, color=ft.Colors.GREY_600)
         self._lesson_stats = stats
+        if not can_edit:
+            header_action = ft.Text("只读", size=11, color=ft.Colors.GREY_500)
+        elif lesson.get("rolled", 1):
+            header_action = _chip(
+                "已完成" if lesson.get("completed_at") else "待完成",
+                (
+                    ft.Colors.GREEN_700
+                    if lesson.get("completed_at")
+                    else ft.Colors.ORANGE_700
+                ),
+            )
+        elif lesson.get("checked_in_at"):
+            header_action = _chip("已签到", ft.Colors.BLUE_600)
+        else:
+            header_action = ft.Button(
+                "签到",
+                icon=ft.Icons.FACT_CHECK,
+                on_click=lambda e: self._ask_check_in(lesson),
+            )
         header = ft.Row(
             [
                 ft.IconButton(
@@ -41,32 +60,7 @@ class LessonDetailMixin:
                     spacing=2,
                     expand=True,
                 ),
-                *(
-                    [
-                        ft.Text(
-                            "只读",
-                            size=11,
-                            color=ft.Colors.GREY_500,
-                        )
-                    ]
-                    if not can_edit
-                    else [
-                        ft.Button(
-                            "点名",
-                            icon=ft.Icons.FACT_CHECK,
-                            on_click=lambda e: self._ask_roll_call(lesson),
-                        )
-                    ]
-                    if not lesson.get("rolled", 1)
-                    else [
-                        ft.TextButton(
-                            "撤销点名",
-                            icon=ft.Icons.UNDO,
-                            tooltip="改回「待点名」：这节课扣的课时、加的积分都退回",
-                            on_click=lambda e: self._ask_unroll_call(lesson),
-                        )
-                    ]
-                ),
+                header_action,
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
@@ -111,6 +105,34 @@ class LessonDetailMixin:
                     ft.Row(
                         [
                             ft.Container(expand=True),
+                            *(
+                                [
+                                    ft.TextButton(
+                                        (
+                                            "撤销完成"
+                                            if lesson.get("rolled", 1)
+                                            else "撤销签到"
+                                        ),
+                                        icon=ft.Icons.UNDO,
+                                        tooltip=(
+                                            "退回课时和积分，并回到未签到"
+                                            if lesson.get("rolled", 1)
+                                            else "只清掉签到，不影响课时和积分"
+                                        ),
+                                        on_click=(
+                                            lambda e: self._ask_unroll_call(lesson)
+                                            if lesson.get("rolled", 1)
+                                            else self._ask_uncheck_in(lesson)
+                                        ),
+                                    )
+                                ]
+                                if can_edit
+                                and (
+                                    lesson.get("rolled", 1)
+                                    or lesson.get("checked_in_at")
+                                )
+                                else []
+                            ),
                             *(
                                 [
                                     ft.Button(
@@ -233,6 +255,14 @@ class LessonDetailMixin:
                 header,
                 *([makeup_card] if makeup_card else []),
                 info,
+                *(
+                    [self._lesson_completion_card(lesson)]
+                    if (
+                        can_edit and lesson.get("checked_in_at")
+                    )
+                    or lesson.get("completed_at")
+                    else []
+                ),
                 self._lesson_content_card(lesson),
                 *(
                     [self._lesson_student_works_card(lesson)]
@@ -247,6 +277,123 @@ class LessonDetailMixin:
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
         )
+
+    def _lesson_completion_card(self, lesson: dict) -> ft.Container:
+        """签到后单独完成：这时才结算表现、课时和积分。"""
+        completed = bool(lesson.get("completed_at"))
+        settled = bool(lesson.get("rolled", 1))
+        can_edit = self._can_manage_lesson(lesson)
+        photos = db.list_files("lesson", int(lesson["id"]), "照片")
+        works = db.list_files("lesson", int(lesson["id"]), "学生作品")
+        summary = f"课堂照片 {len(photos)} 张 · 学生作品 {len(works)} 张"
+        if can_edit and completed:
+            action = (
+                ft.TextButton(
+                    "重新打开",
+                    icon=ft.Icons.EDIT,
+                    on_click=lambda e: self._reopen_completed_lesson(lesson),
+                )
+            )
+        elif can_edit and settled:
+            action = ft.Button(
+                "重新完成",
+                icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
+                on_click=lambda e: self._mark_completed_again(lesson),
+            )
+        elif can_edit:
+            action = ft.Button(
+                "完成本课",
+                icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
+                on_click=lambda e: self._ask_finalize_lesson(lesson),
+            )
+        else:
+            action = None
+        if completed:
+            title = "本课已完成"
+            helper = f"{summary} · 课时和积分已结算，后续仍可修改。"
+            icon = ft.Icons.CHECK_CIRCLE
+            icon_color = ft.Colors.GREEN_700
+            text_color = ft.Colors.GREEN_900
+            sub_color = ft.Colors.GREEN_800
+            bgcolor = ft.Colors.GREEN_50
+            border_color = ft.Colors.GREEN_200
+        elif settled:
+            title = "课堂已重新打开"
+            helper = f"{summary} · 课时和积分保留，调整完成后点「重新完成」。"
+            icon = ft.Icons.EDIT_NOTE
+            icon_color = ft.Colors.ORANGE_700
+            text_color = ft.Colors.ORANGE_900
+            sub_color = ft.Colors.ORANGE_800
+            bgcolor = ft.Colors.ORANGE_50
+            border_color = ft.Colors.ORANGE_200
+        else:
+            title = "已签到，课堂进行中"
+            helper = (
+                f"{summary} · 评好表现、传完课堂分享后点右侧完成；"
+                "完成时才结算课时和积分。"
+            )
+            icon = ft.Icons.PHOTO_LIBRARY_OUTLINED
+            icon_color = ft.Colors.BLUE_700
+            text_color = ft.Colors.BLUE_900
+            sub_color = ft.Colors.BLUE_800
+            bgcolor = ft.Colors.BLUE_50
+            border_color = ft.Colors.BLUE_200
+        return ft.Container(
+            ft.Row(
+                [
+                    ft.Icon(icon, color=icon_color),
+                    ft.Column(
+                        [
+                            ft.Text(
+                                title,
+                                size=14,
+                                weight=ft.FontWeight.W_600,
+                                color=text_color,
+                            ),
+                            ft.Text(
+                                helper,
+                                size=11,
+                                color=sub_color,
+                            ),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                    *([action] if action is not None else []),
+                ],
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=12,
+            border_radius=12,
+            bgcolor=bgcolor,
+            border=ft.Border.all(1, border_color),
+        )
+
+    def _reopen_completed_lesson(self, lesson: dict) -> None:
+        fresh = db.get_lesson(int(lesson["id"]))
+        if fresh is None:
+            self._toast("这节课不存在")
+            return
+        if not self._can_manage_lesson(fresh):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        try:
+            db.reopen_lesson(int(fresh["id"]))
+        except ValueError as exc:
+            self._toast(str(exc))
+            return
+        self.render()
+        self._toast("已重新打开；课时和积分保留，修改完再点「重新完成」")
+
+    def _mark_completed_again(self, lesson: dict) -> None:
+        fresh = db.get_lesson(int(lesson["id"]))
+        if fresh is None or not self._can_manage_lesson(fresh):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        db.set_lesson_completed(int(fresh["id"]), True)
+        self.render()
+        self._toast("本课已恢复为完成状态")
 
     def _lesson_content_card(self, lesson: dict) -> ft.Container:
         """课评、教案、课堂照片放在一起，做海报和回看都从这里找。"""
@@ -456,8 +603,23 @@ class LessonDetailMixin:
         db.cleanup_plan_images(lesson_id, text)
         self._toast("教案已保存")
 
-    def _ask_roll_call(self, lesson: dict) -> None:
-        """这节课真上完了：点名之后才开始扣课时、加积分。"""
+    def _ask_check_in(self, lesson: dict) -> None:
+        """孩子到了先签到；只确认到课，不影响课时和积分。"""
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        rows = db.list_attendance(lesson["id"])
+        self._confirm(
+            "到课签到",
+            f"先确认名单：{len(rows)} 人。签到只记录孩子已经到课，"
+            "不扣课时、不加积分；课堂结束后再点「完成本课」统一结算。",
+            lambda: db.check_in_lesson(lesson["id"]),
+            ok_text="签到",
+            done_text="签到完成；课堂结束后再点「完成本课」",
+        )
+
+    def _ask_finalize_lesson(self, lesson: dict) -> None:
+        """课堂结束并整理完毕：结算表现、课时和积分。"""
         if not self._can_manage_lesson(lesson):
             self._toast("这节课由其他老师上课，只能查看")
             return
@@ -469,16 +631,30 @@ class LessonDetailMixin:
             hours += h
             points += p
         self._confirm(
-            "点名",
-            f"按现在的名单算：{len(rows)} 人，扣 {db.num_text(hours)} 课时、"
-            f"加 {db.num_text(points)} 分。点完还能改。",
-            lambda: db.roll_call(lesson["id"]),
-            ok_text="点名",
-            done_text="点完名了，课时和积分算上了",
+            "完成本课",
+            f"课堂表现和分享内容都确认好了吗？按现在的名单：{len(rows)} 人，"
+            f"将扣 {db.num_text(hours)} 课时、加 {db.num_text(points)} 分。\n"
+            "完成时才结算；之后仍可重新打开修改。",
+            lambda: db.finalize_lesson(lesson["id"]),
+            ok_text="完成并结算",
+            done_text="本课已完成，课时和积分已结算",
+        )
+
+    def _ask_uncheck_in(self, lesson: dict) -> None:
+        """撤销签到只清状态；尚未完成，所以没有课时或积分要退。"""
+        if not self._can_manage_lesson(lesson):
+            self._toast("这节课由其他老师上课，只能查看")
+            return
+        self._confirm(
+            "撤销签到",
+            "撤销后回到「待签到」。这节课还没有结算课时和积分，名单、课评和照片都会保留。",
+            lambda: db.uncheck_in_lesson(lesson["id"]),
+            ok_text="确认撤销",
+            done_text="已撤销签到",
         )
 
     def _ask_unroll_call(self, lesson: dict) -> None:
-        """撤销点名：先把要退回的课时、积分说清楚，确认了才改。"""
+        """撤销完成：先把要退回的课时、积分说清楚，确认了才改。"""
         if not self._can_manage_lesson(lesson):
             self._toast("这节课由其他老师上课，只能查看")
             return
@@ -490,14 +666,14 @@ class LessonDetailMixin:
             hours += h
             points += p
         self._confirm(
-            "撤销点名",
-            f"这节课现在是「已点名」：{len(rows)} 人，已扣 {db.num_text(hours)} 课时、"
+            "撤销完成",
+            f"这节课现在是「已完成」：{len(rows)} 人，已扣 {db.num_text(hours)} 课时、"
             f"已加 {db.num_text(points)} 分。\n"
-            "撤销后变回「待点名」：这笔课时和积分都退回，名单、课评、照片都还在，"
-            "以后可以再点一次名。确定撤销吗？",
+            "撤销后变回「待签到」：这笔课时和积分都退回，名单、课评、照片都还在，"
+            "以后可以重新签到和完成。确定撤销吗？",
             lambda: db.unroll_lesson(lesson["id"]),
             ok_text="确认撤销",
-            done_text="已改回待点名，课时和积分退回来了",
+            done_text="已撤销完成，课时和积分退回来了",
         )
 
 
@@ -579,9 +755,16 @@ class LessonDetailMixin:
         performance_score_value = float(a["performance_score"] or 0)
         bonus_value = float(a["bonus"] or 0)
         summary = ft.Text(
-            f"本次扣 {db.num_text(hours)} 课时 · 积分 +{db.num_text(points)}"
-            if present
-            else "请假：不扣课时、不加分",
+            (
+                (
+                    f"本次扣 {db.num_text(hours)} 课时 · 积分 +{db.num_text(points)}"
+                    if lesson.get("rolled", 1)
+                    else f"完成后将扣 {db.num_text(hours)} 课时 · "
+                    f"积分 +{db.num_text(points)}"
+                )
+                if present
+                else "请假：不扣课时、不加分"
+            ),
             size=12,
             color=ft.Colors.GREY_600,
         )
@@ -1075,9 +1258,16 @@ class LessonDetailMixin:
         refs["minutes"].value = db.num_text(a["minutes"])
         refs["comment"].value = a["comment"]
         refs["summary"].value = (
-            f"本次扣 {db.num_text(hours)} 课时 · 积分 +{db.num_text(points)}"
-            if present
-            else "请假：不扣课时、不加分"
+            (
+                (
+                    f"本次扣 {db.num_text(hours)} 课时 · 积分 +{db.num_text(points)}"
+                    if lesson.get("rolled", 1)
+                    else f"完成后将扣 {db.num_text(hours)} 课时 · "
+                    f"积分 +{db.num_text(points)}"
+                )
+                if present
+                else "请假：不扣课时、不加分"
+            )
         )
         refs["balance"].value = self._student_hours_text(a["student_id"], lesson)
         for control in refs.values():

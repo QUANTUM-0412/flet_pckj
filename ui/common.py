@@ -210,8 +210,9 @@ def _now_time() -> str:
 
 def _lessons_stats(lesson: dict) -> str:
     if not lesson.get("rolled", 1):
-        # 排好了但还没点名：这时候课时和积分都还没算
-        return f"{lesson.get('student_count') or 0} 人 · 待点名"
+        # 签到只是确认孩子到了，课堂结束时才结算课时和积分。
+        status = "已签到 · 待完成" if lesson.get("checked_in_at") else "待签到"
+        return f"{lesson.get('student_count') or 0} 人 · {status}"
     hours = round(float(lesson.get("attended_minutes") or 0) / 60, 2)
     points = float(lesson.get("points") or 0)
     parts = [f"{lesson.get('student_count') or 0} 人"]
@@ -219,6 +220,8 @@ def _lessons_stats(lesson: dict) -> str:
         parts.append(f"扣 {db.num_text(hours)} 课时")
     if points:
         parts.append(f"积分 +{db.num_text(points)}")
+    if lesson.get("completed_at"):
+        parts.append("已完成")
     return " · ".join(parts)
 
 

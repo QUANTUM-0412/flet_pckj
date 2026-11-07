@@ -777,7 +777,17 @@ db.set_lesson_comment(lesson["id"], "今天讲循环")
 rows = db.list_attendance(lesson["id"])
 ok(len(rows) == 1 and rows[0]["minutes"] == 90, "点名记录带上了默认时长")
 ok(db.get_lesson(lesson["id"])["comment"] == "今天讲循环", "课评存在课次上")
-ok(db.get_lesson(lesson["id"])["rolled"] == 0, "记一节课默认先挂着「待点名」")
+ok(
+    db.get_lesson(lesson["id"])["rolled"] == 0
+    and db.get_lesson(lesson["id"])["checked_in_at"] == "",
+    "记一节课默认先挂着「待签到」",
+)
+try:
+    db.set_lesson_completed(lesson["id"], True)
+    completed_before_roll = True
+except ValueError:
+    completed_before_roll = False
+ok(not completed_before_roll, "还没签到的课不能直接标成已完成")
 app._open_lesson_dialog(db.get_lesson(lesson["id"]))
 _edit_dlg = top_dialog(page)
 ok(
@@ -791,12 +801,26 @@ ok(
 )
 app._close()
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
-ok(accounts["正课"]["balance"] == 24, "还没点名，课时先不扣")
-ok(db.student_points(sid) == 0, "还没点名，积分也先不加")
-db.roll_call(lesson["id"])
+ok(accounts["正课"]["balance"] == 24, "还没签到，课时先不扣")
+ok(db.student_points(sid) == 0, "还没签到，积分也先不加")
+ok(db.check_in_lesson(lesson["id"]), "孩子到课后可以先签到")
+checked_in = db.get_lesson(lesson["id"])
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
-ok(accounts["正课"]["balance"] == 22.5, "出勤自动扣了 1.5 课时")
-ok(db.student_points(sid) == 30, "出勤＋纪律＋学习 = 30 分")
+ok(
+    checked_in["rolled"] == 0
+    and checked_in["checked_in_at"]
+    and accounts["正课"]["balance"] == 24
+    and db.student_points(sid) == 0,
+    "签到只确认到课，不扣课时也不发积分",
+)
+db.finalize_lesson(lesson["id"])
+accounts = {a["name"]: a for a in db.get_accounts(sid)}
+ok(accounts["正课"]["balance"] == 22.5, "完成本课才扣 1.5 课时")
+ok(db.student_points(sid) == 30, "完成本课才结算出勤＋纪律＋学习 = 30 分")
+ok(
+    bool(db.get_lesson(lesson["id"])["completed_at"]),
+    "完成课堂时同时留下整理完成标记",
+)
 
 app._save_attendance_flag(rows[0]["id"], "attendance", False)
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
@@ -960,7 +984,7 @@ dlg = top_dialog(page)
 find_field(dlg, "时长（分钟）").value = "120"
 find_dropdown(dlg, "课型").value = str(jingsai["id"])
 find_checkbox(dlg, "张晨希").value = True
-find_checkbox(dlg, "现在就点名").value = True  # 当场算数的特殊路子
+find_checkbox(dlg, "直接完成并结算").value = True  # 补录已上完的课
 click(dlg, "保存")
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
 ok(
@@ -1011,6 +1035,24 @@ db.delete_student(other_sid)
 app.open_lesson(lesson["id"])
 ok(find_text(page.controls[0], "点名（1 人）"), "课次详情显示点名人数")
 ok(find_text(page.controls[0], "今天讲循环"), "课次详情显示课评")
+ok(
+    find_button(page.controls[0], "重新打开") is not None,
+    "课次详情完成后可以重新打开继续修改",
+)
+lesson_points_before_reopen = db.student_points(sid)
+click(page.controls[0], "重新打开")
+reopened = db.get_lesson(lesson["id"])
+ok(
+    reopened["completed_at"] == ""
+    and reopened["rolled"] == 1
+    and db.student_points(sid) == lesson_points_before_reopen,
+    "重新打开课堂不会偷偷退回已结算的积分",
+)
+click(page.controls[0], "重新完成")
+ok(
+    bool(db.get_lesson(lesson["id"])["completed_at"]),
+    "修改后可以重新完成本课",
+)
 
 db.delete_lesson(lessons[0]["id"])
 accounts = {a["name"]: a for a in db.get_accounts(sid)}
@@ -1715,10 +1757,15 @@ app.trial_schedule_day = trial_date
 app._generate_trial_times_image(trial_teacher)
 times_image_dialog = top_dialog(page)
 ok(find_text(times_image_dialog, "试听可约时段"), "能预览生成的家长时段图")
+trial_anchor = date.fromisoformat(trial_date)
+trial_week_first = trial_anchor - timedelta(days=trial_anchor.weekday())
+trial_week_last = trial_week_first + timedelta(days=6)
 ok(
     find_text(
         times_image_dialog,
-        "已按时间表当前显示的一周生成：11月2日 周一 ~ 11月8日 周日",
+        "已按时间表当前显示的一周生成："
+        f"{trial_week_first.month}月{trial_week_first.day}日 周一 ~ "
+        f"{trial_week_last.month}月{trial_week_last.day}日 周日",
     ),
     "点一次就直接生成当前正在查看的整周",
 )
@@ -2282,17 +2329,18 @@ app.schedule_date = "2026-10-03"  # 周六
 app.render()
 ok(find_text(page.controls[0], "这天的课"), "排课表能看某一天的课")
 try:
-    find_button(page.controls[0], "点名")
+    find_button(page.controls[0], "去签到")
     has_button = True
 except AssertionError:
     has_button = False
-ok(has_button, "这天有待点名的课")
+ok(has_button, "这天有待签到的课")
 
 app._roll_call(templates[0]["id"])
 lessons = db.list_lessons()
 ok(len(lessons) == 1 and lessons[0]["lesson_date"] == "2026-10-03", "照课表建出了一节课")
+ok(app.tab == 1, "点签到后会进入课次详情，不停在工作台")
 ok(len(db.list_attendance(lessons[0]["id"])) == 1, "孩子自动进了名单")
-ok(db.get_lesson(lessons[0]["id"])["rolled"] == 0, "照课表建出来的课先挂着「待点名」")
+ok(db.get_lesson(lessons[0]["id"])["rolled"] == 0, "照课表建出来的课先挂着「待签到」")
 ok(
     db.create_lesson_from_template(templates[0]["id"], "2026-10-03") == lessons[0]["id"],
     "同一天不会重复建课",
@@ -2301,11 +2349,11 @@ app.open_schedule(True)
 app.schedule_date = "2026-10-03"
 app.render()
 try:
-    find_button(page.controls[0], "去点名")
+    find_button(page.controls[0], "去签到")
     rolled = True
 except AssertionError:
     rolled = False
-ok(rolled, "排好的课显示「去点名」")
+ok(rolled, "排好的课显示「去签到」")
 ok(
     find_text(page.controls[0], "周六 10:30")
     and find_text(page.controls[0], "周日 09:00"),
@@ -2318,7 +2366,7 @@ for l in db.list_lessons():
     db.delete_lesson(l["id"])
 db.delete_student(bystander)
 
-print("17b. 学期课：一次排一学期，上完再点名")
+print("17b. 学期课：一次排一学期，到课签到、结束再完成")
 sem_kid = db.create_student({"name": "学期娃", "grade": "二年级"})
 db.create_enrollment(sem_kid, gpl3["id"], zhengke["id"], 90)
 sem_hour_id = next(a["hour_type_id"] for a in db.get_accounts(sem_kid) if a["name"] == "正课")
@@ -2347,23 +2395,29 @@ ok(
 )
 ok(db.student_points(sem_kid) == 0, "刚排完课，积分也没加")
 sem_lessons = db.template_lessons(sem_tid)
-ok(all(l["rolled"] == 0 for l in sem_lessons), "排出来的课都是「待点名」")
+ok(all(l["rolled"] == 0 for l in sem_lessons), "排出来的课都是「待签到」")
 
-db.roll_call(sem_lessons[0]["id"])
+db.check_in_lesson(sem_lessons[0]["id"])
+ok(
+    {a["name"]: a["balance"] for a in db.get_accounts(sem_kid)}["正课"] == 20
+    and db.student_points(sem_kid) == 0,
+    "只签到不结算课时和积分",
+)
+db.finalize_lesson(sem_lessons[0]["id"])
 ok(
     {a["name"]: a["balance"] for a in db.get_accounts(sem_kid)}["正课"] == 18.5,
-    "点完名才扣 1.5 课时",
+    "完成课堂才扣 1.5 课时",
 )
-ok(db.student_points(sem_kid) == 30, "点完名才加积分")
+ok(db.student_points(sem_kid) == 30, "完成课堂才加积分")
 
 again = db.generate_template_lessons(sem_tid)
 ok(not again["made"] and len(again["skipped"]) == 9, "再排一次不会重复建课")
 
 after = db.template_lessons(sem_tid)
-ok(after[0]["lesson_date"] == "2026-09-05" and after[0]["rolled"] == 1, "点过名那节还在原地")
+ok(after[0]["lesson_date"] == "2026-09-05" and after[0]["rolled"] == 1, "完成过那节还在原地")
 ok(
     after[1]["lesson_date"] == "2026-09-12" and after[1]["rolled"] == 0,
-    "没点名的第二节还挂着「待点名」",
+    "没完成的第二节还挂着「待签到」",
 )
 
 app.open_schedule(True)
@@ -2371,22 +2425,22 @@ app.schedule_date = "2026-09-12"
 app.render()
 ok(find_text(page.controls[0], "这一周的课"), "排课表里有周视图")
 ok(find_text(page.controls[0], "周六"), "周视图里有周六这一列")
-ok(find_text(page.controls[0], "待点名"), "周视图上标着还没点名的课")
+ok(find_text(page.controls[0], "待签到"), "周视图上标着还没签到的课")
 week_pending_texts = [
     str(control.value)
     for control in walk(app._week_view())
     if isinstance(control, ft.Text)
-    and "待点名" in str(control.value or "")
+    and "待签到" in str(control.value or "")
     and "·" in str(control.value or "")
 ]
 ok(
     week_pending_texts
-    and all(text.endswith("待点名") for text in week_pending_texts),
-    "周视图的待点名信息顺序一致",
+    and all(text.endswith("待签到") for text in week_pending_texts),
+    "周视图的待签到信息顺序一致",
 )
-open_lesson = find_button(page.controls[0], "去点名")
+open_lesson = find_button(page.controls[0], "去签到")
 open_lesson.on_click(None)
-ok(app.lesson_id == after[1]["id"], "点「去点名」能进那节课")
+ok(app.lesson_id == after[1]["id"], "点「去签到」能进那节课")
 app.open_schedule(False)
 
 db.set_lesson_comment(after[1]["id"], "这周讲了变量和循环")
@@ -2937,10 +2991,10 @@ db.add_attendance(makeup_own_lesson, own_student)
 app.tab = 1
 app.open_lesson(own_perm_lesson)
 ok(
-    find_button(page.controls[0], "点名") is not None
+    find_button(page.controls[0], "签到") is not None
     and find_button(page.controls[0], "编辑课次") is not None
     and find_button(page.controls[0], "添加孩子") is not None,
-    "自己的课可以点名学生、编辑和添加孩子",
+    "自己的课可以签到学生、编辑和添加孩子",
 )
 own_comment = next(
     c
@@ -2950,7 +3004,7 @@ own_comment = next(
 ok(not own_comment.read_only, "自己的课可以编辑课评")
 app.open_lesson(other_perm_lesson)
 other_lesson_tree = page.controls[0]
-for label in ("点名", "编辑课次", "添加孩子"):
+for label in ("签到", "编辑课次", "添加孩子"):
     try:
         find_button(other_lesson_tree, label)
         visible = True
@@ -2982,7 +3036,7 @@ ok(
 app.open_lesson(makeup_own_lesson)
 ok(
     find_button(page.controls[0], "编辑课次") is not None
-    and find_button(page.controls[0], "点名") is not None,
+    and find_button(page.controls[0], "签到") is not None,
     "补课由实际上课老师编辑，不受原课程归属限制",
 )
 app.tab = 0
@@ -4433,8 +4487,8 @@ ok(
     "不定时课程的那节课显示的是课程名",
 )
 ok(
-    find_text(tree40, "已点名"),
-    "不定时课程的那节课也走课程行（显示「已点名」），不再是灰底的临时行",
+    find_text(tree40, "已完成"),
+    "不定时课程的那节课也走课程行（显示「已完成」），不再是灰底的临时行",
 )
 
 print("41. 记一节课默认用「你正在看的那天」")
@@ -4467,26 +4521,26 @@ try:
     has_skip_btn = True
 except AssertionError:
     has_skip_btn = False
-ok(has_skip_btn, "待点名的课程旁边有「这天不上」")
+ok(has_skip_btn, "待签到的课程旁边有「这天不上」")
 
-# 点进点名后先生成一节待点名课次；返回课表时，“不上课”入口不能丢。
+# 点进签到后先生成一节待签到课次；返回课表时，“不上课”入口不能丢。
 app._roll_call(cls_a)
 pending_skip_id = app.lesson_id
 app.open_schedule(True)
 try:
-    find_button(page.controls[0], "去点名")
+    find_button(page.controls[0], "去签到")
     find_button(page.controls[0], "这天不上")
     pending_actions_visible = True
 except AssertionError:
     pending_actions_visible = False
-ok(pending_actions_visible, "进入点名后回到课表，「这天不上」仍然在")
+ok(pending_actions_visible, "进入签到后回到课表，「这天不上」仍然在")
 app._skip_course_day(cls_a, skip_day)
 dlg = top_dialog(page)
 click(dlg, "确定")
 ok(db.is_course_skipped(cls_a, skip_day), "标成这天不上了")
 ok(
     db.get_lesson(pending_skip_id) is None,
-    "标成不上课时，那天的待点名课次一起清掉了",
+    "标成不上课时，那天的待签到课次一起清掉了",
 )
 ok(
     cls_a not in {t["id"] for t in db.templates_on(skip_day)},
@@ -4497,7 +4551,7 @@ try:
     blocked = False
 except ValueError:
     blocked = True
-ok(blocked, "标了不上的那天，不给点名建课")
+ok(blocked, "标了不上的那天，不给签到的课次")
 
 db.unskip_course_day(cls_a, skip_day)
 ok(
@@ -4505,7 +4559,7 @@ ok(
     "恢复以后这天的课又回来了",
 )
 
-# 已经正式点过名，也允许在明确退回课时／积分后取消这一天的课。
+# 已经正式完成，也允许在明确退回课时／积分后取消这一天的课。
 rolled_skip_day = "2026-10-13"
 rolled_skip_cls = db.create_template(
     1,
@@ -4526,23 +4580,23 @@ app.schedule_date = rolled_skip_day
 app.render()
 try:
     find_button(page.controls[0], "这天不上")
-    rolled_skip_visible = find_text(page.controls[0], "已点名")
+    rolled_skip_visible = find_text(page.controls[0], "已完成")
 except AssertionError:
     rolled_skip_visible = False
-ok(rolled_skip_visible, "已点名的课程也保留「这天不上」入口")
+ok(rolled_skip_visible, "已完成的课程也保留「这天不上」入口")
 try:
     db.skip_course_day(rolled_skip_cls, rolled_skip_day)
     direct_rolled_skip = False
 except ValueError:
     direct_rolled_skip = True
-ok(direct_rolled_skip, "数据层不会悄悄取消已点名的课")
+ok(direct_rolled_skip, "数据层不会悄悄取消已完成的课")
 app._skip_course_day(rolled_skip_cls, rolled_skip_day)
 dlg = top_dialog(page)
 click(dlg, "确定")
 ok(
     db.get_lesson(rolled_skip_id) is None
     and db.is_course_skipped(rolled_skip_cls, rolled_skip_day),
-    "确认后可取消已点名课次并标成不上课",
+    "确认后可取消已完成课次并标成不上课",
 )
 db.delete_template(rolled_skip_cls)
 
@@ -4591,7 +4645,7 @@ early_pos = next(
 late_pos = next(
     i for i, value in enumerate(visible_texts) if "时间排序-晚课" in value
 )
-ok(early_pos < late_pos, "同一天的待点名课程和已生成课次按开始时间排列")
+ok(early_pos < late_pos, "同一天的待签到课程和已生成课次按开始时间排列")
 
 filter_own = db.create_template(
     0,
@@ -5135,9 +5189,23 @@ ok(
 click(page.controls[0], "查看课程内容与作品")
 dlg = top_dialog(page)
 ok(find_text(dlg, "这节课学习循环嵌套"), "学生能在详情里查看课评")
-ok(find_text(dlg, "先复习循环，再完成嵌套练习"), "学生能在详情里查看教案")
+portal_plan = next(
+    control
+    for control in walk(dlg)
+    if isinstance(control, ft.Markdown)
+    and control.value == "先复习循环，再完成嵌套练习"
+)
+ok(not portal_plan.visible, "学生课程详情默认收起完整教案")
+plan_order = list(walk(dlg))
+ok(
+    plan_order.index(find_button(dlg, "上传作品"))
+    < plan_order.index(find_button(dlg, "展开教案")),
+    "学生作品和上传按钮排在教案前面",
+)
 ok(find_text(dlg, "我的作品（0/4）"), "学生课程详情里有自己的作品区")
 upload_work = find_button(dlg, "上传作品")
+click(dlg, "展开教案")
+ok(portal_plan.visible, "学生需要时可以展开完整教案")
 upload_work.on_click(Evt(upload_work))
 ok(app._files_callback is not None, "学生点上传作品后准备好接收图片")
 work_buf = _io.BytesIO()

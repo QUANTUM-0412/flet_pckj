@@ -103,10 +103,10 @@ class LessonDialogsMixin:
         if not self.is_admin():
             teacher_dd.disabled = True
             teacher_dd.value = str(my_teacher_id or "")
-        # 新记一节课：默认只排上、先不点名，等上完课点「点名」才算课时。
-        # 只有当场就要算数的（比如补录今天就上完的课），才勾「现在就点名」。
+        # 新记一节课：默认只排上；孩子到了先签到，课堂结束时完成并结算。
+        # 只有补录已经上完的课，才勾直接完成并结算。
         immediate = None if editing else ft.Checkbox(
-            label="现在就点名（立即扣课时、加积分）",
+            label="直接完成并结算（立即扣课时、加积分）",
             value=False,
         )
         # 每个候选孩子身上带着"他在读哪些等级"，好跟着上面的等级筛
@@ -266,10 +266,10 @@ class LessonDialogsMixin:
                     count += 1
             self.lesson_id = lesson_id
             if immediate is not None and immediate.value:
-                self._finish(f"课次已建好，点名 {count} 人")
+                self._finish(f"课次已建好并完成，点名 {count} 人")
             else:
                 self._finish(
-                    f"课次已排好（{count} 人）：上完课进去点「点名」才算课时"
+                    f"课次已排好（{count} 人）：先签到，课堂结束后完成并结算"
                 )
 
         body_controls = [day_box, start, type_dd, level_dd, minutes, teacher_dd]

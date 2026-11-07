@@ -239,7 +239,20 @@ class LessonsMixin:
     ) -> ft.Container:
         tags = []
         if not lesson.get("rolled", 1):
-            tags.append(_chip("待点名", ft.Colors.ORANGE_700))
+            tags.append(
+                _chip(
+                    "已签到" if lesson.get("checked_in_at") else "待签到",
+                    (
+                        ft.Colors.BLUE_600
+                        if lesson.get("checked_in_at")
+                        else ft.Colors.ORANGE_700
+                    ),
+                )
+            )
+        elif lesson.get("completed_at"):
+            tags.append(_chip("已完成", ft.Colors.GREEN_700))
+        else:
+            tags.append(_chip("待完成", ft.Colors.ORANGE_700))
         if lesson["kind"] == "补课":
             tags.append(_chip("补课", ft.Colors.BLUE_600))
         if not lesson["class_type_deduct"]:
@@ -296,7 +309,7 @@ class LessonsMixin:
                                     s["name"] + ("" if s["attendance"] else "（请假）")
                                     for s in students
                                 )
-                                or "还没点名",
+                                or "还没签到",
                                 size=12,
                                 color=ft.Colors.GREY_600,
                             ),

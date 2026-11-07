@@ -419,35 +419,65 @@ class FilesMixin:
     ) -> ft.Container:
         works = db.list_student_works(student_id, lesson_id)
         thumbs = [self._student_work_thumb(row) for row in works]
+        upload_button = None
         if self.is_student() and int(
             (self.user or {}).get("student_id") or 0
         ) == int(student_id):
-            thumbs.append(
-                self._student_work_upload_button(student_id, lesson_id)
+            upload_button = self._student_work_upload_button(
+                student_id, lesson_id
             )
-        return ft.Column(
-            [
-                ft.Row(
-                    [
-                        ft.Text(
-                            f"我的作品（{len(works)}/4）",
-                            size=12,
-                            color=ft.Colors.GREY_600,
-                            expand=True,
-                        ),
-                        ft.Text(
-                            "可上传这节课完成的作品照片，老师做海报时会选用。",
-                            size=10,
-                            color=ft.Colors.GREY_500,
-                        ),
-                    ],
-                    spacing=6,
-                    wrap=True,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                ft.Row(thumbs, spacing=8, wrap=True, run_spacing=8),
-            ],
-            spacing=8,
+            if len(works) >= 4:
+                upload_button.content = "已传满 4 张"
+                upload_button.icon = ft.Icons.CHECK_CIRCLE_OUTLINE
+                upload_button.disabled = True
+        header = [
+            ft.Text(
+                f"我的作品（{len(works)}/4）",
+                size=14,
+                weight=ft.FontWeight.W_600,
+                color=ft.Colors.BLUE_900,
+                expand=True,
+            ),
+            *([upload_button] if upload_button is not None else []),
+        ]
+        return ft.Container(
+            ft.Column(
+                [
+                    ft.Row(
+                        header,
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        "先上传这节课的作品，老师做海报时会选用。",
+                        size=11,
+                        color=ft.Colors.BLUE_800,
+                    ),
+                    *(
+                        [
+                            ft.Row(
+                                thumbs,
+                                spacing=8,
+                                wrap=True,
+                                run_spacing=8,
+                            )
+                        ]
+                        if thumbs
+                        else [
+                            ft.Text(
+                                "还没有作品，点右上角上传。",
+                                size=11,
+                                color=ft.Colors.BLUE_700,
+                            )
+                        ]
+                    ),
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            border_radius=12,
+            bgcolor=ft.Colors.BLUE_50,
+            border=ft.Border.all(1, ft.Colors.BLUE_200),
         )
 
     def _lesson_student_works_card(self, lesson: dict) -> ft.Container:

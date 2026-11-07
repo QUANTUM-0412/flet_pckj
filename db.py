@@ -294,6 +294,8 @@ CREATE TABLE IF NOT EXISTS lessons (
     teacher_id    INTEGER REFERENCES users(id),
     template_id   INTEGER REFERENCES schedule_templates(id) ON DELETE SET NULL,
     rolled        INTEGER NOT NULL DEFAULT 1,
+    checked_in_at TEXT    NOT NULL DEFAULT '',
+    completed_at  TEXT    NOT NULL DEFAULT '',
     created_at    TEXT    NOT NULL DEFAULT ''
 );
 
@@ -637,6 +639,34 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE lessons ADD COLUMN template_id INTEGER REFERENCES schedule_templates(id)")
     if "rolled" not in lesson_columns:
         con.execute("ALTER TABLE lessons ADD COLUMN rolled INTEGER NOT NULL DEFAULT 1")
+    if "completed_at" not in lesson_columns:
+        con.execute(
+            "ALTER TABLE lessons ADD COLUMN completed_at TEXT NOT NULL DEFAULT ''"
+        )
+        # 新流程上线前已经点过名的历史课，默认算整理完成；今天和以后的课
+        # 仍留给老师上传完课堂分享图后手动点「本课已完成」。
+        con.execute(
+            """UPDATE lessons
+                  SET completed_at = CASE
+                        WHEN created_at <> '' THEN created_at
+                        ELSE lesson_date || ' 00:00:00'
+                      END
+                WHERE rolled = 1 AND lesson_date < ?""",
+            (_today(),),
+        )
+    if "checked_in_at" not in lesson_columns:
+        con.execute(
+            "ALTER TABLE lessons ADD COLUMN checked_in_at TEXT NOT NULL DEFAULT ''"
+        )
+        con.execute(
+            """UPDATE lessons
+                  SET checked_in_at = CASE
+                        WHEN completed_at <> '' THEN completed_at
+                        WHEN created_at <> '' THEN created_at
+                        ELSE lesson_date || ' 00:00:00'
+                      END
+                WHERE rolled = 1"""
+        )
     hour_columns = {r["name"] for r in con.execute("PRAGMA table_info(hour_types)")}
     template_columns = {r["name"] for r in con.execute("PRAGMA table_info(schedule_templates)")}
     if "weekdays" not in template_columns:
@@ -3783,15 +3813,18 @@ def create_lesson(
 ) -> int:
     """新建一节课。
 
-    ``rolled=1``（默认）表示这节课当场就算数（扣课时、加积分）；
-    传 ``rolled=0`` 就是**先排上、还没点名**：名单在，等上完课点「点名」才算数。
+    ``rolled=1``（默认）用于补录已经完成的课：直接扣课时、加积分并标为完成；
+    传 ``rolled=0`` 就是先排上，之后到课签到、课堂结束时再结算。
     """
+    settled = 0 if rolled is not None and int(rolled) == 0 else 1
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _connect() as con:
         cur = con.execute(
             """INSERT INTO lessons
                    (lesson_date, start_time, minutes, class_type_id, level_id,
-                    comment, plan, note, kind, teacher_id, template_id, rolled, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    comment, plan, note, kind, teacher_id, template_id, rolled,
+                    checked_in_at, completed_at, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 lesson_date,
                 start_time,
@@ -3804,7 +3837,9 @@ def create_lesson(
                 kind,
                 int(teacher_id) if teacher_id else None,
                 int(template_id) if template_id else None,
-                0 if rolled is not None and int(rolled) == 0 else 1,
+                settled,
+                now_text if settled else "",
+                now_text if settled else "",
                 _today(),
             ),
         )
@@ -5298,7 +5333,7 @@ def cancel_course_occurrence(
 ) -> list[int]:
     """取消某门课某一天的课次，并标记这天不上。
 
-    还没点名的课次会直接清掉；已经点名的课次默认拒绝，避免悄悄退回
+    还没完成的课次会直接清掉；已经完成的课次默认拒绝，避免悄悄退回
     已计算的课时和积分。界面明确告知账务变化后，可以传 ``allow_rolled=True``。
     """
     text = (day or "").strip()
@@ -5322,7 +5357,7 @@ def cancel_course_occurrence(
                 (int(template_id), text),
             ).fetchall()
         if any(int(row["rolled"] or 0) for row in lessons) and not allow_rolled:
-            raise ValueError("这节课已经点过名，请先撤销点名再标成不上课")
+            raise ValueError("这节课已经完成，请先撤销完成再标成不上课")
         for lesson in lessons:
             lesson_id = int(lesson["id"])
             removed_lesson_ids.append(lesson_id)
@@ -5360,7 +5395,7 @@ def cancel_course_occurrence(
 
 
 def skip_course_day(template_id: int, day: str, note: str = "") -> None:
-    """把这门课某一天标成"不上"，并清掉那天的待点名课次。"""
+    """把这门课某一天标成"不上"，并清掉那天的待完成课次。"""
     cancel_course_occurrence(template_id, day, note=note)
 
 
@@ -5431,8 +5466,8 @@ def template_lessons(template_id: int) -> list[dict]:
 def generate_template_lessons(template_id: int) -> dict:
     """照着课表把整学期的课一次排出来。
 
-    排出来的课是"还没点名"的：名单在，但**不扣课时、不加积分**，
-    等真的上完课进去点名了才算数。
+    排出来的课是"待签到"的：名单在，但**不扣课时、不加积分**，
+    到课签到后，课堂结束时再点「完成本课」结算。
     """
     template = get_template(template_id)
     if template is None:
@@ -5457,18 +5492,88 @@ def generate_template_lessons(template_id: int) -> dict:
     return {"made": made, "skipped": skipped, "dates": dates}
 
 
-def roll_call(lesson_id: int) -> None:
-    """这节课点过名了：从现在起才真的扣课时、加积分。"""
+def check_in_lesson(lesson_id: int) -> bool:
+    """孩子到课时先签到；只确认到课，不结算课时和积分。"""
     with _connect() as con:
-        row = con.execute("SELECT rolled FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
-        if row is None or row["rolled"]:
+        row = con.execute(
+            "SELECT rolled, checked_in_at FROM lessons WHERE id = ?",
+            (lesson_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("这节课不存在")
+        if row["rolled"]:
+            return False
+        if row["checked_in_at"]:
+            return False
+        con.execute(
+            "UPDATE lessons SET checked_in_at = ? WHERE id = ?",
+            (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                int(lesson_id),
+            ),
+        )
+        return True
+
+
+def uncheck_in_lesson(lesson_id: int) -> None:
+    """撤销到课签到，回到尚未开始的课堂状态。"""
+    with _connect() as con:
+        row = con.execute(
+            "SELECT rolled FROM lessons WHERE id = ?", (lesson_id,)
+        ).fetchone()
+        if row is None:
             return
-        con.execute("UPDATE lessons SET rolled = 1 WHERE id = ?", (lesson_id,))
-    recompute_lesson(lesson_id)
+        if row["rolled"]:
+            raise ValueError("这节课已经完成，请先撤销完成")
+        con.execute(
+            "UPDATE lessons SET checked_in_at = '' WHERE id = ?",
+            (int(lesson_id),),
+        )
+
+
+def finalize_lesson(lesson_id: int) -> None:
+    """课堂结束：统一结算课时和积分，并留下完成标记。"""
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as con:
+        row = con.execute(
+            "SELECT checked_in_at FROM lessons WHERE id = ?", (lesson_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("这节课不存在")
+        con.execute(
+            """UPDATE lessons
+                  SET rolled = 1,
+                      checked_in_at = CASE
+                        WHEN checked_in_at = '' THEN ? ELSE checked_in_at
+                      END,
+                      completed_at = ?
+                WHERE id = ?""",
+            (now_text, now_text, int(lesson_id)),
+        )
+    recompute_lesson(int(lesson_id))
+
+
+def roll_call(lesson_id: int) -> None:
+    """兼容旧调用的“完成并结算”；新界面使用签到 + 完成两段流程。"""
+    finalize_lesson(lesson_id)
+
+
+def reopen_lesson(lesson_id: int) -> None:
+    """重新打开已完成课堂继续修改；已经结算的课时和积分保持不变。"""
+    with _connect() as con:
+        row = con.execute(
+            "SELECT rolled FROM lessons WHERE id = ?", (lesson_id,)
+        ).fetchone()
+        if row is None or not row["rolled"]:
+            return
+        con.execute(
+            "UPDATE lessons SET completed_at = '' WHERE id = ?",
+            (lesson_id,),
+        )
 
 
 def unroll_lesson(lesson_id: int) -> None:
-    """撤销点名：把课改回「待点名」，这节课扣的课时、加的积分都退回来。
+    """撤销完成：退回课时和积分，并清掉签到与完成状态。
 
     名单、课评、教案、照片都不动，以后还能再点一次名。
     """
@@ -5476,14 +5581,44 @@ def unroll_lesson(lesson_id: int) -> None:
         row = con.execute("SELECT rolled FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
         if row is None or not row["rolled"]:
             return
-        con.execute("UPDATE lessons SET rolled = 0 WHERE id = ?", (lesson_id,))
+        con.execute(
+            """UPDATE lessons
+                  SET rolled = 0, checked_in_at = '', completed_at = ''
+                WHERE id = ?""",
+            (lesson_id,),
+        )
     recompute_lesson(lesson_id)  # rolled=0：先清掉这节课的积分
     for a in list_attendance(lesson_id):
         recompute_student(int(a["student_id"]))  # 课时也按"没上这节课"重算
 
 
+def set_lesson_completed(lesson_id: int, completed: bool = True) -> None:
+    """标记课堂照片和内容是否已经整理完成。
+
+    这个状态只用于课堂工作流，不影响点名、课时和积分。还没签到的课不能
+    直接标成完成；撤销完成时也会自动清除完成状态。
+    """
+    with _connect() as con:
+        row = con.execute(
+            "SELECT rolled FROM lessons WHERE id = ?", (lesson_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("这节课不存在")
+        if completed and not int(row["rolled"] or 0):
+            raise ValueError("请先签到")
+        value = (
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if completed
+            else ""
+        )
+        con.execute(
+            "UPDATE lessons SET completed_at = ? WHERE id = ?",
+            (value, int(lesson_id)),
+        )
+
+
 def unrolled_lessons(limit: int = 200) -> list[dict]:
-    """排好了但还没点名的课（按时间从早到晚）。"""
+    """排好了但还没完成的课：待签到或已签到待完成。"""
     with _connect() as con:
         rows = con.execute(
             _LESSON_SELECT

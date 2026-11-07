@@ -60,7 +60,14 @@ class ScheduleMixin:
             entries: list[tuple[str, int, int, int, ft.Control]] = []
             done_templates: set[int] = set()
             for lesson in db.lessons_on(iso):
-                pending = not lesson.get("rolled", 1)
+                if lesson.get("completed_at"):
+                    status = "已完成"
+                elif lesson.get("rolled", 1):
+                    status = "待完成"
+                elif lesson.get("checked_in_at"):
+                    status = "已签到"
+                else:
+                    status = "待签到"
                 if lesson.get("template_id"):
                     done_templates.add(int(lesson["template_id"]))
                 entries.append(
@@ -75,7 +82,7 @@ class ScheduleMixin:
                             or db.lesson_label(lesson),
                             db.lesson_label(lesson),
                             int(lesson["student_count"] or 0),
-                            pending,
+                            status,
                             lambda e, lid=lesson["id"]: self.open_lesson(lid),
                         ),
                     )
@@ -96,7 +103,7 @@ class ScheduleMixin:
                             or db.lesson_label(template),
                             db.lesson_label(template),
                             int(template.get("student_count") or 0),
-                            True,
+                            "待签到",
                             lambda e, day_iso=iso: self._goto_day(day_iso),
                         ),
                     )
@@ -167,11 +174,10 @@ class ScheduleMixin:
         title: str,
         course_label: str,
         student_count: int,
-        pending: bool,
+        status: str,
         on_click,
     ) -> ft.Container:
         """周视图里的课程卡统一从这里生成，保证信息顺序一致。"""
-        status = "待点名" if pending else "已点名"
         return ft.Container(
             content=ft.Column(
                 [
@@ -183,11 +189,10 @@ class ScheduleMixin:
                     ft.Text(
                         f"{course_label} · {student_count} 人 · {status}",
                         size=11,
-                        color=(
-                            ft.Colors.ORANGE_700
-                            if pending
-                            else ft.Colors.GREEN_700
-                        ),
+                        color={
+                            "已完成": ft.Colors.GREEN_700,
+                            "已签到": ft.Colors.BLUE_600,
+                        }.get(status, ft.Colors.ORANGE_700),
                     ),
                 ],
                 spacing=1,
@@ -699,7 +704,8 @@ class ScheduleMixin:
                 ft.Text(
                     (
                         "还没有课程。点右上角「新增课程」，把课程名、老师、"
-                        "开课／结课日期、每周上课时间和学生定好，以后到那天点一下「点名」就行。"
+                        "开课／结课日期、每周上课时间和学生定好，"
+                        "以后孩子到了点「签到」，课堂结束再点「完成本课」结算。"
                     )
                     if not all_courses
                     else "当前筛选没有课程。可以调整月份、状态、老师或科目。",
@@ -749,7 +755,20 @@ class ScheduleMixin:
         elif not lesson.get("template_id"):
             tags.append(_chip("临时", ft.Colors.GREY_500))
         if not lesson.get("rolled", 1):
-            tags.append(_chip("待点名", ft.Colors.ORANGE_700))
+            tags.append(
+                _chip(
+                    "已签到" if lesson.get("checked_in_at") else "待签到",
+                    (
+                        ft.Colors.BLUE_600
+                        if lesson.get("checked_in_at")
+                        else ft.Colors.ORANGE_700
+                    ),
+                )
+            )
+        elif lesson.get("completed_at"):
+            tags.append(_chip("已完成", ft.Colors.GREEN_700))
+        else:
+            tags.append(_chip("待完成", ft.Colors.ORANGE_700))
         title = db.lesson_class_label(lesson) or db.lesson_label(lesson)
         return ft.Container(
             content=ft.Row(
@@ -797,7 +816,11 @@ class ScheduleMixin:
                     *(
                         [
                             ft.Button(
-                                "去点名",
+                                (
+                                    "继续课堂"
+                                    if lesson.get("checked_in_at")
+                                    else "去签到"
+                                ),
                                 icon=ft.Icons.FACT_CHECK,
                                 on_click=lambda e, lid=lesson["id"]: self.open_lesson(lid),
                             )
@@ -815,7 +838,16 @@ class ScheduleMixin:
             ),
             padding=10,
             border_radius=10,
-            bgcolor=ft.Colors.GREY_50,
+            bgcolor=(
+                ft.Colors.GREEN_50
+                if lesson.get("completed_at")
+                else (
+                    ft.Colors.BLUE_50
+                    if lesson.get("checked_in_at")
+                    and not lesson.get("rolled", 1)
+                    else ft.Colors.ORANGE_50
+                )
+            ),
         )
 
     def _schedule_row(
@@ -834,7 +866,11 @@ class ScheduleMixin:
             f"时间 {db.num_text((found or {}).get('minutes') or template['minutes'])} 分钟"
         )
         if found and found.get("rolled", 1):
-            bits.append("已点名")
+            bits.append(
+                "已完成"
+                if found.get("completed_at")
+                else "待重新完成"
+            )
             hours = round(float(found.get("attended_minutes") or 0) / 60, 2)
             points = float(found.get("points") or 0)
             if hours:
@@ -842,21 +878,41 @@ class ScheduleMixin:
             if points:
                 bits.append(f"积分 +{db.num_text(points)}")
         elif found:
-            bits.append("待点名")
+            bits.append(
+                "已签到，待完成"
+                if found.get("checked_in_at")
+                else "待签到"
+            )
         if found and found.get("rolled", 1):
             primary_action = ft.TextButton(
                 (
-                    "已点名 · 进去看"
+                    (
+                        "已完成 · 进去看"
+                        if found.get("completed_at")
+                        else "待完成 · 进去看"
+                    )
                     if self._can_manage_lesson(found)
-                    else "已点名 · 查看"
+                    else (
+                        "已完成 · 查看"
+                        if found.get("completed_at")
+                        else "待完成 · 查看"
+                    )
                 ),
-                icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
+                icon=(
+                    ft.Icons.CHECK_CIRCLE
+                    if found.get("completed_at")
+                    else ft.Icons.CHECK_CIRCLE_OUTLINE
+                ),
                 on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
             )
         elif found:
             primary_action = (
                 ft.Button(
-                    "去点名",
+                    (
+                        "继续课堂"
+                        if found.get("checked_in_at")
+                        else "去签到"
+                    ),
                     icon=ft.Icons.FACT_CHECK,
                     on_click=lambda e, lid=found["id"]: self.open_lesson(lid),
                 )
@@ -870,7 +926,7 @@ class ScheduleMixin:
             primary_action = ft.Text("只读", size=11, color=ft.Colors.GREY_500)
         else:
             primary_action = ft.Button(
-                "点名",
+                "去签到",
                 icon=ft.Icons.FACT_CHECK,
                 on_click=lambda e, tid=template["id"]: self._roll_call(tid),
             )
@@ -942,8 +998,14 @@ class ScheduleMixin:
             border_radius=10,
             bgcolor=(
                 ft.Colors.GREEN_50
-                if found and found.get("rolled", 1)
-                else (ft.Colors.ORANGE_50 if found else ft.Colors.GREY_50)
+                if found and found.get("completed_at")
+                else (
+                    ft.Colors.BLUE_50
+                    if found
+                    and found.get("checked_in_at")
+                    and not found.get("rolled", 1)
+                    else (ft.Colors.ORANGE_50 if found else ft.Colors.GREY_50)
+                )
             ),
         )
 
@@ -1074,13 +1136,14 @@ class ScheduleMixin:
         except ValueError as err:
             self._toast(str(err))
             return
+        self.tab = 1
         self.show_schedule = False
         self.lesson_id = lesson_id
         self.render()
-        self._toast("课次建好了，进去点名才算课时")
+        self._toast("课次建好了；先签到，课堂结束后再完成并结算")
 
     def _generate_semester(self, template: dict) -> None:
-        """一次把这个学期的课排出来（先排课，不点名、不扣课时）。"""
+        """一次把这个学期的课排出来（先排课，不签到、不扣课时）。"""
         if not self._can_manage_course(template):
             self._toast("这是其他老师的课程，只能查看")
             return
@@ -1121,7 +1184,7 @@ class ScheduleMixin:
                     color=ft.Colors.GREY_600,
                 ),
                 ft.Text(
-                    "排出来的课先不点名：名单已经在，课时和积分等上了课点完名再算。",
+                    "排出来的课先不结算：孩子到了签到，课堂结束后再完成并计算课时和积分。",
                     size=12,
                     color=ft.Colors.GREY_600,
                 ),
@@ -1182,8 +1245,8 @@ class ScheduleMixin:
             allow_rolled = True
         elif found:
             message = (
-                f"{_date_text(day)} 的「{title}」已经建了待点名课次。\n"
-                "标成不上课后，会一并删除这节待点名课次，不扣课时、不加积分。确定吗？"
+                f"{_date_text(day)} 的「{title}」已经建了待签到课次。\n"
+                "标成不上课后，会一并删除这节待签到课次，不扣课时、不加积分。确定吗？"
             )
         else:
             message = (

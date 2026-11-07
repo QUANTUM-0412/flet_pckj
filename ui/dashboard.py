@@ -16,12 +16,19 @@ class DashboardMixin:
     def _dashboard_view(self) -> ft.Column:
         today = date.today().isoformat()
         classes = self._dashboard_today_classes()
-        pending_count = sum(not row["rolled"] for row in classes)
+        checkin_count = sum(
+            not row["rolled"] and not row["checked_in"] for row in classes
+        )
+        in_progress_count = sum(
+            not row["rolled"] and row["checked_in"] for row in classes
+        )
 
         if classes:
             summary = f"{_date_text(today)} · {len(classes)} 节课"
-            if pending_count:
-                summary += f"，{pending_count} 节待点名"
+            if checkin_count:
+                summary += f"，{checkin_count} 节待签到"
+            if in_progress_count:
+                summary += f"，{in_progress_count} 节待完成"
         else:
             summary = f"{_date_text(today)} · 今天没有排课"
 
@@ -161,6 +168,12 @@ class DashboardMixin:
                     "teacher": teacher_names.get(teacher_id, ""),
                     "student_count": student_count,
                     "rolled": bool(lesson and lesson.get("rolled")),
+                    "checked_in": bool(
+                        lesson and lesson.get("checked_in_at")
+                    ),
+                    "completed": bool(
+                        lesson and lesson.get("completed_at")
+                    ),
                 }
             )
 
@@ -190,6 +203,8 @@ class DashboardMixin:
                     "teacher": teacher_names.get(teacher_id, ""),
                     "student_count": len(names),
                     "rolled": bool(lesson.get("rolled")),
+                    "checked_in": bool(lesson.get("checked_in_at")),
+                    "completed": bool(lesson.get("completed_at")),
                 }
             )
 
@@ -203,8 +218,18 @@ class DashboardMixin:
         )
 
     def _dashboard_class_row(self, row: dict) -> ft.Container:
-        status = "已点名" if row["rolled"] else "待点名"
-        color = ft.Colors.GREEN_700 if row["rolled"] else ft.Colors.ORANGE_700
+        if row["completed"]:
+            status = "已完成"
+            color = ft.Colors.GREEN_700
+        elif row["rolled"]:
+            status = "待完成"
+            color = ft.Colors.ORANGE_700
+        elif row["checked_in"]:
+            status = "已签到"
+            color = ft.Colors.BLUE_600
+        else:
+            status = "待签到"
+            color = ft.Colors.ORANGE_700
         meta = " · ".join(
             value
             for value in (
@@ -254,7 +279,11 @@ class DashboardMixin:
                         expand=True,
                     ),
                     ft.Button(
-                        "查看课堂" if row["rolled"] else "去点名",
+                        (
+                            "查看课堂"
+                            if row["rolled"]
+                            else ("继续课堂" if row["checked_in"] else "去签到")
+                        ),
                         icon=(
                             ft.Icons.VISIBILITY_OUTLINED
                             if row["rolled"]

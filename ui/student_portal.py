@@ -459,9 +459,33 @@ class StudentPortalMixin:
         plan = (lesson.get("plan") or "").strip()
         student_id = int((self.user or {}).get("student_id") or 0)
         lesson_id = int(lesson.get("lesson_id") or 0)
+        plan_view = ft.Markdown(
+            plan,
+            visible=False,
+            selectable=True,
+            extension_set=ft.MarkdownExtensionSet.GITHUB_FLAVORED,
+            soft_line_break=True,
+        )
+
+        def toggle_plan(e) -> None:
+            plan_view.visible = not plan_view.visible
+            plan_toggle.content = "收起教案" if plan_view.visible else "展开教案"
+            plan_toggle.icon = (
+                ft.Icons.KEYBOARD_ARROW_UP
+                if plan_view.visible
+                else ft.Icons.KEYBOARD_ARROW_DOWN
+            )
+            plan_toggle.update()
+            plan_view.update()
+
+        plan_toggle = ft.TextButton(
+            "展开教案",
+            icon=ft.Icons.KEYBOARD_ARROW_DOWN,
+            on_click=toggle_plan,
+        )
         self._show(
             self._dialog(
-                "课程内容",
+                "课程与作品",
                 ft.Column(
                     [
                         ft.Text(
@@ -471,6 +495,16 @@ class StudentPortalMixin:
                             size=13,
                             weight=ft.FontWeight.W_600,
                         ),
+                        *(
+                            [
+                                self._student_works_card(
+                                    student_id, lesson_id
+                                )
+                            ]
+                            if student_id and lesson_id
+                            else []
+                        ),
+                        ft.Divider(height=1, color=ft.Colors.GREY_200),
                         ft.Text(
                             "课评",
                             size=12,
@@ -483,37 +517,28 @@ class StudentPortalMixin:
                             selectable=True,
                         ),
                         ft.Divider(height=1, color=ft.Colors.GREY_200),
-                        ft.Text(
-                            "教案",
-                            size=12,
-                            color=ft.Colors.GREY_600,
+                        ft.Row(
+                            [
+                                ft.Text(
+                                    "教案",
+                                    size=12,
+                                    color=ft.Colors.GREY_600,
+                                    expand=True,
+                                ),
+                                *([plan_toggle] if plan else []),
+                            ],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
+                        plan_view,
                         *(
                             [
-                                ft.Markdown(
-                                    plan,
-                                    selectable=True,
-                                    extension_set=ft.MarkdownExtensionSet.GITHUB_FLAVORED,
-                                    soft_line_break=True,
-                                )
-                            ]
-                            if plan
-                            else [
                                 ft.Text(
                                     "老师暂未上传教案。",
                                     size=13,
                                     color=ft.Colors.GREY_500,
                                 )
                             ]
-                        ),
-                        *(
-                            [
-                                ft.Divider(height=1, color=ft.Colors.GREY_200),
-                                self._student_works_card(
-                                    student_id, lesson_id
-                                ),
-                            ]
-                            if student_id and lesson_id
+                            if not plan
                             else []
                         ),
                     ],
