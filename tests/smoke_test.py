@@ -5253,13 +5253,20 @@ ok(find_text(page.controls[0], "学生作品（4 张）"), "老师能在课次�
 portal_attendance = db.list_attendance(portal_lesson)[0]["id"]
 app._open_poster_for(portal_attendance, portal_lesson)
 poster_choose = top_dialog(page)
+student_work_boxes = [
+    control
+    for control in walk(poster_choose)
+    if isinstance(control, ft.Checkbox)
+    and control.label == "学生作品"
+]
 ok(
-    any(
-        isinstance(control, ft.Checkbox)
-        and control.label == "学生作品"
-        for control in walk(poster_choose)
-    ),
-    "老师做孩子海报时能选用学生作品",
+    len(student_work_boxes) == 4
+    and all(box.value for box in student_work_boxes),
+    "孩子自己上传的作品会进入海报选图并默认勾选",
+)
+ok(
+    find_text(poster_choose, "勾选后会作为作品图片出现在海报左下角"),
+    "海报选图框明确说明学生作品的用途",
 )
 app._close()
 app.user = {

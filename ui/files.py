@@ -1111,15 +1111,16 @@ class FilesMixin:
         if not self._can_manage_lesson(lesson):
             self._toast("这节课由其他老师上课，只能查看")
             return
-        # 孩子自己的照片放前面，全班合影补在后面。一张全班照传一次，
-        # 每个孩子的海报都能用上，不用挨个重复上传。
-        photos = db.list_files("attendance", attendance_id, "照片")
-        photos += db.list_files("lesson", lesson_id, "照片")
-        photos += [
+        # 孩子人像 → 孩子自己上传的作品 → 全班合影。
+        # 这样默认选前 4 张时，自己的作品不会被大量班级照片挤掉。
+        portrait_photos = db.list_files("attendance", attendance_id, "照片")
+        own_works = [
             row
             for row in db.list_files("lesson", lesson_id, "学生作品")
             if int(row.get("student_id") or 0) == int(a["student_id"])
         ]
+        class_photos = db.list_files("lesson", lesson_id, "照片")
+        photos = portrait_photos + own_works + class_photos
         if len(photos) > 1:
             self._choose_poster_photos(
                 photos,
@@ -1376,6 +1377,12 @@ class FilesMixin:
                             "主照片会铺满大图，其他照片作为作品叠在左下角。",
                             size=12,
                             color=ft.Colors.GREY_600,
+                        ),
+                        ft.Text(
+                            "孩子自己上传的作品已列在下面；勾选后会作为作品图片"
+                            "出现在海报左下角。",
+                            size=12,
+                            color=ft.Colors.BLUE_700,
                         ),
                         main_dd,
                         ft.Row(
