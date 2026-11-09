@@ -5,7 +5,15 @@ from __future__ import annotations
 import flet as ft
 
 import db
-from .common import DIALOG_WIDTH, _dd, _opts, _status_opts, _teacher_opts, _tf
+from .common import (
+    DIALOG_WIDTH,
+    _dd,
+    _opts,
+    _row_fields,
+    _status_opts,
+    _teacher_opts,
+    _tf,
+)
 
 
 class EnrollmentMixin:
@@ -33,7 +41,10 @@ class EnrollmentMixin:
             [
                 fields["name"],
                 fields["gender"],
-                ft.Row([fields["grade"], fields["birth_date"]], spacing=10),
+                ft.Row(
+                    _row_fields(fields["grade"], fields["birth_date"]),
+                    spacing=10,
+                ),
                 fields["school"],
                 fields["phone"],
                 fields["guardian"],

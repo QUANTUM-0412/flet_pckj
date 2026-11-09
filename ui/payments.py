@@ -14,6 +14,7 @@ from .common import (
     _level_title,
     _month_text,
     _opts,
+    _row_fields,
     _shift_month,
     _teacher_opts,
     _tf,
@@ -272,7 +273,11 @@ class PaymentsMixin:
             [
                 ft.Text("新学员，先填一下（保存时一并建档）", size=12, color=ft.Colors.GREY_600),
                 new_fields["name"],
-                ft.Row([new_fields["gender"], new_fields["grade"]], spacing=10, expand=False),
+                ft.Row(
+                    _row_fields(new_fields["gender"], new_fields["grade"]),
+                    spacing=10,
+                    expand=False,
+                ),
                 new_fields["birth_date"],
                 new_fields["school"],
                 new_fields["phone"],

@@ -58,6 +58,14 @@ def _dd(label: str, options: list[ft.DropdownOption], value=None, width=None, **
     )
 
 
+def _row_fields(*controls: ft.Control) -> list[ft.Control]:
+    """让并排字段共同填满所在行，不再各自占满单列弹窗宽度。"""
+    for control in controls:
+        control.width = None
+        control.expand = True
+    return list(controls)
+
+
 def _opts(pairs) -> list[ft.DropdownOption]:
     return [ft.DropdownOption(key=str(k), text=str(v)) for k, v in pairs]
 
