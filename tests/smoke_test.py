@@ -175,8 +175,8 @@ def type_school(control, name: str):
 
 
 def pick_school(control, name: str):
-    """从"选填过的"下拉里挑一个学校，像真客户端那样把选中事件也走一遍。"""
-    dd = find_dropdown(control, "选填过的")
+    """从“选学校”下拉里挑一个学校，像真客户端那样把选中事件也走一遍。"""
+    dd = find_dropdown(control, "选学校")
     dd.value = name
     dd.on_select(Evt(dd))
     return dd
@@ -759,7 +759,7 @@ ok(find_text(page.controls[0], "还没有孩子填这个学校"), "卡片上注�
 app._open_new_student()
 dlg = top_dialog(page)
 ok(
-    any(o.key == "云山道小学" for o in find_dropdown(dlg, "选填过的").options),
+    any(o.key == "云山道小学" for o in find_dropdown(dlg, "选学校").options),
     "填学员档案时，字典里的学校能直接挑",
 )
 pick_school(dlg, "云山道小学")
@@ -1218,8 +1218,8 @@ app._close()
 # 下次再打开：填过的学校应该出现在下拉里，挑一下就能填进输入框
 app._open_new_student()
 dlg2 = top_dialog(page)
-ok(find_dropdown(dlg2, "选填过的") is not None, "填过学校之后，旁边多了「选填过的」下拉")
-ok(any(o.key == "实验小学" for o in find_dropdown(dlg2, "选填过的").options), "实验小学在下拉里")
+ok(find_dropdown(dlg2, "选学校") is not None, "填过学校之后，旁边多了「选学校」下拉")
+ok(any(o.key == "实验小学" for o in find_dropdown(dlg2, "选学校").options), "实验小学在下拉里")
 ok(find_field(dlg2, "学校").value in ("", None), "还没挑，输入框是空的")
 pick_school(dlg2, "实验小学")
 ok(find_field(dlg2, "学校").value == "实验小学", "从下拉里挑一下，学校就填进输入框了")

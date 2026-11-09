@@ -40,11 +40,14 @@ class EnrollmentMixin:
         body = self._form_column(
             [
                 fields["name"],
-                fields["gender"],
                 ft.Row(
-                    _row_fields(fields["grade"], fields["birth_date"]),
+                    _row_fields(
+                        fields["gender"],
+                        fields["grade"],
+                    ),
                     spacing=10,
                 ),
+                fields["birth_date"],
                 fields["school"],
                 fields["phone"],
                 fields["guardian"],

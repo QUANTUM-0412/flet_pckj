@@ -113,13 +113,13 @@ def _school_inputs(value: str = "", width=None) -> tuple[ft.Control, ft.TextFiel
         # 还没填过任何学校，就是个普通输入框
         field = _tf("学校", value, width=width)
         return field, field
-    # 有得选的时候：输入框吃掉剩下的宽度，右边留 112 给下拉
+    # 有得选的时候：输入框吃掉剩下的宽度，右边只留短选择器需要的宽度
     field = _tf("学校", value, expand=True)
     picker = ft.Dropdown(
-        label="选填过的",
+        label="选学校",
         options=_opts([(s, s) for s in known]),
         dense=True,
-        width=112,
+        width=88,
         hint_text="下拉选",
         enable_filter=True,
     )

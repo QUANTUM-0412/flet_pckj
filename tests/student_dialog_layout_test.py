@@ -69,24 +69,31 @@ dialog = page.dialogs[-1]
 
 grade = field(dialog, "年级")
 birth_date = field(dialog, "出生日期")
-row = next(
+compact_row = next(
     control
     for control in walk(dialog)
     if isinstance(control, ft.Row)
     and grade in (control.controls or [])
-    and birth_date in (control.controls or [])
+    and field(dialog, "性别") in (control.controls or [])
 )
 
 fixed_width = sum(
     float(getattr(control, "width", 0) or 0)
-    for control in row.controls
+    for control in compact_row.controls
     if not getattr(control, "expand", False)
 )
-occupied_width = fixed_width + row.spacing * (len(row.controls) - 1)
+occupied_width = fixed_width + compact_row.spacing * (
+    len(compact_row.controls) - 1
+)
 assert occupied_width <= DIALOG_WIDTH, (
-    f"年级／出生日期这一行需要 {occupied_width}px，"
+    f"性别／年级这一行需要 {occupied_width}px，"
     f"但弹窗内容只有 {DIALOG_WIDTH}px"
 )
-assert grade.expand and birth_date.expand, "年级和出生日期应共同填满这一行"
+assert all(
+    control.expand for control in compact_row.controls
+), "短选择项应共同填满这一行"
+assert len(compact_row.controls) == 2, "短选择项应保持两列，避免标签被挤成竖排"
+assert birth_date not in compact_row.controls, "出生日期应独占一行"
+assert birth_date.width == DIALOG_WIDTH, "出生日期应使用整行输入宽度"
 
-print("✓ 新增学员的年级／出生日期没有超出弹窗")
+print("✓ 新增学员的短选择项紧凑，出生日期使用整行宽度")
