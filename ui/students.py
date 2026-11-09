@@ -398,9 +398,12 @@ class StudentsMixin:
                     ),
                     [
                         ft.Button(
-                            "新增学员",
+                            "新学员报名",
                             icon=ft.Icons.PERSON_ADD,
-                            on_click=lambda e: self._open_new_student(),
+                            tooltip="建档、报读课程，并可继续记首笔缴费",
+                            on_click=lambda e: self._open_new_student(
+                                with_enrollment=True
+                            ),
                         )
                     ],
                 ),

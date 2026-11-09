@@ -19,7 +19,7 @@ from .common import (
 class EnrollmentMixin:
     """新增学员与报名课程（ClassHoursApp 的一部分）。"""
 
-    def _open_new_student(self) -> None:
+    def _open_new_student(self, *, with_enrollment: bool = False) -> None:
         fields = self._student_fields(width=DIALOG_WIDTH)
         if not self.is_admin():
             teacher_id = self._my_user_id()
@@ -27,42 +27,239 @@ class EnrollmentMixin:
             fields["owner"].disabled = True
             fields["owner"].label = "归属老师（新学员归你）"
 
+        courses = []
+        course_dd = None
+        course_hint = None
+        if with_enrollment:
+            teacher_id = self._my_user_id()
+            courses = [
+                course
+                for course in db.list_templates()
+                if db.course_status(course) != "已结课"
+                and (
+                    self.is_admin()
+                    or int(course.get("teacher_id") or 0) == int(teacher_id or 0)
+                )
+            ]
+            course_dd = _dd(
+                "报读课程",
+                [
+                    ft.DropdownOption(key="", text="暂不报名"),
+                    *_opts(
+                        [
+                            (
+                                course["id"],
+                                db.class_label(course)
+                                + (
+                                    f" · {course['subject']}-{course['level_name']}"
+                                    if course.get("subject")
+                                    and course.get("level_name")
+                                    else ""
+                                )
+                                + (
+                                    f" · {course['teacher_name']}"
+                                    if course.get("teacher_name")
+                                    else ""
+                                ),
+                            )
+                            for course in courses
+                        ]
+                    ),
+                ],
+                value="",
+                width=DIALOG_WIDTH,
+            )
+            course_hint = ft.Text(
+                (
+                    "选一门课，保存时会同时生成报名并把孩子加入课程名单。"
+                    if courses
+                    else "还没有可报的课程；可以先只建档，再到「课程」新增课程。"
+                ),
+                size=11,
+                color=ft.Colors.GREY_600,
+            )
+            submit_button = None
+
+            def sync_course_hint(e=None) -> None:
+                selected = next(
+                    (
+                        course
+                        for course in courses
+                        if str(course["id"]) == (course_dd.value or "")
+                    ),
+                    None,
+                )
+                if selected is None:
+                    course_hint.value = (
+                        "暂不报名也可以先保存档案；以后从学员详情里再报名。"
+                    )
+                else:
+                    details = [
+                        db.class_label(selected),
+                        f"{selected['minutes']} 分钟"
+                        if selected.get("minutes")
+                        else "",
+                        selected.get("teacher_name") or "",
+                    ]
+                    course_hint.value = "将报名：" + " · ".join(
+                        detail for detail in details if detail
+                    )
+                course_hint.update()
+                if submit_button is not None:
+                    submit_button.content = (
+                        "建档并报名" if selected is not None else "保存学员"
+                    )
+                    submit_button.update()
+
+            course_dd.on_select = sync_course_hint
+
         def save(e):
             values = self._student_values(fields, require_birth_date=True)
             if values is None:
                 return
             student_id = db.create_student(values)
             account, password = db.ensure_student_account(student_id)
+            enrollment_id = None
+            if course_dd is not None and (course_dd.value or "").strip():
+                enrollment_id = db.enroll_student_in_course(
+                    student_id, int(course_dd.value)
+                )
             self.page.pop_dialog()
             self.render()
-            self._show_student_credentials(account, password)
+            if enrollment_id is not None:
+                self._show_student_enrollment_ready(
+                    account,
+                    password,
+                    student_id,
+                    enrollment_id,
+                    course_dd.value,
+                )
+            else:
+                self._show_student_credentials(account, password)
 
-        body = self._form_column(
-            [
-                fields["name"],
-                ft.Row(
-                    _row_fields(
-                        fields["gender"],
-                        fields["grade"],
-                    ),
-                    spacing=10,
+        controls = [
+            fields["name"],
+            ft.Row(
+                _row_fields(
+                    fields["gender"],
+                    fields["grade"],
                 ),
-                fields["birth_date"],
-                fields["school"],
-                fields["phone"],
-                fields["guardian"],
-                fields["status"],
-                fields["owner"],
-                fields["note"],
+                spacing=10,
+            ),
+            fields["birth_date"],
+            fields["school"],
+            fields["phone"],
+            fields["guardian"],
+        ]
+        if course_dd is not None:
+            controls += [
+                ft.Divider(height=1),
+                ft.Text("报读课程", size=15, weight=ft.FontWeight.W_600),
+                ft.Text(
+                    "课程是正式排课和点名用的班级；付费课时本身仍按课时类型入账。",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+                course_dd,
+                course_hint,
             ]
+        controls += [
+            ft.Divider(height=1),
+            fields["status"],
+            fields["owner"],
+            fields["note"],
+        ]
+        submit_button = ft.Button(
+            "保存学员" if with_enrollment else "保存",
+            on_click=save,
         )
+        body = self._form_column(controls)
         self._show(
             self._dialog(
-                "新增学员",
+                "新学员报名" if with_enrollment else "新增学员",
                 body,
                 [
                     ft.TextButton("取消", on_click=self._close),
-                    ft.Button("保存", on_click=save),
+                    submit_button,
+                ],
+            )
+        )
+
+    def _show_student_enrollment_ready(
+        self,
+        account: dict,
+        password: str | None,
+        student_id: int,
+        enrollment_id: int,
+        class_id: int,
+    ) -> None:
+        course = db.get_template(int(class_id))
+        course_label = db.class_label(course) if course else "已选课程"
+        password_text = (
+            password or "密码已设置过；如需修改，请到学员档案里重设。"
+        )
+
+        def start_payment(e=None) -> None:
+            self.page.pop_dialog()
+            self.render()
+            self._open_payment_dialog(
+                student_id=student_id,
+                enrollment_id=enrollment_id,
+            )
+
+        self._show(
+            self._dialog(
+                "学员已建档并报名",
+                self._form_column(
+                    [
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(
+                                        "已加入课程",
+                                        size=11,
+                                        color=ft.Colors.BLUE_800,
+                                    ),
+                                    ft.Text(
+                                        course_label,
+                                        size=15,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                ],
+                                spacing=2,
+                                tight=True,
+                            ),
+                            padding=10,
+                            border_radius=10,
+                            bgcolor=ft.Colors.BLUE_50,
+                        ),
+                        ft.Text(
+                            "接下来可以立即记首笔缴费；课时会自动挂到这门课，"
+                            "不用再回学员详情里找报名。",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Text(
+                            f"用户名：{account['username']}",
+                            size=14,
+                            weight=ft.FontWeight.W_600,
+                            selectable=True,
+                        ),
+                        ft.Text(
+                            f"初始密码：{password_text}",
+                            size=14,
+                            weight=ft.FontWeight.W_600,
+                            selectable=True,
+                        ),
+                    ]
+                ),
+                [
+                    ft.TextButton("稍后再说", on_click=self._close),
+                    ft.Button(
+                        "记首笔缴费",
+                        icon=ft.Icons.PAYMENTS_OUTLINED,
+                        on_click=start_payment,
+                    ),
                 ],
             )
         )

@@ -236,7 +236,12 @@ class PaymentsMixin:
             bits.append(p["note"])
         return bits
 
-    def _open_payment_dialog(self, payment: dict | None = None, student_id: int | None = None) -> None:
+    def _open_payment_dialog(
+        self,
+        payment: dict | None = None,
+        student_id: int | None = None,
+        enrollment_id: int | None = None,
+    ) -> None:
         admin = self.is_admin()
         editing = payment is not None
         if editing and not admin:
@@ -539,8 +544,42 @@ class PaymentsMixin:
                 options.append(ft.DropdownOption(key=str(en["id"]), text=label))
             return options
 
+        package_enroll_dd = _dd(
+            "哪门课程（报名）",
+            enroll_options(),
+            value=str(enrollment_id) if enrollment_id else "",
+            width=DIALOG_WIDTH,
+            visible=False,
+        )
+
+        def on_package_enrollment(e=None, update: bool = True) -> None:
+            selected = next(
+                (
+                    en
+                    for en in student_enrollments()
+                    if str(en["id"]) == (package_enroll_dd.value or "")
+                ),
+                None,
+            )
+            if selected is not None and selected.get("level_id"):
+                package_level.value = str(selected["level_id"])
+            package_level.disabled = selected is not None
+            if update:
+                package_level.update()
+                refresh_total()
+
+        package_enroll_dd.on_select = on_package_enrollment
+        on_package_enrollment(update=False)
+
         def refresh_enrollment_rows(update: bool = True) -> None:
             """孩子换了，每一行的「哪门课」候选也要跟着换。"""
+            package_enroll_dd.options = enroll_options()
+            if package_enroll_dd.value and not any(
+                str(option.key) == str(package_enroll_dd.value)
+                for option in package_enroll_dd.options
+            ):
+                package_enroll_dd.value = ""
+            on_package_enrollment(update=False)
             for row in rows:
                 control = row.get("enroll")
                 if control is None:
@@ -552,6 +591,8 @@ class PaymentsMixin:
                     control.value = ""
                 if update:
                     control.update()
+            if update:
+                package_enroll_dd.update()
 
         def add_row(
             hour_type_id=None,
@@ -633,6 +674,35 @@ class PaymentsMixin:
                 "package_item": False,
             }
 
+            def apply_enrollment(en: dict, update: bool = True) -> None:
+                if en.get("level_id"):
+                    level_dd.value = str(en["level_id"])
+                hour_id = hour_type_for_class_type(en.get("class_type_name"))
+                if hour_id and not locked:
+                    type_dd.value = str(hour_id)
+                if admin and en.get("owner_teacher_id"):
+                    owner_dd.value = str(en["owner_teacher_id"])
+                    row["owner_touched"] = True
+                elif not admin:
+                    owner_dd.value = str(self._my_user_id())
+                    row["owner_touched"] = True
+                if update:
+                    for control in (level_dd, type_dd, owner_dd):
+                        control.update()
+                    refresh_total()
+
+            if enrollment_id:
+                selected_enrollment = next(
+                    (
+                        en
+                        for en in student_enrollments()
+                        if str(en["id"]) == str(enrollment_id)
+                    ),
+                    None,
+                )
+                if selected_enrollment is not None:
+                    apply_enrollment(selected_enrollment, update=False)
+
             def on_enroll(e=None):
                 """选了哪门课，等级／课时类型／归属老师就照这条报名填上。"""
                 want = (enroll_dd.value or "").strip()
@@ -641,19 +711,7 @@ class PaymentsMixin:
                 for en in student_enrollments():
                     if str(en["id"]) != want:
                         continue
-                    if en.get("level_id"):
-                        level_dd.value = str(en["level_id"])
-                    hour_id = hour_type_for_class_type(en.get("class_type_name"))
-                    if hour_id and not locked:
-                        type_dd.value = str(hour_id)
-                    if admin and en.get("owner_teacher_id"):
-                        owner_dd.value = str(en["owner_teacher_id"])
-                        row["owner_touched"] = True
-                    elif not admin:
-                        owner_dd.value = str(self._my_user_id())
-                    for control in (level_dd, type_dd, owner_dd):
-                        control.update()
-                    refresh_total()
+                    apply_enrollment(en)
                     break
 
             enroll_dd.on_select = on_enroll
@@ -831,6 +889,7 @@ class PaymentsMixin:
             has_package = package is not None
             package_table_holder.content = package_table(package) if package else None
             package_table_holder.visible = has_package
+            package_enroll_dd.visible = has_package
             package_level.visible = has_package
             gift_holder.visible = has_package
             rows_holder.visible = not has_package
@@ -843,6 +902,7 @@ class PaymentsMixin:
             )
             if update:
                 package_table_holder.update()
+                package_enroll_dd.update()
                 package_level.update()
                 gift_holder.update()
                 rows_holder.update()
@@ -854,7 +914,18 @@ class PaymentsMixin:
         def apply_package(update: bool = True) -> None:
             clear_rows()
             if not selected_package():
-                add_row("", "", "", None, update=False)
+                add_row(
+                    "",
+                    "",
+                    "",
+                    None,
+                    enrollment_id=(
+                        int(package_enroll_dd.value)
+                        if (package_enroll_dd.value or "").strip()
+                        else None
+                    ),
+                    update=False,
+                )
             apply_owner_defaults()
             refresh_package_ui(update=update)
 
@@ -862,6 +933,15 @@ class PaymentsMixin:
             package = selected_package()
             payment_items = db.list_payment_items(payment["id"])
             if package:
+                package_enroll_dd.value = next(
+                    (
+                        str(item["enrollment_id"])
+                        for item in payment_items
+                        if item.get("enrollment_id")
+                    ),
+                    "",
+                )
+                on_package_enrollment(update=False)
                 level_value = next(
                     (str(item["level_id"]) for item in payment_items if item["level_id"]),
                     "",
@@ -893,7 +973,14 @@ class PaymentsMixin:
                         update=False,
                     )
         else:
-            add_row("", "", "", None, update=False)
+            add_row(
+                "",
+                "",
+                "",
+                None,
+                enrollment_id=enrollment_id,
+                update=False,
+            )
 
         def apply_owner_defaults():
             """把没手动改过的行的归属老师，按「这个孩子这门课」的归属补上。"""
@@ -929,6 +1016,11 @@ class PaymentsMixin:
                 else None
             )
             if package:
+                enrollment_id = (
+                    int(package_enroll_dd.value)
+                    if (package_enroll_dd.value or "").strip()
+                    else None
+                )
                 for index, item in enumerate(package["items"]):
                     items.append(
                         {
@@ -939,7 +1031,7 @@ class PaymentsMixin:
                             "owner_teacher_id": (
                                 None if admin else self._my_user_id()
                             ),
-                            "enrollment_id": None,
+                            "enrollment_id": enrollment_id,
                             "package_item": True,
                         }
                     )
@@ -960,7 +1052,7 @@ class PaymentsMixin:
                             "owner_teacher_id": (
                                 None if admin else self._my_user_id()
                             ),
-                            "enrollment_id": None,
+                            "enrollment_id": enrollment_id,
                             "package_item": False,
                         }
                     )
@@ -1118,6 +1210,7 @@ class PaymentsMixin:
                 package_dd,
                 package_hint,
                 package_table_holder,
+                package_enroll_dd,
                 package_level,
                 ft.Text(
                     "课时明细",

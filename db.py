@@ -3354,6 +3354,64 @@ def create_enrollment(
     return new_id
 
 
+def enroll_student_in_course(student_id: int, class_id: int) -> int:
+    """把学员一次加入课程名单和报名，重复调用不会重复报名。"""
+    with _connect() as con:
+        template = con.execute(
+            "SELECT * FROM schedule_templates WHERE id = ?", (int(class_id),)
+        ).fetchone()
+        if template is None:
+            raise ValueError("这门课程不存在")
+        existing = con.execute(
+            """SELECT id FROM enrollments
+                WHERE student_id = ? AND class_id = ?
+                ORDER BY id LIMIT 1""",
+            (student_id, int(class_id)),
+        ).fetchone()
+        if existing is None:
+            owner = template["teacher_id"]
+            if not owner and template["level_id"]:
+                level = con.execute(
+                    "SELECT default_teacher_id FROM levels WHERE id = ?",
+                    (template["level_id"],),
+                ).fetchone()
+                owner = level["default_teacher_id"] if level is not None else None
+            if not owner:
+                student = con.execute(
+                    "SELECT owner_teacher_id FROM students WHERE id = ?",
+                    (student_id,),
+                ).fetchone()
+                owner = (
+                    student["owner_teacher_id"] if student is not None else None
+                )
+            cur = con.execute(
+                """INSERT INTO enrollments
+                       (student_id, level_id, class_type_id, class_id, minutes,
+                        status, owner_teacher_id, note, created_at)
+                   VALUES(?, ?, ?, ?, ?, '在读', ?, '课程报名', ?)""",
+                (
+                    student_id,
+                    template["level_id"],
+                    template["class_type_id"],
+                    int(class_id),
+                    int(template["minutes"] or 0),
+                    owner,
+                    _today(),
+                ),
+            )
+            enrollment_id = int(cur.lastrowid)
+        else:
+            enrollment_id = int(existing["id"])
+        con.execute(
+            """INSERT OR IGNORE INTO schedule_students(template_id, student_id)
+               VALUES(?, ?)""",
+            (int(class_id), student_id),
+        )
+        _apply_course_dates(con, int(class_id))
+    refresh_student(student_id)
+    return enrollment_id
+
+
 def update_enrollment(
     enrollment_id: int,
     level_id: int | None,
