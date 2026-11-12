@@ -3348,26 +3348,11 @@ def level_full_name(row: sqlite3.Row | dict) -> str:
 
 
 def level_display_name(row: sqlite3.Row | dict) -> str:
-    """界面和下拉里显示的等级名，竞赛／考级再带上活动名称。"""
+    """等级、课程自动命名和规范课程名共用的统一文本。"""
     data = dict(row)
     if not data.get("name") and data.get("level_name"):
         data["name"] = data["level_name"]
-    base = level_full_name(data)
-    category = data["level_type"] if data.get("level_type") else ""
-    if category not in LEVEL_TYPES:
-        category = badge_category_for_level(data)
-    display = base
-    if category and not base.endswith(f"-{category}"):
-        display = f"{base}-{category}"
-    event_name = (
-        (data["badge_event_name"] or "").strip()
-        if "badge_event_name" in data
-        else ""
-    )
-    if category in BADGE_CATEGORIES and event_name:
-        label = "比赛" if category == "竞赛" else "考级"
-        display += f" · {label}：{event_name}"
-    return display
+    return course_level_text(data)
 
 
 def badge_group_name(row: sqlite3.Row | dict) -> str:
@@ -5072,19 +5057,7 @@ def _is_unlimited(con: sqlite3.Connection, student_id: int, hour_type_id: int) -
 
 def lesson_label(lesson: dict) -> str:
     lesson = dict(lesson)
-    subject = (lesson.get("subject") or "").strip()
-    level = (
-        (lesson.get("level_name") or lesson.get("name") or "").strip()
-    )
-    name = f"{subject}-{level}" if subject else level
-    category = (
-        (lesson.get("badge_category") or "").strip()
-        or (lesson.get("level_type") or "").strip()
-    )
-    event_name = (lesson.get("badge_event_name") or "").strip()
-    if category in BADGE_CATEGORIES and event_name:
-        label = "比赛" if category == "竞赛" else "考级"
-        name += f" · {label}：{event_name}"
+    name = level_display_name(lesson)
     parts = [p for p in [name, lesson.get("class_type_name") or ""] if p]
     return " · ".join(parts) or "上课"
 
