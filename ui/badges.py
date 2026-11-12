@@ -414,7 +414,11 @@ class BadgesMixin:
             field.on_change = refresh_point_hints
 
         def add_student_row(
-            student: dict, *, selected_value: bool, manual: bool = False
+            student: dict,
+            *,
+            selected_value: bool,
+            manual: bool = False,
+            refresh: bool = False,
         ) -> None:
             selected = ft.Checkbox(label=student["name"], value=False)
             result = _dd(
@@ -456,7 +460,8 @@ class BadgesMixin:
                     bgcolor=ft.Colors.GREY_50,
                 )
             )
-            rows_column.update()
+            if refresh:
+                rows_column.update()
 
         for student in manageable:
             add_student_row(student, selected_value=False)
@@ -492,7 +497,12 @@ class BadgesMixin:
                 if student is None:
                     self._toast("请先选择要补录的学员")
                     return
-                add_student_row(student, selected_value=True, manual=True)
+                add_student_row(
+                    student,
+                    selected_value=True,
+                    manual=True,
+                    refresh=True,
+                )
                 manual_picker.options = [
                     option
                     for option in manual_picker.options

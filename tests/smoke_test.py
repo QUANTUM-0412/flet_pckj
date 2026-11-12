@@ -5891,6 +5891,35 @@ app.user = {
     "display_name": "管理员",
     "role": db.ROLE_ROOT,
 }
+award_dialog_open_error = ""
+noop_control_update = ft.BaseControl.update
+mount_test_badge = db.save_student_badge(
+    portal_student,
+    "竞赛",
+    "弹窗挂载测试",
+    "小低组",
+    "一等奖",
+    "2026-10-02",
+    level_id=competition_points_level_id,
+)
+
+
+def strict_control_update(control):
+    control.page
+
+
+ft.BaseControl.update = strict_control_update
+try:
+    app._open_level_award_dialog(competition_points_level)
+except RuntimeError as err:
+    award_dialog_open_error = str(err)
+finally:
+    ft.BaseControl.update = noop_control_update
+ok(
+    not award_dialog_open_error,
+    "本场颁发弹窗不会在挂载到页面之前刷新控件",
+)
+db.delete_student_badge(mount_test_badge)
 app._open_level_award_dialog(competition_points_level)
 dlg = top_dialog(page)
 ok(
