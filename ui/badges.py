@@ -563,12 +563,17 @@ class BadgesMixin:
             min_lines=2,
             max_lines=3,
         )
+        saved_award_points = (
+            db.get_badge_point_rules(category, project_name)
+            if category == "竞赛"
+            else {}
+        )
         point_fields: dict[str, ft.TextField] = {}
         if category == "竞赛":
             for choice in choices:
                 point_fields[choice] = _tf(
                     f"{choice}积分",
-                    "0",
+                    db.num_text(saved_award_points.get(choice, 0)),
                     width=100,
                     keyboard_type=ft.KeyboardType.NUMBER,
                 )
@@ -610,12 +615,7 @@ class BadgesMixin:
             refresh: bool = False,
         ) -> None:
             group_name = db.badge_group_name(level)
-            checkbox_label = (
-                f"{student['name']}（{group_name}）"
-                if len(levels) > 1
-                else student["name"]
-            )
-            selected = ft.Checkbox(label=checkbox_label, value=False)
+            selected = ft.Checkbox(label=student["name"], value=False)
             result = _dd(
                 f"{student['name']}的结果",
                 [ft.DropdownOption(key="", text="请选择结果")]
@@ -633,11 +633,17 @@ class BadgesMixin:
                     ft.Row(
                         [
                             selected,
-                            ft.Text(
-                                group_name,
-                                size=10,
-                                color=ft.Colors.BLUE_700,
-                                width=110,
+                            *(
+                                [
+                                    ft.Text(
+                                        group_name,
+                                        size=10,
+                                        color=ft.Colors.BLUE_700,
+                                        width=110,
+                                    )
+                                ]
+                                if len(levels) > 1
+                                else []
                             ),
                             result,
                             hint,
@@ -688,10 +694,9 @@ class BadgesMixin:
                     ]
                 ),
                 value="",
-                width=DIALOG_WIDTH if len(levels) == 1 else None,
+                width=DIALOG_WIDTH,
             )
             if len(levels) > 1:
-                manual_picker.expand = True
                 manual_group_picker = _dd(
                     "补录组别",
                     _opts(
@@ -701,7 +706,7 @@ class BadgesMixin:
                         ]
                     ),
                     value=str(levels[0]["id"]),
-                    width=180,
+                    width=DIALOG_WIDTH,
                 )
 
             def add_manual_student(e=None) -> None:
@@ -856,11 +861,11 @@ class BadgesMixin:
                         *(
                             [
                                 ft.Text(
-                                    "没报竞赛课但参加了比赛的孩子，可以从这里补录。",
+                                    "没报竞赛课但参加了比赛的孩子，可以在这里补录。",
                                     size=11,
                                     color=ft.Colors.GREY_600,
                                 ),
-                                ft.Row(
+                                ft.Column(
                                     [
                                         manual_picker,
                                         *(
@@ -868,10 +873,12 @@ class BadgesMixin:
                                             if manual_group_picker is not None
                                             else []
                                         ),
-                                        add_manual_button,
+                                        ft.Row(
+                                            [add_manual_button],
+                                            alignment=ft.MainAxisAlignment.END,
+                                        ),
                                     ],
                                     spacing=8,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),
                             ]
                             if manual_picker is not None
@@ -884,7 +891,8 @@ class BadgesMixin:
                         ),
                         rows_column,
                         note,
-                    ]
+                    ],
+                    scroll=True,
                 ),
                 [
                     ft.TextButton("取消", on_click=self._close),

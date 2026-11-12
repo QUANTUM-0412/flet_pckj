@@ -167,6 +167,16 @@ CREATE TABLE IF NOT EXISTS student_badges (
     created_at  TEXT    NOT NULL DEFAULT ''
 );
 
+-- 比赛／考级每档奖项的固定奖励积分，按活动名称复用
+CREATE TABLE IF NOT EXISTS badge_point_rules (
+    category    TEXT    NOT NULL,
+    event_name  TEXT    NOT NULL,
+    result      TEXT    NOT NULL,
+    points      REAL    NOT NULL DEFAULT 0,
+    updated_at  TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY(category, event_name, result)
+);
+
 -- 学校字典：下拉框里能挑的学校名（学员档案上填过的也会一起算进来）
 CREATE TABLE IF NOT EXISTS schools (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2962,6 +2972,61 @@ def _clean_award_points(
     return points
 
 
+def get_badge_point_rules(
+    category: str, event_name: str
+) -> dict[str, float]:
+    """读取同一比赛／考级活动保存过的奖项积分。"""
+    event_name = (event_name or "").strip()
+    with _connect() as con:
+        rows = con.execute(
+            """SELECT result, points FROM badge_point_rules
+                WHERE category = ? AND event_name = ?""",
+            (category, event_name),
+        ).fetchall()
+        points = {
+            str(row["result"]): float(row["points"] or 0)
+            for row in rows
+        }
+        if event_name and len(points) < len(
+            COMPETITION_RESULTS if category == "竞赛" else EXAM_RESULTS
+        ):
+            legacy_rows = con.execute(
+                """SELECT sb.result, sb.points_awarded
+                     FROM student_badges sb
+                     JOIN levels l ON l.id = sb.level_id
+                    WHERE sb.category = ? AND l.badge_event_name = ?
+                      AND sb.points_awarded > 0
+                    ORDER BY sb.happened_on DESC, sb.id DESC""",
+                (category, event_name),
+            ).fetchall()
+            for row in legacy_rows:
+                points.setdefault(
+                    str(row["result"]), float(row["points_awarded"] or 0)
+                )
+    return points
+
+
+def _save_badge_point_rules(
+    con: sqlite3.Connection,
+    category: str,
+    event_name: str,
+    points_by_result: dict[str, float],
+) -> None:
+    event_name = (event_name or "").strip()
+    if not event_name:
+        return
+    for result, points in points_by_result.items():
+        con.execute(
+            """INSERT INTO badge_point_rules
+                   (category, event_name, result, points, updated_at)
+               VALUES(?, ?, ?, ?, ?)
+               ON CONFLICT(category, event_name, result)
+               DO UPDATE SET points = excluded.points,
+                             updated_at = excluded.updated_at""",
+            (category, event_name, result, float(points), _today()),
+        )
+
+
 def _sync_badge_point_transaction(
     con: sqlite3.Connection,
     *,
@@ -3059,6 +3124,13 @@ def save_badge_awards_for_level(
             if existing_extra_ids != extra_ids:
                 raise ValueError("补录的学员不存在")
         point_amounts = _clean_award_points(points_by_result, allowed_results)
+        if category == "竞赛" and points_by_result is not None:
+            _save_badge_point_rules(
+                con,
+                category,
+                (level["badge_event_name"] or "").strip(),
+                point_amounts,
+            )
         cleaned: list[tuple[int, str]] = []
         for raw_student_id, raw_result in awards.items():
             student_id = int(raw_student_id)

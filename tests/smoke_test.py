@@ -6204,8 +6204,22 @@ ok(
     ),
     "本场颁发可以填写四档奖励积分",
 )
+award_body = next(
+    control
+    for control in walk(dlg)
+    if isinstance(control, ft.Column) and find_text(control, "本场奖励积分")
+)
+ok(
+    award_body.scroll == ft.ScrollMode.AUTO,
+    "颁奖弹窗内容可以滚动，长名单不会挡住底部按钮",
+)
 manual_picker = find_dropdown(dlg, "补录参赛学生")
 manual_group = find_dropdown(dlg, "补录组别")
+ok(
+    manual_picker.width == manual_group.width
+    and (manual_picker.width or 0) > 200,
+    "补录学员、组别和加入按钮纵向排列，不再互相重叠",
+)
 manual_picker.value = str(portal_student)
 click(dlg, "加入本场")
 manual_group.value = str(competition_high_level_id)
@@ -6233,6 +6247,29 @@ ok(
     and db.student_points(portal_student) == portal_award_base + 20
     and db.student_points(manual_award_student) == manual_award_base + 4,
     "同一场比赛的 GPL 和 Python 组可以在同一个弹窗里颁奖并发放积分",
+)
+app._open_badge_award_dialog(
+    [competition_points_level, competition_high_level]
+)
+dlg = top_dialog(page)
+ok(
+    [
+        find_field(dlg, f"{result}积分").value
+        for result in ("一等奖", "二等奖", "三等奖", "鼓励奖")
+    ]
+    == ["20", "12", "8", "4"],
+    "重新打开同一场比赛时会自动带回已填写的奖励积分",
+)
+app._close()
+with db._connect() as rules_con:
+    rules_con.execute(
+        """DELETE FROM badge_point_rules
+            WHERE category = '竞赛' AND event_name = '2026-融智杯'"""
+    )
+ok(
+    db.get_badge_point_rules("竞赛", "2026-融智杯")
+    == {"一等奖": 20, "鼓励奖": 4},
+    "旧奖状没有积分规则表记录时也能自动补回历史积分",
 )
 first_competition_title = competition_awards[0]["title"]
 first_competition_day = competition_awards[0]["happened_on"]
