@@ -52,9 +52,16 @@ class BadgesMixin:
             for level in db.list_levels()
             if db.badge_category_for_level(level)
         ]
-        competition_count = sum(
-            1 for level in levels if db.badge_category_for_level(level) == "竞赛"
-        )
+        competition_projects: dict[str, list[dict]] = {}
+        for level in levels:
+            if db.badge_category_for_level(level) != "竞赛":
+                continue
+            project_key = (
+                (level["subject"] or "").strip()
+                or f"level:{int(level['id'])}"
+            )
+            competition_projects.setdefault(project_key, []).append(dict(level))
+        competition_count = len(competition_projects)
         exam_count = sum(
             1 for level in levels if db.badge_category_for_level(level) == "考级"
         )
@@ -66,13 +73,21 @@ class BadgesMixin:
                 for level in levels
                 if db.badge_category_for_level(level) == category
             ]
-            cards = [
-                self._badge_level_card(level)
-                for level in group_levels
-            ]
+            if category == "竞赛":
+                cards = [
+                    self._badge_competition_card(project_levels)
+                    for project_levels in competition_projects.values()
+                ]
+                count_text = len(competition_projects)
+            else:
+                cards = [
+                    self._badge_level_card(level)
+                    for level in group_levels
+                ]
+                count_text = len(group_levels)
             groups.append(
                 self._section(
-                    f"{category_label}目录（{len(group_levels)}）",
+                    f"{category_label}目录（{count_text}）",
                     ft.Column(
                         cards
                         or [
@@ -96,8 +111,8 @@ class BadgesMixin:
                 ),
                 self._card(
                     ft.Text(
-                        "这里按等级汇总已关联的学员。报名、缴费或上过对应课程的学员会自动出现；"
-                        "比赛结束或考级完成后，点「本场颁发」一次登记每人的结果。"
+                        "竞技按比赛项目汇总，同一项目的小低组、小高组会放在一张卡片里一起颁发；"
+                        "考级仍按级别汇总。报名、缴费或上过对应课程的学员会自动出现。"
                         "没报竞赛课但实际参赛的孩子，可以在颁发时补录。"
                         "谁上的课谁颁发，其他老师只读。",
                         size=12,
@@ -110,6 +125,147 @@ class BadgesMixin:
             expand=True,
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
+        )
+
+    def _badge_competition_card(self, levels: list[dict]) -> ft.Container:
+        levels = [dict(level) for level in levels]
+        if not levels:
+            return ft.Container()
+        project_name = (levels[0].get("subject") or "").strip() or "未命名比赛"
+        participants: list[dict] = []
+        awards: list[dict] = []
+        for level in levels:
+            for student in db.list_badge_level_participants(level["id"]):
+                item = dict(student)
+                item["award_level_id"] = int(level["id"])
+                item["award_group_name"] = level["name"] or ""
+                participants.append(item)
+            for badge in db.list_level_badges(level["id"]):
+                item = dict(badge)
+                item["award_group_name"] = level["name"] or ""
+                awards.append(item)
+        manageable = [
+            student
+            for student in participants
+            if self._can_award_badge_student(student)
+        ]
+        manual_candidates = self._manual_award_candidates(
+            participants, category="竞赛"
+        )
+        group_names = "、".join(
+            level["name"] for level in levels if (level["name"] or "").strip()
+        )
+        detail = " · ".join(
+            [
+                f"{len(levels)} 个组别",
+                group_names,
+                f"已关联 {len(participants)} 人",
+                f"已颁发 {len(awards)} 枚",
+            ]
+        )
+        participant_rows = [
+            ft.Container(
+                ft.Row(
+                    [
+                        ft.Text(
+                            student["name"],
+                            size=13,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                        ft.Text(
+                            f"{student['award_group_name']} · "
+                            + " · ".join(
+                                part
+                                for part in [
+                                    student.get("grade") or "",
+                                    student.get("school") or "",
+                                ]
+                                if part
+                            ),
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=7),
+                border_radius=8,
+                bgcolor=ft.Colors.GREY_50,
+            )
+            for student in participants
+        ]
+        award_rows = [self._level_award_row(badge) for badge in awards]
+        action = (
+            ft.Button(
+                "本场颁发",
+                icon=ft.Icons.MILITARY_TECH,
+                on_click=lambda e: self._open_badge_award_dialog(levels),
+            )
+            if manageable or manual_candidates
+            else None
+        )
+        return self._card(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        f"{project_name} · 竞技",
+                                        size=15,
+                                        weight=ft.FontWeight.W_700,
+                                    ),
+                                    ft.Text(
+                                        detail,
+                                        size=12,
+                                        color=ft.Colors.GREY_600,
+                                    ),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            *([action] if action else []),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        "关联学员",
+                        size=12,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Column(
+                        participant_rows
+                        or [
+                            ft.Text(
+                                "还没有关联学员。报名对应组别、缴费、上课或颁发后会自动出现。",
+                                size=11,
+                                color=ft.Colors.GREY_500,
+                            )
+                        ],
+                        spacing=5,
+                    ),
+                    ft.Text(
+                        "颁发记录",
+                        size=12,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Column(
+                        award_rows
+                        or [
+                            ft.Text(
+                                "还没有颁发记录。",
+                                size=11,
+                                color=ft.Colors.GREY_500,
+                            )
+                        ],
+                        spacing=5,
+                    ),
+                ],
+                spacing=10,
+            )
         )
 
     def _badge_level_card(self, level: dict) -> ft.Container:
@@ -307,6 +463,11 @@ class BadgesMixin:
                     ft.Text(
                         f"{badge['result']} · {badge['title']}"
                         + (
+                            f" · {badge['award_group_name']}"
+                            if badge.get("award_group_name")
+                            else ""
+                        )
+                        + (
                             f" · {_date_text(badge['happened_on'])}"
                             if badge.get("happened_on")
                             else ""
@@ -340,13 +501,26 @@ class BadgesMixin:
         )
 
     def _open_level_award_dialog(self, level: dict) -> None:
-        participants = db.list_badge_level_participants(level["id"])
+        self._open_badge_award_dialog([level])
+
+    def _open_badge_award_dialog(self, levels: list[dict]) -> None:
+        levels = [dict(level) for level in levels]
+        if not levels:
+            return
+        category = db.badge_category_for_level(levels[0])
+        if any(db.badge_category_for_level(level) != category for level in levels):
+            self._toast("本场颁发只能包含同一种竞技或考级结果")
+            return
+        participants = [
+            dict(student, award_level_id=int(level["id"]))
+            for level in levels
+            for student in db.list_badge_level_participants(level["id"])
+        ]
         manageable = [
             student
             for student in participants
             if self._can_award_badge_student(student)
         ]
-        category = db.badge_category_for_level(level)
         manual_candidates = self._manual_award_candidates(
             participants, category=category
         )
@@ -354,6 +528,12 @@ class BadgesMixin:
             self._toast("这个级别里没有你可以颁发的学员")
             return
         category_label = self._directory_category_label(category)
+        project_name = (
+            (levels[0].get("subject") or "").strip()
+            if category == "竞赛"
+            else db.level_display_name(levels[0])
+        ) or "未命名比赛"
+        levels_by_id = {int(level["id"]): level for level in levels}
         choices = (
             db.COMPETITION_RESULTS
             if category == "竞赛"
@@ -361,7 +541,7 @@ class BadgesMixin:
         )
         title = _tf(
             "比赛／考级名称 *",
-            f"{db.level_display_name(level)} {category_label}",
+            f"{project_name} {category_label}",
             width=DIALOG_WIDTH,
         )
         happened_on = _tf(
@@ -387,11 +567,13 @@ class BadgesMixin:
                     keyboard_type=ft.KeyboardType.NUMBER,
                 )
 
-        rows: list[tuple[dict, ft.Checkbox, ft.Dropdown, ft.Text, bool]] = []
+        rows: list[
+            tuple[dict, dict, ft.Checkbox, ft.Dropdown, ft.Text, bool]
+        ] = []
         rows_column = ft.Column([], spacing=6)
 
         def update_point_hint(row) -> None:
-            _, _, result, hint, _ = row
+            _, _, _, result, hint, _ = row
             if category != "竞赛" or not result.value:
                 hint.value = ""
             else:
@@ -414,13 +596,20 @@ class BadgesMixin:
             field.on_change = refresh_point_hints
 
         def add_student_row(
+            level: dict,
             student: dict,
             *,
             selected_value: bool,
             manual: bool = False,
             refresh: bool = False,
         ) -> None:
-            selected = ft.Checkbox(label=student["name"], value=False)
+            group_name = level["name"] or ""
+            checkbox_label = (
+                f"{student['name']}（{group_name}）"
+                if len(levels) > 1
+                else student["name"]
+            )
+            selected = ft.Checkbox(label=checkbox_label, value=False)
             result = _dd(
                 f"{student['name']}的结果",
                 [ft.DropdownOption(key="", text="请选择结果")]
@@ -430,7 +619,7 @@ class BadgesMixin:
             )
             selected.value = selected_value
             hint = ft.Text("", size=11, color=ft.Colors.GREEN_700, width=72)
-            row = (student, selected, result, hint, manual)
+            row = (level, student, selected, result, hint, manual)
             rows.append(row)
             result.on_select = lambda e, current=row: update_point_hint(current)
             rows_column.controls.append(
@@ -438,6 +627,12 @@ class BadgesMixin:
                     ft.Row(
                         [
                             selected,
+                            ft.Text(
+                                group_name,
+                                size=10,
+                                color=ft.Colors.BLUE_700,
+                                width=58,
+                            ),
                             result,
                             hint,
                             *(
@@ -464,9 +659,14 @@ class BadgesMixin:
                 rows_column.update()
 
         for student in manageable:
-            add_student_row(student, selected_value=False)
+            add_student_row(
+                levels_by_id[int(student["award_level_id"])],
+                student,
+                selected_value=False,
+            )
 
         manual_picker: ft.Dropdown | None = None
+        manual_group_picker: ft.Dropdown | None = None
         add_manual_button: ft.Button | None = None
         if manual_candidates:
             manual_picker = _dd(
@@ -482,8 +682,21 @@ class BadgesMixin:
                     ]
                 ),
                 value="",
-                width=DIALOG_WIDTH,
+                width=DIALOG_WIDTH if len(levels) == 1 else None,
             )
+            if len(levels) > 1:
+                manual_picker.expand = True
+                manual_group_picker = _dd(
+                    "补录组别",
+                    _opts(
+                        [
+                            (level["id"], level["name"])
+                            for level in levels
+                        ]
+                    ),
+                    value=str(levels[0]["id"]),
+                    width=180,
+                )
 
             def add_manual_student(e=None) -> None:
                 student = next(
@@ -497,7 +710,18 @@ class BadgesMixin:
                 if student is None:
                     self._toast("请先选择要补录的学员")
                     return
+                level = levels_by_id.get(
+                    int(
+                        manual_group_picker.value
+                        if manual_group_picker is not None
+                        else levels[0]["id"]
+                    )
+                )
+                if level is None:
+                    self._toast("请选择补录到哪个组别")
+                    return
                 add_student_row(
+                    level,
                     student,
                     selected_value=True,
                     manual=True,
@@ -536,33 +760,42 @@ class BadgesMixin:
             return points
 
         def save(e=None) -> None:
-            awards: dict[int, str] = {}
-            extra_student_ids: set[int] = set()
-            for student, selected, result, _, manual in rows:
+            awards_by_level: dict[int, dict[int, str]] = {}
+            extras_by_level: dict[int, set[int]] = {}
+            selected_results: list[str] = []
+            for level, student, selected, result, _, manual in rows:
                 if selected.value:
-                    awards[int(student["id"])] = result.value or ""
+                    level_id = int(level["id"])
+                    awards_by_level.setdefault(level_id, {})[
+                        int(student["id"])
+                    ] = result.value or ""
+                    selected_results.append(result.value or "")
                     if manual:
-                        extra_student_ids.add(int(student["id"]))
-            if not awards:
+                        extras_by_level.setdefault(level_id, set()).add(
+                            int(student["id"])
+                        )
+            if not awards_by_level:
                 self._toast("请先勾选本次获得结果的学员")
                 return
-            if any(not result for result in awards.values()):
+            if any(not result for result in selected_results):
                 self._toast("勾选的学员都要选择比赛或考级结果")
                 return
             points_by_result = read_award_points() if category == "竞赛" else None
             if category == "竞赛" and points_by_result is None:
                 return
             try:
-                count = db.save_badge_awards_for_level(
-                    level["id"],
-                    title.value or "",
-                    awards,
-                    happened_on.value or "",
-                    note.value or "",
-                    points_by_result=points_by_result,
-                    extra_student_ids=extra_student_ids,
-                    awarded_by_user_id=self._my_user_id(),
-                )
+                count = 0
+                for level_id, awards in awards_by_level.items():
+                    count += db.save_badge_awards_for_level(
+                        level_id,
+                        title.value or "",
+                        awards,
+                        happened_on.value or "",
+                        note.value or "",
+                        points_by_result=points_by_result,
+                        extra_student_ids=extras_by_level.get(level_id, set()),
+                        awarded_by_user_id=self._my_user_id(),
+                    )
             except ValueError as err:
                 title.error = str(err)
                 title.update()
@@ -570,7 +803,7 @@ class BadgesMixin:
             if category == "竞赛":
                 total_points = sum(
                     (points_by_result or {}).get(result, 0)
-                    for result in awards.values()
+                    for result in selected_results
                 )
                 message = (
                     f"已为 {count} 名学员颁发{category_label}结果，"
@@ -586,7 +819,7 @@ class BadgesMixin:
                 self._form_column(
                     [
                         ft.Text(
-                            f"{db.level_display_name(level)} · 本次可颁发 "
+                            f"{project_name} · 本次可颁发 "
                             f"{len(manageable)} 人"
                             + (
                                 f" · 可补录 {len(manual_candidates)} 人"
@@ -622,7 +855,15 @@ class BadgesMixin:
                                     color=ft.Colors.GREY_600,
                                 ),
                                 ft.Row(
-                                    [manual_picker, add_manual_button],
+                                    [
+                                        manual_picker,
+                                        *(
+                                            [manual_group_picker]
+                                            if manual_group_picker is not None
+                                            else []
+                                        ),
+                                        add_manual_button,
+                                    ],
                                     spacing=8,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),

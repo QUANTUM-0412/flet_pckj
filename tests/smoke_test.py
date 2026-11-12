@@ -5875,6 +5875,20 @@ competition_points_level = next(
     for level in db.list_levels()
     if int(level["id"]) == competition_points_level_id
 )
+competition_high_level_id = db.create_level(
+    "徽章积分测试",
+    "小高组",
+    120,
+    portal_teacher,
+    "竞赛",
+    "",
+    "竞赛",
+)
+competition_high_level = next(
+    level
+    for level in db.list_levels()
+    if int(level["id"]) == competition_high_level_id
+)
 manual_award_student = db.create_student(
     {
         "name": "补录参赛娃",
@@ -5920,7 +5934,25 @@ ok(
     "本场颁发弹窗不会在挂载到页面之前刷新控件",
 )
 db.delete_student_badge(mount_test_badge)
-app._open_level_award_dialog(competition_points_level)
+project_card = app._badge_competition_card(
+    [competition_points_level, competition_high_level]
+)
+ok(
+    find_text(project_card, "徽章积分测试 · 竞技")
+    and find_text(project_card, "小低组")
+    and find_text(project_card, "小高组")
+    and sum(
+        1
+        for control in walk(project_card)
+        if isinstance(control, ft.Button)
+        and control.content == "本场颁发"
+    )
+    == 1,
+    "同一比赛的小低组和小高组合并成一张卡片、共用一个颁发入口",
+)
+app._open_badge_award_dialog(
+    [competition_points_level, competition_high_level]
+)
 dlg = top_dialog(page)
 ok(
     all(
@@ -5930,8 +5962,10 @@ ok(
     "本场颁发可以填写四档奖励积分",
 )
 manual_picker = find_dropdown(dlg, "补录参赛学生")
+manual_group = find_dropdown(dlg, "补录组别")
 manual_picker.value = str(portal_student)
 click(dlg, "加入本场")
+manual_group.value = str(competition_high_level_id)
 manual_picker.value = str(manual_award_student)
 click(dlg, "加入本场")
 portal_award = find_checkbox(dlg, "学生门户娃")
@@ -5945,22 +5979,24 @@ find_field(dlg, "二等奖积分").value = "12"
 find_field(dlg, "三等奖积分").value = "8"
 find_field(dlg, "鼓励奖积分").value = "4"
 click(dlg, "确认颁发")
-competition_awards = db.list_level_badges(competition_points_level_id)
+competition_awards = (
+    db.list_level_badges(competition_points_level_id)
+    + db.list_level_badges(competition_high_level_id)
+)
 ok(
     len(competition_awards) == 2
+    and {int(award["level_id"]) for award in competition_awards}
+    == {competition_points_level_id, competition_high_level_id}
     and db.student_points(portal_student) == portal_award_base + 20
     and db.student_points(manual_award_student) == manual_award_base + 4,
-    "没报竞赛课的孩子可以补录，并按奖项发放积分",
+    "小低组和小高组可以在同一个弹窗里分组颁奖并发放积分",
 )
 first_competition_title = competition_awards[0]["title"]
 first_competition_day = competition_awards[0]["happened_on"]
 db.save_badge_awards_for_level(
     competition_points_level_id,
     first_competition_title,
-    {
-        portal_student: "二等奖",
-        manual_award_student: "鼓励奖",
-    },
+    {portal_student: "二等奖"},
     first_competition_day,
     points_by_result={
         "一等奖": 20,
@@ -5968,11 +6004,11 @@ db.save_badge_awards_for_level(
         "三等奖": 8,
         "鼓励奖": 4,
     },
-    extra_student_ids=[manual_award_student],
     awarded_by_user_id=portal_teacher,
 )
 ok(
-    len(db.list_level_badges(competition_points_level_id)) == 2
+    len(db.list_level_badges(competition_points_level_id)) == 1
+    and len(db.list_level_badges(competition_high_level_id)) == 1
     and db.student_points(portal_student) == portal_award_base + 12
     and db.student_points(manual_award_student) == manual_award_base + 4,
     "同一场改奖时只改积分，不会重复生成奖状或重复加分",
@@ -5980,10 +6016,7 @@ ok(
 db.save_badge_awards_for_level(
     competition_points_level_id,
     first_competition_title,
-    {
-        portal_student: "二等奖",
-        manual_award_student: "鼓励奖",
-    },
+    {portal_student: "二等奖"},
     first_competition_day,
     points_by_result={
         "一等奖": 20,
@@ -5991,14 +6024,16 @@ db.save_badge_awards_for_level(
         "三等奖": 8,
         "鼓励奖": 4,
     },
-    extra_student_ids=[manual_award_student],
     awarded_by_user_id=portal_teacher,
 )
 ok(
     db.student_points(portal_student) == portal_award_base + 12,
     "重复保存同一场奖项不会再次加分",
 )
-for competition_award in db.list_level_badges(competition_points_level_id):
+for competition_award in (
+    db.list_level_badges(competition_points_level_id)
+    + db.list_level_badges(competition_high_level_id)
+):
     db.delete_student_badge(competition_award["id"])
 ok(
     db.student_points(portal_student) == portal_award_base
@@ -6007,6 +6042,7 @@ ok(
 )
 db.delete_student(manual_award_student)
 db.delete_level(competition_points_level_id, force=True)
+db.delete_level(competition_high_level_id, force=True)
 
 app._open_badge_dialog(student_id=portal_student)
 dlg = top_dialog(page)
