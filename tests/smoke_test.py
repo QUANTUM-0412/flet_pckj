@@ -5944,6 +5944,39 @@ ok(
     ),
     "比赛名称直接显示在等级主标题里",
 )
+same_group_other_event_id = db.create_level(
+    "GPL-Zecode",
+    "小低组",
+    120,
+    portal_teacher,
+    "竞赛",
+    "",
+    "竞赛",
+    badge_event_name="2026-创新杯",
+)
+ok(
+    same_group_other_event_id > 0,
+    "同一科目和组别可以参加不同比赛",
+)
+try:
+    db.create_level(
+        "GPL-Zecode",
+        "小低组",
+        120,
+        portal_teacher,
+        "竞赛",
+        "",
+        "竞赛",
+        badge_event_name="2026-融智杯",
+    )
+    same_event_group_duplicate_allowed = True
+except sqlite3.IntegrityError:
+    same_event_group_duplicate_allowed = False
+ok(
+    not same_event_group_duplicate_allowed,
+    "同一场比赛里相同的科目和组别仍不能重复创建",
+)
+db.delete_level(same_group_other_event_id, force=True)
 manual_award_student = db.create_student(
     {
         "name": "补录参赛娃",

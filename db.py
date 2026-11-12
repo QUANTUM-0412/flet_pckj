@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS levels (
     badge_event_name TEXT NOT NULL DEFAULT '',
     active          INTEGER NOT NULL DEFAULT 1,
     sort            INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(subject, name)
+    UNIQUE(subject, name, badge_event_name)
 );
 
 -- 报名：一个孩子报的一门课
@@ -622,8 +622,93 @@ def init_db() -> None:
     ensure_default_admin()
 
 
+def _levels_need_event_unique(con: sqlite3.Connection) -> bool:
+    columns = _columns(con, "levels")
+    if "badge_event_name" not in columns:
+        return True
+    for index in con.execute("PRAGMA index_list(levels)").fetchall():
+        if not int(index["unique"]):
+            continue
+        index_columns = [
+            str(row["name"])
+            for row in con.execute(
+                f"PRAGMA index_info('{index['name']}')"
+            ).fetchall()
+        ]
+        if index_columns == ["subject", "name"]:
+            return True
+    return False
+
+
+def _migrate_levels_event_unique(con: sqlite3.Connection) -> None:
+    """把等级的旧唯一键改成“科目＋阶段＋比赛／考级名称”。"""
+    if not _levels_need_event_unique(con):
+        return
+    columns = _columns(con, "levels")
+    event_expr = (
+        "badge_event_name"
+        if "badge_event_name" in columns
+        else "''"
+    )
+    con.commit()
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        con.execute("BEGIN")
+        con.execute("DROP TABLE IF EXISTS levels_new")
+        con.execute(
+            """CREATE TABLE levels_new (
+                   id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                   subject         TEXT    NOT NULL DEFAULT '',
+                   name            TEXT    NOT NULL,
+                   level_type      TEXT    NOT NULL DEFAULT '正课',
+                   default_minutes INTEGER NOT NULL DEFAULT 90,
+                   default_teacher_id INTEGER REFERENCES users(id),
+                   badge_category TEXT NOT NULL DEFAULT '',
+                   badge_exam_level TEXT NOT NULL DEFAULT '',
+                   badge_event_name TEXT NOT NULL DEFAULT '',
+                   active          INTEGER NOT NULL DEFAULT 1,
+                   sort            INTEGER NOT NULL DEFAULT 0,
+                   UNIQUE(subject, name, badge_event_name)
+               )"""
+        )
+        con.execute(
+            f"""INSERT INTO levels_new
+                    (id, subject, name, level_type, default_minutes,
+                     default_teacher_id, badge_category, badge_exam_level,
+                     badge_event_name, active, sort)
+                SELECT id, subject, name, level_type, default_minutes,
+                       default_teacher_id, badge_category, badge_exam_level,
+                       {event_expr}, active, sort
+                  FROM levels"""
+        )
+        con.execute("DROP TABLE levels")
+        con.execute("ALTER TABLE levels_new RENAME TO levels")
+        broken = con.execute("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise sqlite3.IntegrityError(
+                "迁移等级表后仍有外键记录无法对应"
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+
+
 def _migrate(con: sqlite3.Connection) -> None:
     """老数据库补新字段。"""
+    _ensure_column(con, "levels", "default_teacher_id", "INTEGER REFERENCES users(id)")
+    _ensure_column(con, "levels", "level_type", "TEXT NOT NULL DEFAULT '正课'")
+    _ensure_column(con, "levels", "badge_category", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "levels", "badge_exam_level", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(
+        con,
+        "levels",
+        "badge_event_name",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    _migrate_levels_event_unique(con)
     columns = {r["name"] for r in con.execute("PRAGMA table_info(hour_transactions)")}
     if "source_type" not in columns:
         con.execute(
