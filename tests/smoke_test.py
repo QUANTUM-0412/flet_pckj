@@ -4583,6 +4583,17 @@ app.schedule_date = "2026-10-05"
 app.course_month = "2026-10"
 app.render()
 ok(find_text(page.controls[0], "时间不定"), "课程列表上写着「时间不定」")
+app.course_month = "2035-01"
+app.course_status_filter = "unclosed"
+app.course_teacher_filter = "all"
+app.course_subject_filter = ""
+app.render()
+ok(
+    find_text(page.controls[0], "2026-2-不定时界面班"),
+    "没设置每周固定时间的课程不受月份筛选限制",
+)
+app.course_month = "2026-10"
+app.render()
 
 print("39. 当天的课都算在「这天的课」里")
 db.create_lesson(

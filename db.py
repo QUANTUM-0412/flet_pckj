@@ -1678,7 +1678,7 @@ def course_in_month(course: dict | sqlite3.Row, month: str) -> bool:
     """这门课在选定月份里是否实际有排课或课次。
 
     有固定上课日的课程按开班／结课范围与当月重叠判断；时间不定的课程
-    没有可推算的上课日，只有在那个月实际记过课时才算。
+    没有可推算的上课日，始终留在课程列表里。
     """
     data = dict(course)
     start_text = (data.get("start_date") or "").strip()
@@ -1710,30 +1710,19 @@ def course_in_month(course: dict | sqlite3.Row, month: str) -> bool:
     except ValueError:
         return False
 
+    if not template_weekdays(data):
+        # "时间不定"的课没有一周固定上课时间，不能靠月份推算是否存在。
+        return True
+
     segment_start = max(first_day, course_start)
     segment_end = min(last_day, course_end)
     if segment_start > segment_end:
         return False
-    if template_weekdays(data):
-        return bool(
-            template_dates(
-                data, segment_start.isoformat(), segment_end.isoformat()
-            )
+    return bool(
+        template_dates(
+            data, segment_start.isoformat(), segment_end.isoformat()
         )
-
-    template_id = int(data.get("id") or 0)
-    if not template_id:
-        return False
-    with _connect() as con:
-        row = con.execute(
-            """SELECT 1
-                 FROM lessons
-                WHERE template_id = ?
-                  AND lesson_date >= ? AND lesson_date <= ?
-                LIMIT 1""",
-            (template_id, segment_start.isoformat(), segment_end.isoformat()),
-        ).fetchone()
-    return row is not None
+    )
 
 
 def _apply_course_dates(con: sqlite3.Connection, course_id: int) -> int:
