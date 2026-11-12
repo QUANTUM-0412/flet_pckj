@@ -5862,8 +5862,8 @@ ok(
 )
 
 competition_points_level_id = db.create_level(
-    "徽章积分测试",
-    "小低组",
+    "GPL-Zecode",
+    "2026-融智杯",
     120,
     portal_teacher,
     "竞赛",
@@ -5876,8 +5876,8 @@ competition_points_level = next(
     if int(level["id"]) == competition_points_level_id
 )
 competition_high_level_id = db.create_level(
-    "徽章积分测试",
-    "小高组",
+    "Python",
+    "2026-融智杯",
     120,
     portal_teacher,
     "竞赛",
@@ -5938,9 +5938,9 @@ project_card = app._badge_competition_card(
     [competition_points_level, competition_high_level]
 )
 ok(
-    find_text(project_card, "徽章积分测试 · 竞技")
-    and find_text(project_card, "小低组")
-    and find_text(project_card, "小高组")
+    find_text(project_card, "2026-融智杯 · 竞技")
+    and find_text(project_card, "GPL-Zecode")
+    and find_text(project_card, "Python")
     and sum(
         1
         for control in walk(project_card)
@@ -5948,7 +5948,7 @@ ok(
         and control.content == "本场颁发"
     )
     == 1,
-    "同一比赛的小低组和小高组合并成一张卡片、共用一个颁发入口",
+    "同一场比赛的 GPL 和 Python 组合并成一张卡片、共用一个颁发入口",
 )
 app._open_badge_award_dialog(
     [competition_points_level, competition_high_level]
@@ -5989,7 +5989,7 @@ ok(
     == {competition_points_level_id, competition_high_level_id}
     and db.student_points(portal_student) == portal_award_base + 20
     and db.student_points(manual_award_student) == manual_award_base + 4,
-    "小低组和小高组可以在同一个弹窗里分组颁奖并发放积分",
+    "同一场比赛的 GPL 和 Python 组可以在同一个弹窗里颁奖并发放积分",
 )
 first_competition_title = competition_awards[0]["title"]
 first_competition_day = competition_awards[0]["happened_on"]

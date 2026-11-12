@@ -2911,7 +2911,7 @@ def save_badge_awards_for_level(
         level_name = (
             level["badge_exam_level"]
             if category == "考级"
-            else (level["name"] or "")
+            else (level["subject"] or "")
         )
         if category == "考级" and level_name not in EXAM_LEVELS:
             raise ValueError("这个考级级别还没有配置 1～4 级")
