@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS levels (
     default_teacher_id INTEGER REFERENCES users(id),
     badge_category TEXT NOT NULL DEFAULT '',
     badge_exam_level TEXT NOT NULL DEFAULT '',
+    badge_event_name TEXT NOT NULL DEFAULT '',
     active          INTEGER NOT NULL DEFAULT 1,
     sort            INTEGER NOT NULL DEFAULT 0,
     UNIQUE(subject, name)
@@ -779,6 +780,12 @@ def _migrate(con: sqlite3.Connection) -> None:
     _ensure_column(con, "levels", "badge_exam_level", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(
         con,
+        "levels",
+        "badge_event_name",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    _ensure_column(
+        con,
         "student_badges",
         "level_id",
         "INTEGER REFERENCES levels(id) ON DELETE SET NULL",
@@ -821,6 +828,24 @@ def _migrate(con: sqlite3.Connection) -> None:
         """UPDATE levels SET badge_category = level_type
             WHERE level_type IN ('竞赛', '考级') AND badge_category = ''"""
     )
+    for row in con.execute(
+        """SELECT id, subject, name
+             FROM levels
+            WHERE level_type IN ('竞赛', '考级')
+              AND badge_event_name = ''"""
+    ).fetchall():
+        name = (row["name"] or "").strip()
+        subject = (row["subject"] or "").strip()
+        event_name = (
+            name
+            if re.search(r"\d{4}|杯|赛|考试", name)
+            else subject
+        )
+        if event_name:
+            con.execute(
+                "UPDATE levels SET badge_event_name = ? WHERE id = ?",
+                (event_name, int(row["id"])),
+            )
     # 旧版把社团课型叫「校内社团」，现在统一显示为「社团」。
     # 如果库里已经同时有两个名字，就把旧名下的记录并到「社团」再删旧项。
     legacy_club = con.execute(
@@ -1888,14 +1913,15 @@ def _seed(con: sqlite3.Connection) -> None:
         )
         con.execute(
             """INSERT OR IGNORE INTO levels
-                   (subject, name, level_type, badge_category,
+                   (subject, name, level_type, badge_category, badge_event_name,
                     default_minutes, sort)
-               VALUES(?, ?, ?, ?, ?, ?)""",
+               VALUES(?, ?, ?, ?, ?, ?, ?)""",
             (
                 subject,
                 name,
                 level_type,
                 level_type if level_type in BADGE_CATEGORIES else "",
+                subject if level_type in BADGE_CATEGORIES else "",
                 minutes,
                 i,
             ),
@@ -2911,7 +2937,7 @@ def save_badge_awards_for_level(
         level_name = (
             level["badge_exam_level"]
             if category == "考级"
-            else (level["subject"] or "")
+            else badge_group_name(level)
         )
         if category == "考级" and level_name not in EXAM_LEVELS:
             raise ValueError("这个考级级别还没有配置 1～4 级")
@@ -3197,6 +3223,26 @@ def level_display_name(row: sqlite3.Row | dict) -> str:
     return base
 
 
+def badge_group_name(row: sqlite3.Row | dict) -> str:
+    """比赛／考级记录上显示的组别名称。"""
+    category = badge_category_for_level(row)
+    subject = (row["subject"] or "").strip()
+    name = (row["name"] or "").strip()
+    event_name = (row["badge_event_name"] or "").strip()
+    if category == "竞赛":
+        subject_part = subject
+        if event_name and event_name in subject_part:
+            subject_part = subject_part.replace(event_name, "").strip(" -·")
+        parts = [subject_part, name]
+    else:
+        parts = [name, (row["badge_exam_level"] or "").strip()]
+    result: list[str] = []
+    for part in parts:
+        if part and part not in result:
+            result.append(part)
+    return " · ".join(result)
+
+
 def badge_category_for_level(row: sqlite3.Row | dict) -> str:
     """等级的竞赛／考级类别。
 
@@ -3215,6 +3261,7 @@ def create_level(
     badge_category: str = "",
     badge_exam_level: str = "",
     level_type: str | None = None,
+    badge_event_name: str = "",
 ) -> int:
     name = (name or "").strip()
     if not name:
@@ -3230,12 +3277,17 @@ def create_level(
     )
     if badge_category == "考级" and badge_exam_level not in EXAM_LEVELS:
         raise ValueError("考级徽章级别只能是 1级、2级、3级、4级")
+    badge_event_name = (badge_event_name or "").strip()
+    if badge_category and not badge_event_name:
+        raise ValueError(
+            "请填写比赛名称" if badge_category == "竞赛" else "请填写考级名称"
+        )
     with _connect() as con:
         cur = con.execute(
             """INSERT INTO levels
                    (subject, name, level_type, default_minutes, default_teacher_id,
-                    badge_category, badge_exam_level, sort)
-               VALUES(?, ?, ?, ?, ?, ?, ?, 100)""",
+                    badge_category, badge_exam_level, badge_event_name, sort)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, 100)""",
             (
                 (subject or "").strip(),
                 name,
@@ -3244,6 +3296,7 @@ def create_level(
                 int(default_teacher_id) if default_teacher_id else None,
                 badge_category,
                 badge_exam_level,
+                badge_event_name,
             ),
         )
         return int(cur.lastrowid)
@@ -3258,6 +3311,7 @@ def update_level(
     badge_category: str = "",
     badge_exam_level: str = "",
     level_type: str | None = None,
+    badge_event_name: str = "",
 ) -> None:
     name = (name or "").strip()
     if not name:
@@ -3273,12 +3327,18 @@ def update_level(
     )
     if badge_category == "考级" and badge_exam_level not in EXAM_LEVELS:
         raise ValueError("考级徽章级别只能是 1级、2级、3级、4级")
+    badge_event_name = (badge_event_name or "").strip()
+    if badge_category and not badge_event_name:
+        raise ValueError(
+            "请填写比赛名称" if badge_category == "竞赛" else "请填写考级名称"
+        )
     with _connect() as con:
         con.execute(
             """UPDATE levels
                   SET subject = ?, name = ?, level_type = ?,
                       default_minutes = ?, default_teacher_id = ?,
-                      badge_category = ?, badge_exam_level = ?
+                      badge_category = ?, badge_exam_level = ?,
+                      badge_event_name = ?
                 WHERE id = ?""",
             (
                 (subject or "").strip(),
@@ -3288,6 +3348,7 @@ def update_level(
                 int(default_teacher_id) if default_teacher_id else None,
                 badge_category,
                 badge_exam_level,
+                badge_event_name,
                 level_id,
             ),
         )

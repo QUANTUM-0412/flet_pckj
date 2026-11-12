@@ -5846,6 +5846,7 @@ level_category = find_dropdown(dlg, "类别")
 level_category.value = "考级"
 level_category.on_select(Evt(level_category))
 find_dropdown(dlg, "考级级别").value = "3级"
+find_field(dlg, "考级名称").value = "2026 机器人技术等级考试"
 click(dlg, "保存")
 configured_badge_level = next(
     level
@@ -5855,20 +5856,59 @@ configured_badge_level = next(
 ok(
     configured_badge_level["badge_category"] == "考级"
     and configured_badge_level["badge_exam_level"] == "3级"
+    and configured_badge_level["badge_event_name"]
+    == "2026 机器人技术等级考试"
     and configured_badge_level["level_type"] == "考级"
     and db.level_display_name(configured_badge_level)
     == "徽章测试-三级考级-考级",
     "等级设置里可以配置考级徽章和 1～4 级，显示名称带类别",
 )
+app._open_level_dialog(None)
+dlg = top_dialog(page)
+competition_level_type = find_dropdown(dlg, "类别")
+competition_level_type.value = "竞赛"
+competition_level_type.on_select(Evt(competition_level_type))
+ok(
+    find_field(dlg, "比赛名称").visible,
+    "选择竞赛类别后会显示独立的比赛名称字段",
+)
+app._close()
+legacy_event_level_id = db.create_level(
+    "旧比赛项目",
+    "小低组",
+    60,
+    portal_teacher,
+    "竞赛",
+    "",
+    "竞赛",
+    badge_event_name="临时名称",
+)
+with sqlite3.connect(db.DB_PATH) as legacy_con:
+    legacy_con.execute(
+        "UPDATE levels SET badge_event_name = '' WHERE id = ?",
+        (legacy_event_level_id,),
+    )
+db.init_db()
+legacy_event_level = next(
+    level
+    for level in db.list_levels()
+    if int(level["id"]) == legacy_event_level_id
+)
+ok(
+    legacy_event_level["badge_event_name"] == "旧比赛项目",
+    "旧竞赛等级升级后会补出可用的比赛名称，不改科目和等级",
+)
+db.delete_level(legacy_event_level_id, force=True)
 
 competition_points_level_id = db.create_level(
     "GPL-Zecode",
-    "2026-融智杯",
+    "小低组",
     120,
     portal_teacher,
     "竞赛",
     "",
     "竞赛",
+    badge_event_name="2026-融智杯",
 )
 competition_points_level = next(
     level
@@ -5877,12 +5917,13 @@ competition_points_level = next(
 )
 competition_high_level_id = db.create_level(
     "Python",
-    "2026-融智杯",
+    "初中",
     120,
     portal_teacher,
     "竞赛",
     "",
     "竞赛",
+    badge_event_name="2026-融智杯",
 )
 competition_high_level = next(
     level
@@ -5934,8 +5975,9 @@ ok(
     "本场颁发弹窗不会在挂载到页面之前刷新控件",
 )
 db.delete_student_badge(mount_test_badge)
-project_card = app._badge_competition_card(
-    [competition_points_level, competition_high_level]
+project_card = app._badge_award_project_card(
+    [competition_points_level, competition_high_level],
+    "竞赛",
 )
 ok(
     find_text(project_card, "2026-融智杯 · 竞技")
@@ -6191,7 +6233,8 @@ app.render()
 ok(
     find_text(page.controls[0], "竞技与考级")
     and find_text(page.controls[0], "考级目录（1）")
-    and find_text(page.controls[0], "徽章测试-三级考级")
+    and find_text(page.controls[0], "2026 机器人技术等级考试")
+    and find_text(page.controls[0], "三级考级")
     and find_text(page.controls[0], "学生门户娃"),
     "竞技考级目录会列出关联级别和已关联学员",
 )

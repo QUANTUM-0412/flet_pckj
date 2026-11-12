@@ -52,39 +52,31 @@ class BadgesMixin:
             for level in db.list_levels()
             if db.badge_category_for_level(level)
         ]
-        competition_projects: dict[str, list[dict]] = {}
+        award_projects: dict[tuple[str, str], list[dict]] = {}
         for level in levels:
-            if db.badge_category_for_level(level) != "竞赛":
-                continue
+            category = db.badge_category_for_level(level)
             project_key = (
-                (level["name"] or "").strip()
+                (level["badge_event_name"] or "").strip()
                 or f"level:{int(level['id'])}"
             )
-            competition_projects.setdefault(project_key, []).append(dict(level))
-        competition_count = len(competition_projects)
+            award_projects.setdefault(
+                (category, project_key), []
+            ).append(dict(level))
+        competition_count = sum(
+            1 for category, _ in award_projects if category == "竞赛"
+        )
         exam_count = sum(
-            1 for level in levels if db.badge_category_for_level(level) == "考级"
+            1 for category, _ in award_projects if category == "考级"
         )
         groups: list[ft.Control] = []
         for category in db.BADGE_CATEGORIES:
             category_label = self._directory_category_label(category)
-            group_levels = [
-                level
-                for level in levels
-                if db.badge_category_for_level(level) == category
+            cards = [
+                self._badge_award_project_card(project_levels, category)
+                for (project_category, _), project_levels in award_projects.items()
+                if project_category == category
             ]
-            if category == "竞赛":
-                cards = [
-                    self._badge_competition_card(project_levels)
-                    for project_levels in competition_projects.values()
-                ]
-                count_text = len(competition_projects)
-            else:
-                cards = [
-                    self._badge_level_card(level)
-                    for level in group_levels
-                ]
-                count_text = len(group_levels)
+            count_text = len(cards)
             groups.append(
                 self._section(
                     f"{category_label}目录（{count_text}）",
@@ -111,8 +103,9 @@ class BadgesMixin:
                 ),
                 self._card(
                     ft.Text(
-                        "竞技按比赛名称汇总，同一场比赛的不同组别会放在一张卡片里一起颁发；"
-                        "考级仍按级别汇总。报名、缴费或上过对应课程的学员会自动出现。"
+                        "竞技按「比赛名称」汇总，考级按「考级名称」汇总；"
+                        "同一场活动的不同组别会放在一张卡片里一起颁发。"
+                        "报名、缴费或上过对应课程的学员会自动出现。"
                         "没报竞赛课但实际参赛的孩子，可以在颁发时补录。"
                         "谁上的课谁颁发，其他老师只读。",
                         size=12,
@@ -127,22 +120,28 @@ class BadgesMixin:
             spacing=12,
         )
 
-    def _badge_competition_card(self, levels: list[dict]) -> ft.Container:
+    def _badge_award_project_card(
+        self, levels: list[dict], category: str
+    ) -> ft.Container:
         levels = [dict(level) for level in levels]
         if not levels:
             return ft.Container()
-        project_name = (levels[0].get("name") or "").strip() or "未命名比赛"
+        project_name = (
+            (levels[0].get("badge_event_name") or "").strip()
+            or "未命名比赛／考级"
+        )
+        category_label = self._directory_category_label(category)
         participants: list[dict] = []
         awards: list[dict] = []
         for level in levels:
             for student in db.list_badge_level_participants(level["id"]):
                 item = dict(student)
                 item["award_level_id"] = int(level["id"])
-                item["award_group_name"] = level["subject"] or ""
+                item["award_group_name"] = db.badge_group_name(level)
                 participants.append(item)
             for badge in db.list_level_badges(level["id"]):
                 item = dict(badge)
-                item["award_group_name"] = level["subject"] or ""
+                item["award_group_name"] = db.badge_group_name(level)
                 awards.append(item)
         manageable = [
             student
@@ -150,10 +149,14 @@ class BadgesMixin:
             if self._can_award_badge_student(student)
         ]
         manual_candidates = self._manual_award_candidates(
-            participants, category="竞赛"
+            participants, category=category
         )
         group_names = "、".join(
-            level["subject"] for level in levels if (level["subject"] or "").strip()
+            dict.fromkeys(
+                name
+                for level in levels
+                if (name := db.badge_group_name(level))
+            )
         )
         detail = " · ".join(
             [
@@ -214,7 +217,7 @@ class BadgesMixin:
                             ft.Column(
                                 [
                                     ft.Text(
-                                        f"{project_name} · 竞技",
+                                        f"{project_name} · {category_label}",
                                         size=15,
                                         weight=ft.FontWeight.W_700,
                                     ),
@@ -529,10 +532,13 @@ class BadgesMixin:
             return
         category_label = self._directory_category_label(category)
         project_name = (
-            (levels[0].get("name") or "").strip()
-            if category == "竞赛"
-            else db.level_display_name(levels[0])
-        ) or "未命名比赛"
+            (levels[0].get("badge_event_name") or "").strip()
+            or (
+                db.badge_group_name(levels[0])
+                if category == "竞赛"
+                else db.level_display_name(levels[0])
+            )
+        )
         levels_by_id = {int(level["id"]): level for level in levels}
         choices = (
             db.COMPETITION_RESULTS
@@ -603,7 +609,7 @@ class BadgesMixin:
             manual: bool = False,
             refresh: bool = False,
         ) -> None:
-            group_name = level["subject"] or ""
+            group_name = db.badge_group_name(level)
             checkbox_label = (
                 f"{student['name']}（{group_name}）"
                 if len(levels) > 1
@@ -631,7 +637,7 @@ class BadgesMixin:
                                 group_name,
                                 size=10,
                                 color=ft.Colors.BLUE_700,
-                                width=58,
+                                width=110,
                             ),
                             result,
                             hint,
@@ -690,7 +696,7 @@ class BadgesMixin:
                     "补录组别",
                     _opts(
                         [
-                            (level["id"], level["subject"])
+                            (level["id"], db.badge_group_name(level))
                             for level in levels
                         ]
                     ),

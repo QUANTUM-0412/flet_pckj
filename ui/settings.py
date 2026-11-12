@@ -980,9 +980,14 @@ class SettingsMixin:
             badge_text = ""
             badge_category = db.badge_category_for_level(l)
             if badge_category == "竞赛":
-                badge_text = " · 竞赛徽章"
+                badge_text = (
+                    f" · 比赛：{l['badge_event_name'] or '未填写'}"
+                )
             elif badge_category == "考级":
-                badge_text = f" · 考级徽章 {l['badge_exam_level'] or ''}".rstrip()
+                badge_text = (
+                    f" · 考级：{l['badge_event_name'] or '未填写'}"
+                    f" · {l['badge_exam_level'] or '级别未设置'}"
+                )
             rows.append(
                 ft.Container(
                     content=ft.Row(
@@ -1555,6 +1560,19 @@ class SettingsMixin:
         teacher_id = self._my_user_id()
         subject = _tf("科目（如 GPL、STEM）", level["subject"] if editing else "", width=DIALOG_WIDTH)
         name = _tf("等级／阶段（如 Lvl-01）", level["name"] if editing else "", width=DIALOG_WIDTH)
+        initial_level_type = level["level_type"] if editing else "正课"
+        badge_event_name = _tf(
+            (
+                "比赛名称"
+                if initial_level_type == "竞赛"
+                else "考级名称"
+                if initial_level_type == "考级"
+                else "比赛／考级名称"
+            ),
+            level["badge_event_name"] if editing else "",
+            width=DIALOG_WIDTH,
+            visible=initial_level_type in db.BADGE_CATEGORIES,
+        )
         minutes = _tf(
             "默认时长（分钟）",
             level["default_minutes"] if editing else 90,
@@ -1602,7 +1620,16 @@ class SettingsMixin:
 
         def on_level_type(e=None) -> None:
             badge_exam_level.visible = level_type.value == "考级"
+            badge_event_name.visible = level_type.value in db.BADGE_CATEGORIES
+            badge_event_name.label = (
+                "比赛名称"
+                if level_type.value == "竞赛"
+                else "考级名称"
+                if level_type.value == "考级"
+                else "比赛／考级名称"
+            )
             badge_exam_level.update()
+            badge_event_name.update()
 
         level_type.on_select = on_level_type
 
@@ -1610,6 +1637,17 @@ class SettingsMixin:
             if not (name.value or "").strip():
                 name.error = "请填等级名称"
                 name.update()
+                return
+            if (
+                level_type.value in db.BADGE_CATEGORIES
+                and not (badge_event_name.value or "").strip()
+            ):
+                badge_event_name.error = (
+                    "请填比赛名称"
+                    if level_type.value == "竞赛"
+                    else "请填考级名称"
+                )
+                badge_event_name.update()
                 return
             try:
                 mins = int(float(minutes.value or 0))
@@ -1635,6 +1673,7 @@ class SettingsMixin:
                         else ""
                     ),
                     level_type.value or "正课",
+                    badge_event_name=badge_event_name.value or "",
                 )
             else:
                 db.create_level(
@@ -1653,6 +1692,7 @@ class SettingsMixin:
                         else ""
                     ),
                     level_type.value or "正课",
+                    badge_event_name=badge_event_name.value or "",
                 )
             self._finish("等级已保存")
 
@@ -1661,6 +1701,7 @@ class SettingsMixin:
                 subject,
                 level_type,
                 name,
+                badge_event_name,
                 minutes,
                 teacher,
                 badge_exam_level,
