@@ -1636,7 +1636,10 @@ print("15. 试听跟进")
 trial_teacher = db.create_user(
     "trial_demo", "pw123456", "周老师", db.ROLE_TEACHER
 )
-trial_date = (date.today() + timedelta(days=3)).isoformat()
+trial_day = date.today() + timedelta(days=3)
+while trial_day.weekday() >= 5 or trial_day.weekday() == 0:
+    trial_day += timedelta(days=1)
+trial_date = trial_day.isoformat()
 app.tab = 2
 app.trial_filter = ""
 app.render()
@@ -5858,6 +5861,124 @@ ok(
     "等级设置里可以配置考级徽章和 1～4 级，显示名称带类别",
 )
 
+competition_points_level_id = db.create_level(
+    "徽章积分测试",
+    "小低组",
+    120,
+    portal_teacher,
+    "竞赛",
+    "",
+    "竞赛",
+)
+competition_points_level = next(
+    level
+    for level in db.list_levels()
+    if int(level["id"]) == competition_points_level_id
+)
+manual_award_student = db.create_student(
+    {
+        "name": "补录参赛娃",
+        "grade": "三年级",
+        "owner_teacher_id": portal_teacher,
+        "owner_manual": True,
+    }
+)
+portal_award_base = db.student_points(portal_student)
+manual_award_base = db.student_points(manual_award_student)
+app.user = {
+    "id": 1,
+    "username": "root",
+    "display_name": "管理员",
+    "role": db.ROLE_ROOT,
+}
+app._open_level_award_dialog(competition_points_level)
+dlg = top_dialog(page)
+ok(
+    all(
+        find_field(dlg, f"{result}积分") is not None
+        for result in ("一等奖", "二等奖", "三等奖", "鼓励奖")
+    ),
+    "本场颁发可以填写四档奖励积分",
+)
+manual_picker = find_dropdown(dlg, "补录参赛学生")
+manual_picker.value = str(portal_student)
+click(dlg, "加入本场")
+manual_picker.value = str(manual_award_student)
+click(dlg, "加入本场")
+portal_award = find_checkbox(dlg, "学生门户娃")
+portal_award.value = True
+find_dropdown(dlg, "学生门户娃的结果").value = "一等奖"
+manual_award = find_checkbox(dlg, "补录参赛娃")
+manual_award.value = True
+find_dropdown(dlg, "补录参赛娃的结果").value = "鼓励奖"
+find_field(dlg, "一等奖积分").value = "20"
+find_field(dlg, "二等奖积分").value = "12"
+find_field(dlg, "三等奖积分").value = "8"
+find_field(dlg, "鼓励奖积分").value = "4"
+click(dlg, "确认颁发")
+competition_awards = db.list_level_badges(competition_points_level_id)
+ok(
+    len(competition_awards) == 2
+    and db.student_points(portal_student) == portal_award_base + 20
+    and db.student_points(manual_award_student) == manual_award_base + 4,
+    "没报竞赛课的孩子可以补录，并按奖项发放积分",
+)
+first_competition_title = competition_awards[0]["title"]
+first_competition_day = competition_awards[0]["happened_on"]
+db.save_badge_awards_for_level(
+    competition_points_level_id,
+    first_competition_title,
+    {
+        portal_student: "二等奖",
+        manual_award_student: "鼓励奖",
+    },
+    first_competition_day,
+    points_by_result={
+        "一等奖": 20,
+        "二等奖": 12,
+        "三等奖": 8,
+        "鼓励奖": 4,
+    },
+    extra_student_ids=[manual_award_student],
+    awarded_by_user_id=portal_teacher,
+)
+ok(
+    len(db.list_level_badges(competition_points_level_id)) == 2
+    and db.student_points(portal_student) == portal_award_base + 12
+    and db.student_points(manual_award_student) == manual_award_base + 4,
+    "同一场改奖时只改积分，不会重复生成奖状或重复加分",
+)
+db.save_badge_awards_for_level(
+    competition_points_level_id,
+    first_competition_title,
+    {
+        portal_student: "二等奖",
+        manual_award_student: "鼓励奖",
+    },
+    first_competition_day,
+    points_by_result={
+        "一等奖": 20,
+        "二等奖": 12,
+        "三等奖": 8,
+        "鼓励奖": 4,
+    },
+    extra_student_ids=[manual_award_student],
+    awarded_by_user_id=portal_teacher,
+)
+ok(
+    db.student_points(portal_student) == portal_award_base + 12,
+    "重复保存同一场奖项不会再次加分",
+)
+for competition_award in db.list_level_badges(competition_points_level_id):
+    db.delete_student_badge(competition_award["id"])
+ok(
+    db.student_points(portal_student) == portal_award_base
+    and db.student_points(manual_award_student) == manual_award_base,
+    "删除竞赛奖状会同时撤回奖励积分",
+)
+db.delete_student(manual_award_student)
+db.delete_level(competition_points_level_id, force=True)
+
 app._open_badge_dialog(student_id=portal_student)
 dlg = top_dialog(page)
 find_field(dlg, "比赛／考级名称 *").value = "机器人创意赛"
@@ -5899,23 +6020,31 @@ ok(
     "学员可以记录竞赛奖项和 1～4 级考级徽章",
 )
 ok(
-    "参与" not in db.COMPETITION_RESULTS
-    and db.COMPETITION_RESULTS == ["一等奖", "二等奖", "三等奖"],
-    "竞赛只有一二三等奖，没有参与奖",
+    db.COMPETITION_RESULTS
+    == ["一等奖", "二等奖", "三等奖", "鼓励奖"],
+    "竞赛有一二三等奖和鼓励奖",
 )
-try:
-    db.save_student_badge(
-        portal_student,
-        "竞赛",
-        "不应成功",
-        "",
-        "参与",
-        "2026-10-01",
-    )
-    participation_badge_allowed = True
-except ValueError:
-    participation_badge_allowed = False
-ok(not participation_badge_allowed, "不能添加参与奖徽章")
+points_before_badge_award = db.student_points(portal_student)
+encouragement_badge = db.save_student_badge(
+    portal_student,
+    "竞赛",
+    "鼓励奖测试赛",
+    "小低组",
+    "鼓励奖",
+    "2026-10-01",
+    points_awarded=6,
+    awarded_by_user_id=portal_teacher,
+)
+ok(
+    db.student_points(portal_student)
+    == points_before_badge_award + 6,
+    "鼓励奖会进入竞赛奖励积分",
+)
+db.delete_student_badge(encouragement_badge)
+ok(
+    db.student_points(portal_student) == points_before_badge_award,
+    "删除奖状会撤回对应的竞赛奖励积分",
+)
 try:
     db.save_student_badge(
         portal_student,

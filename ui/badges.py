@@ -25,9 +25,26 @@ class BadgesMixin:
             me
             and int(me) in {
                 int(teacher_id)
-                for teacher_id in (item.get("teacher_ids") or [])
+                for teacher_id in (
+                    (item.get("teacher_ids") or [])
+                    + (item.get("manual_award_teacher_ids") or [])
+                )
             }
         )
+
+    def _manual_award_candidates(
+        self, participants: list[dict], *, category: str
+    ) -> list[dict]:
+        """可补录的参赛学生：只列当前老师自己管理、还没关联到该级别的孩子。"""
+        if category != "竞赛":
+            return []
+        linked_ids = {int(student["id"]) for student in participants}
+        return [
+            dict(student)
+            for student in db.list_students(status="在读")
+            if int(student["id"]) not in linked_ids
+            and self._can_manage_student(int(student["id"]))
+        ]
 
     def _badge_directory_view(self) -> ft.Control:
         levels = [
@@ -81,6 +98,7 @@ class BadgesMixin:
                     ft.Text(
                         "这里按等级汇总已关联的学员。报名、缴费或上过对应课程的学员会自动出现；"
                         "比赛结束或考级完成后，点「本场颁发」一次登记每人的结果。"
+                        "没报竞赛课但实际参赛的孩子，可以在颁发时补录。"
                         "谁上的课谁颁发，其他老师只读。",
                         size=12,
                         color=ft.Colors.GREY_700,
@@ -104,6 +122,9 @@ class BadgesMixin:
             for student in participants
             if self._can_award_badge_student(student)
         ]
+        manual_candidates = self._manual_award_candidates(
+            participants, category=category
+        )
         detail = " · ".join(
             part
             for part in [
@@ -186,7 +207,8 @@ class BadgesMixin:
                     participant_rows
                     or [
                         ft.Text(
-                            "还没有关联学员。给学员报名该级别、缴对应课时或上对应课程后，会自动出现。",
+                            "还没有关联学员。给学员报名该级别、缴对应课时或上对应课程后，会自动出现；"
+                            "比赛时也可以从「本场颁发」补录自己名下的学员。",
                             size=11,
                             color=ft.Colors.GREY_500,
                         )
@@ -218,7 +240,7 @@ class BadgesMixin:
                 icon=ft.Icons.MILITARY_TECH,
                 on_click=lambda e, row=level: self._open_level_award_dialog(row),
             )
-            if manageable
+            if manageable or manual_candidates
             else None
         )
         return self._card(
@@ -289,9 +311,22 @@ class BadgesMixin:
                             if badge.get("happened_on")
                             else ""
                         ),
+                        expand=True,
                         size=11,
                         color=ft.Colors.GREY_700,
-                        expand=True,
+                    ),
+                    *(
+                        [
+                            ft.Text(
+                                f"+{db.num_text(badge['points_awarded'])} 分",
+                                size=11,
+                                weight=ft.FontWeight.W_700,
+                                color=ft.Colors.GREEN_700,
+                            )
+                        ]
+                        if badge.get("category") == "竞赛"
+                        and float(badge.get("points_awarded") or 0) > 0
+                        else []
                     ),
                     *actions,
                 ],
@@ -311,10 +346,13 @@ class BadgesMixin:
             for student in participants
             if self._can_award_badge_student(student)
         ]
-        if not manageable:
+        category = db.badge_category_for_level(level)
+        manual_candidates = self._manual_award_candidates(
+            participants, category=category
+        )
+        if not manageable and not manual_candidates:
             self._toast("这个级别里没有你可以颁发的学员")
             return
-        category = db.badge_category_for_level(level)
         category_label = self._directory_category_label(category)
         choices = (
             db.COMPETITION_RESULTS
@@ -339,22 +377,77 @@ class BadgesMixin:
             min_lines=2,
             max_lines=3,
         )
-        rows: list[tuple[dict, ft.Checkbox, ft.Dropdown]] = []
-        student_controls: list[ft.Control] = []
-        for student in manageable:
+        point_fields: dict[str, ft.TextField] = {}
+        if category == "竞赛":
+            for choice in choices:
+                point_fields[choice] = _tf(
+                    f"{choice}积分",
+                    "0",
+                    width=100,
+                    keyboard_type=ft.KeyboardType.NUMBER,
+                )
+
+        rows: list[tuple[dict, ft.Checkbox, ft.Dropdown, ft.Text, bool]] = []
+        rows_column = ft.Column([], spacing=6)
+
+        def update_point_hint(row) -> None:
+            _, _, result, hint, _ = row
+            if category != "竞赛" or not result.value:
+                hint.value = ""
+            else:
+                field = point_fields.get(result.value)
+                try:
+                    points = float((field.value or "").strip()) if field else 0
+                except ValueError:
+                    hint.value = "积分待填写"
+                else:
+                    hint.value = (
+                        f"+{db.num_text(points)} 分" if points > 0 else "0 分"
+                    )
+            hint.update()
+
+        def refresh_point_hints(e=None) -> None:
+            for row in rows:
+                update_point_hint(row)
+
+        for field in point_fields.values():
+            field.on_change = refresh_point_hints
+
+        def add_student_row(
+            student: dict, *, selected_value: bool, manual: bool = False
+        ) -> None:
             selected = ft.Checkbox(label=student["name"], value=False)
             result = _dd(
                 f"{student['name']}的结果",
                 [ft.DropdownOption(key="", text="请选择结果")]
                 + _opts([(value, value) for value in choices]),
                 value="",
-                width=150,
+                width=160,
             )
-            rows.append((student, selected, result))
-            student_controls.append(
+            selected.value = selected_value
+            hint = ft.Text("", size=11, color=ft.Colors.GREEN_700, width=72)
+            row = (student, selected, result, hint, manual)
+            rows.append(row)
+            result.on_select = lambda e, current=row: update_point_hint(current)
+            rows_column.controls.append(
                 ft.Container(
                     ft.Row(
-                        [selected, result],
+                        [
+                            selected,
+                            result,
+                            hint,
+                            *(
+                                [
+                                    ft.Text(
+                                        "补录",
+                                        size=10,
+                                        color=ft.Colors.BLUE_700,
+                                    )
+                                ]
+                                if manual
+                                else []
+                            ),
+                        ],
                         spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
@@ -363,17 +456,91 @@ class BadgesMixin:
                     bgcolor=ft.Colors.GREY_50,
                 )
             )
+            rows_column.update()
+
+        for student in manageable:
+            add_student_row(student, selected_value=False)
+
+        manual_picker: ft.Dropdown | None = None
+        add_manual_button: ft.Button | None = None
+        if manual_candidates:
+            manual_picker = _dd(
+                "补录参赛学生",
+                _opts(
+                    [
+                        (
+                            student["id"],
+                            student["name"]
+                            + (f"（{student['grade']}）" if student.get("grade") else ""),
+                        )
+                        for student in manual_candidates
+                    ]
+                ),
+                value="",
+                width=DIALOG_WIDTH,
+            )
+
+            def add_manual_student(e=None) -> None:
+                student = next(
+                    (
+                        row
+                        for row in manual_candidates
+                        if str(row["id"]) == str(manual_picker.value or "")
+                    ),
+                    None,
+                )
+                if student is None:
+                    self._toast("请先选择要补录的学员")
+                    return
+                add_student_row(student, selected_value=True, manual=True)
+                manual_picker.options = [
+                    option
+                    for option in manual_picker.options
+                    if str(option.key) != str(student["id"])
+                ]
+                manual_picker.value = ""
+                manual_picker.update()
+
+            add_manual_button = ft.Button(
+                "加入本场",
+                icon=ft.Icons.PERSON_ADD,
+                on_click=add_manual_student,
+            )
+
+        def read_award_points() -> dict[str, float] | None:
+            points: dict[str, float] = {}
+            for result, field in point_fields.items():
+                raw = (field.value or "").strip() or "0"
+                try:
+                    value = float(raw)
+                except ValueError:
+                    field.error = "请填数字"
+                    field.update()
+                    return None
+                if value < 0:
+                    field.error = "不能小于 0"
+                    field.update()
+                    return None
+                field.error = ""
+                points[result] = value
+            return points
 
         def save(e=None) -> None:
             awards: dict[int, str] = {}
-            for student, selected, result in rows:
+            extra_student_ids: set[int] = set()
+            for student, selected, result, _, manual in rows:
                 if selected.value:
                     awards[int(student["id"])] = result.value or ""
+                    if manual:
+                        extra_student_ids.add(int(student["id"]))
             if not awards:
                 self._toast("请先勾选本次获得结果的学员")
                 return
             if any(not result for result in awards.values()):
                 self._toast("勾选的学员都要选择比赛或考级结果")
+                return
+            points_by_result = read_award_points() if category == "竞赛" else None
+            if category == "竞赛" and points_by_result is None:
                 return
             try:
                 count = db.save_badge_awards_for_level(
@@ -382,12 +549,26 @@ class BadgesMixin:
                     awards,
                     happened_on.value or "",
                     note.value or "",
+                    points_by_result=points_by_result,
+                    extra_student_ids=extra_student_ids,
+                    awarded_by_user_id=self._my_user_id(),
                 )
             except ValueError as err:
                 title.error = str(err)
                 title.update()
                 return
-            self._finish(f"已为 {count} 名学员颁发{category_label}结果")
+            if category == "竞赛":
+                total_points = sum(
+                    (points_by_result or {}).get(result, 0)
+                    for result in awards.values()
+                )
+                message = (
+                    f"已为 {count} 名学员颁发{category_label}结果，"
+                    f"发放 {db.num_text(total_points)} 积分"
+                )
+            else:
+                message = f"已为 {count} 名学员颁发{category_label}结果"
+            self._finish(message)
 
         self._show(
             self._dialog(
@@ -395,18 +576,56 @@ class BadgesMixin:
                 self._form_column(
                     [
                         ft.Text(
-                            f"{db.level_display_name(level)} · 本次可颁发 {len(manageable)} 人",
+                            f"{db.level_display_name(level)} · 本次可颁发 "
+                            f"{len(manageable)} 人"
+                            + (
+                                f" · 可补录 {len(manual_candidates)} 人"
+                                if manual_candidates
+                                else ""
+                            ),
                             size=12,
                             color=ft.Colors.GREY_600,
                         ),
                         title,
                         happened_on,
+                        *(
+                            [
+                                ft.Text(
+                                    "本场奖励积分",
+                                    size=12,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.Row(
+                                    list(point_fields.values()),
+                                    spacing=8,
+                                    wrap=True,
+                                ),
+                            ]
+                            if point_fields
+                            else []
+                        ),
+                        *(
+                            [
+                                ft.Text(
+                                    "没报竞赛课但参加了比赛的孩子，可以从这里补录。",
+                                    size=11,
+                                    color=ft.Colors.GREY_600,
+                                ),
+                                ft.Row(
+                                    [manual_picker, add_manual_button],
+                                    spacing=8,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                            ]
+                            if manual_picker is not None
+                            else []
+                        ),
                         ft.Text(
-                            "勾选本次有结果／获奖的学员",
+                            "勾选本次参赛、需要颁证的学员",
                             size=12,
                             weight=ft.FontWeight.W_600,
                         ),
-                        *student_controls,
+                        rows_column,
                         note,
                     ]
                 ),
@@ -427,6 +646,8 @@ class BadgesMixin:
             return ft.Colors.BLUE_GREY_100, ft.Colors.BLUE_GREY_700
         if result == "三等奖":
             return ft.Colors.ORANGE_50, ft.Colors.BROWN_700
+        if result == "鼓励奖":
+            return ft.Colors.GREEN_50, ft.Colors.GREEN_700
         return ft.Colors.BLUE_50, ft.Colors.BLUE_700
 
     def _badge_card(self, badge: dict, *, editable: bool = False) -> ft.Control:
@@ -434,6 +655,12 @@ class BadgesMixin:
         bits = [
             badge.get("title") or badge.get("category"),
             badge.get("level_name") or "",
+            (
+                f"奖励 +{db.num_text(badge.get('points_awarded'))} 分"
+                if badge.get("category") == "竞赛"
+                and float(badge.get("points_awarded") or 0) > 0
+                else ""
+            ),
         ]
         detail = " · ".join(x for x in bits if x)
         actions: list[ft.Control] = []
@@ -622,6 +849,17 @@ class BadgesMixin:
             value=badge["result"] if editing else "一等奖",
             width=DIALOG_WIDTH,
         )
+        points_awarded = _tf(
+            "本次奖励积分",
+            (
+                db.num_text(badge.get("points_awarded"))
+                if editing and float(badge.get("points_awarded") or 0)
+                else "0"
+            ),
+            width=DIALOG_WIDTH,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            visible=(badge["category"] if editing else "竞赛") == "竞赛",
+        )
         happened_on = _tf(
             "日期",
             badge["happened_on"] if editing else date.today().isoformat(),
@@ -653,6 +891,8 @@ class BadgesMixin:
             if result.value not in choices:
                 result.value = choices[0]
             result.update()
+            points_awarded.visible = not is_exam
+            points_awarded.update()
             competition_level.update()
             exam_level.update()
             linked_level.update()
@@ -681,6 +921,18 @@ class BadgesMixin:
         linked_level.on_select = on_linked_level
 
         def save(e):
+            points = 0.0
+            if category.value == "竞赛":
+                try:
+                    points = float((points_awarded.value or "").strip() or "0")
+                except ValueError:
+                    points_awarded.error = "请填数字"
+                    points_awarded.update()
+                    return
+                if points < 0:
+                    points_awarded.error = "不能小于 0"
+                    points_awarded.update()
+                    return
             try:
                 db.save_student_badge(
                     target_student_id,
@@ -698,6 +950,8 @@ class BadgesMixin:
                     int(linked_level.value)
                     if (linked_level.value or "").strip()
                     else None,
+                    points_awarded=points if category.value == "竞赛" else 0,
+                    awarded_by_user_id=self._my_user_id(),
                 )
             except ValueError as err:
                 title.error = str(err)
@@ -716,6 +970,7 @@ class BadgesMixin:
                         competition_level,
                         exam_level,
                         result,
+                        points_awarded,
                         happened_on,
                         note,
                     ]

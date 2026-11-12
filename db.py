@@ -65,7 +65,7 @@ GENDER_OPTIONS = ["男", "女"]
 GRADE_OPTIONS = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "初一", "初二", "初三"]
 BADGE_CATEGORIES = ["竞赛", "考级"]
 LEVEL_TYPES = ["正课", "竞赛", "考级", "托管", "社团"]
-COMPETITION_RESULTS = ["一等奖", "二等奖", "三等奖"]
+COMPETITION_RESULTS = ["一等奖", "二等奖", "三等奖", "鼓励奖"]
 EXAM_RESULTS = ["优秀", "良好", "通过"]
 EXAM_LEVELS = ["1级", "2级", "3级", "4级"]
 GRADE_PROGRESSION = {
@@ -162,6 +162,8 @@ CREATE TABLE IF NOT EXISTS student_badges (
     result      TEXT    NOT NULL DEFAULT '一等奖',
     happened_on TEXT    NOT NULL DEFAULT '',
     note        TEXT    NOT NULL DEFAULT '',
+    points_awarded REAL  NOT NULL DEFAULT 0,
+    awarded_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at  TEXT    NOT NULL DEFAULT ''
 );
 
@@ -780,6 +782,18 @@ def _migrate(con: sqlite3.Connection) -> None:
         "student_badges",
         "level_id",
         "INTEGER REFERENCES levels(id) ON DELETE SET NULL",
+    )
+    _ensure_column(
+        con,
+        "student_badges",
+        "points_awarded",
+        "REAL NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        con,
+        "student_badges",
+        "awarded_by_user_id",
+        "INTEGER REFERENCES users(id) ON DELETE SET NULL",
     )
     con.execute(
         """UPDATE levels SET level_type = '竞赛'
@@ -2685,6 +2699,28 @@ def _badge_teacher_ids_for_student(
     return sorted(teacher_ids)
 
 
+def _badge_award_teacher_ids(
+    con: sqlite3.Connection, level_id: int, student_id: int
+) -> list[int]:
+    """直接颁发过这个级别奖状的老师，用于无课程记录的补录学员。"""
+    row = con.execute(
+        """SELECT GROUP_CONCAT(DISTINCT awarded_by_user_id) AS teacher_ids
+             FROM student_badges
+            WHERE level_id = ? AND student_id = ?
+              AND awarded_by_user_id IS NOT NULL""",
+        (int(level_id), int(student_id)),
+    ).fetchone()
+    if row is None or not row["teacher_ids"]:
+        return []
+    return sorted(
+        {
+            int(value)
+            for value in row["teacher_ids"].split(",")
+            if value.strip().isdigit()
+        }
+    )
+
+
 def list_badge_level_participants(level_id: int) -> list[dict]:
     """竞赛／考级目录里，这个级别已关联的学员。"""
     with _connect() as con:
@@ -2706,6 +2742,9 @@ def list_badge_level_participants(level_id: int) -> list[dict]:
         for row in rows:
             item = dict(row)
             item["teacher_ids"] = _badge_teacher_ids_for_student(
+                con, int(level_id), int(item["id"])
+            )
+            item["manual_award_teacher_ids"] = _badge_award_teacher_ids(
                 con, int(level_id), int(item["id"])
             )
             result.append(item)
@@ -2730,8 +2769,75 @@ def list_level_badges(level_id: int) -> list[dict]:
             item["teacher_ids"] = _badge_teacher_ids_for_student(
                 con, int(level_id), int(item["student_id"])
             )
+            item["manual_award_teacher_ids"] = (
+                [int(item["awarded_by_user_id"])]
+                if item.get("awarded_by_user_id")
+                else []
+            )
             result.append(item)
     return result
+
+
+def _award_point_value(value: Any) -> float:
+    try:
+        points = float(value or 0)
+    except (TypeError, ValueError):
+        raise ValueError("奖励积分要填数字")
+    if points < 0:
+        raise ValueError("奖励积分不能小于 0")
+    return points
+
+
+def _clean_award_points(
+    points_by_result: dict[str, Any] | None,
+    allowed_results: list[str],
+) -> dict[str, float]:
+    points = {result: 0.0 for result in allowed_results}
+    for raw_result, raw_points in (points_by_result or {}).items():
+        result = (raw_result or "").strip()
+        if result not in allowed_results:
+            raise ValueError("请选择有效的奖项结果")
+        points[result] = _award_point_value(raw_points)
+    return points
+
+
+def _sync_badge_point_transaction(
+    con: sqlite3.Connection,
+    *,
+    badge_id: int,
+    student_id: int,
+    category: str,
+    title: str,
+    level_name: str,
+    result: str,
+    happened_on: str,
+    points: float,
+) -> None:
+    """让一枚奖状最多对应一条竞赛奖励流水。"""
+    con.execute(
+        """DELETE FROM point_transactions
+            WHERE source_type = 'student_badge' AND source_id = ?""",
+        (int(badge_id),),
+    )
+    if category != "竞赛" or points <= 0:
+        return
+    detail = " · ".join(
+        part for part in (title, level_name, result) if (part or "").strip()
+    )
+    con.execute(
+        """INSERT INTO point_transactions
+               (student_id, change, kind, happened_on, note,
+                source_type, source_id, created_at)
+           VALUES(?, ?, '竞赛奖励', ?, ?, 'student_badge', ?, ?)""",
+        (
+            int(student_id),
+            float(points),
+            happened_on,
+            detail,
+            int(badge_id),
+            _today(),
+        ),
+    )
 
 
 def save_badge_awards_for_level(
@@ -2740,10 +2846,15 @@ def save_badge_awards_for_level(
     awards: dict[int, str],
     happened_on: str,
     note: str = "",
+    points_by_result: dict[str, Any] | None = None,
+    extra_student_ids: set[int] | list[int] | None = None,
+    awarded_by_user_id: int | None = None,
 ) -> int:
-    """按一个已关联级别，一次给多名学员颁发比赛／考级结果。
+    """按一个关联级别，一次给多名学员颁发比赛／考级结果。
 
-    同一级别、同一名称、同一日期重复提交时更新原结果，不重复生成徽章。
+    竞赛可以补录没有报名、缴费或上过该级别课程的学员；考级仍要求先关联
+    对应等级。同一级别、同一名称、同一日期重复提交时更新原结果和奖励积分，
+    不重复生成奖状，也不会重复加积分。
     """
     title = (title or "").strip()
     if not title:
@@ -2772,11 +2883,26 @@ def save_badge_awards_for_level(
             COMPETITION_RESULTS if category == "竞赛" else EXAM_RESULTS
         )
         linked_ids = set(_linked_badge_student_ids(con, int(level_id)))
+        extra_ids = {int(student_id) for student_id in (extra_student_ids or [])}
+        if extra_ids and category != "竞赛":
+            raise ValueError("只有竞赛可以补录没有关联课程的学员")
+        if extra_ids:
+            marks = ",".join("?" for _ in extra_ids)
+            existing_extra_ids = {
+                int(row["id"])
+                for row in con.execute(
+                    f"SELECT id FROM students WHERE id IN ({marks})",
+                    sorted(extra_ids),
+                ).fetchall()
+            }
+            if existing_extra_ids != extra_ids:
+                raise ValueError("补录的学员不存在")
+        point_amounts = _clean_award_points(points_by_result, allowed_results)
         cleaned: list[tuple[int, str]] = []
         for raw_student_id, raw_result in awards.items():
             student_id = int(raw_student_id)
             result = (raw_result or "").strip()
-            if student_id not in linked_ids:
+            if student_id not in linked_ids and student_id not in extra_ids:
                 raise ValueError("有学员没有关联到这个竞赛／考级级别")
             if result not in allowed_results:
                 raise ValueError("请选择有效的比赛或考级结果")
@@ -2791,30 +2917,47 @@ def save_badge_awards_for_level(
             raise ValueError("这个考级级别还没有配置 1～4 级")
         for student_id, result in cleaned:
             existing = con.execute(
-                """SELECT id FROM student_badges
+                """SELECT id, points_awarded, awarded_by_user_id
+                     FROM student_badges
                     WHERE student_id = ? AND category = ? AND level_id = ?
                       AND title = ? AND happened_on = ?
                     ORDER BY id DESC LIMIT 1""",
                 (student_id, category, int(level_id), title, day),
             ).fetchone()
             if existing is not None:
+                points = (
+                    point_amounts[result]
+                    if points_by_result is not None
+                    else float(existing["points_awarded"] or 0)
+                )
+                award_teacher_id = (
+                    int(awarded_by_user_id)
+                    if awarded_by_user_id
+                    else existing["awarded_by_user_id"]
+                )
                 con.execute(
                     """UPDATE student_badges
-                          SET level_name = ?, result = ?, note = ?
+                          SET level_name = ?, result = ?, note = ?,
+                              points_awarded = ?, awarded_by_user_id = ?
                         WHERE id = ?""",
                     (
                         level_name,
                         result,
                         (note or "").strip(),
+                        points,
+                        award_teacher_id,
                         int(existing["id"]),
                     ),
                 )
+                badge_id = int(existing["id"])
             else:
+                points = point_amounts[result]
                 con.execute(
                     """INSERT INTO student_badges
                            (student_id, category, level_id, title, level_name,
-                            result, happened_on, note, created_at)
-                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            result, happened_on, note, points_awarded,
+                            awarded_by_user_id, created_at)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         student_id,
                         category,
@@ -2824,9 +2967,25 @@ def save_badge_awards_for_level(
                         result,
                         day,
                         (note or "").strip(),
+                        points,
+                        int(awarded_by_user_id) if awarded_by_user_id else None,
                         _today(),
                     ),
                 )
+                badge_id = int(
+                    con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+                )
+            _sync_badge_point_transaction(
+                con,
+                badge_id=badge_id,
+                student_id=student_id,
+                category=category,
+                title=title,
+                level_name=level_name,
+                result=result,
+                happened_on=day,
+                points=points,
+            )
     return len(cleaned)
 
 
@@ -2840,6 +2999,8 @@ def save_student_badge(
     note: str = "",
     badge_id: int | None = None,
     level_id: int | None = None,
+    points_awarded: Any | None = None,
+    awarded_by_user_id: int | None = None,
 ) -> int:
     category = category if category in BADGE_CATEGORIES else ""
     if not category:
@@ -2862,6 +3023,11 @@ def save_student_badge(
             date.fromisoformat(day)
         except ValueError:
             raise ValueError("日期写成 2026-10-22 这样")
+    points = (
+        _award_point_value(points_awarded)
+        if category == "竞赛" and points_awarded is not None
+        else 0.0
+    )
     with _connect() as con:
         if level_id:
             linked = con.execute(
@@ -2878,10 +3044,26 @@ def save_student_badge(
             if category == "考级":
                 level_name = linked["badge_exam_level"] or level_name
         if badge_id:
+            existing = con.execute(
+                """SELECT points_awarded, awarded_by_user_id
+                     FROM student_badges
+                    WHERE id = ? AND student_id = ?""",
+                (int(badge_id), int(student_id)),
+            ).fetchone()
+            if existing is None:
+                raise ValueError("这枚徽章不存在")
+            if category == "竞赛" and points_awarded is None:
+                points = float(existing["points_awarded"] or 0)
+            award_teacher_id = (
+                int(awarded_by_user_id)
+                if awarded_by_user_id
+                else existing["awarded_by_user_id"]
+            )
             con.execute(
                 """UPDATE student_badges
                       SET category = ?, title = ?, level_name = ?, result = ?,
-                          happened_on = ?, note = ?, level_id = ?
+                          happened_on = ?, note = ?, level_id = ?,
+                          points_awarded = ?, awarded_by_user_id = ?
                     WHERE id = ? AND student_id = ?""",
                 (
                     category,
@@ -2891,16 +3073,32 @@ def save_student_badge(
                     day,
                     (note or "").strip(),
                     int(level_id) if level_id else None,
+                    points,
+                    award_teacher_id,
                     int(badge_id),
                     int(student_id),
                 ),
             )
+            _sync_badge_point_transaction(
+                con,
+                badge_id=int(badge_id),
+                student_id=int(student_id),
+                category=category,
+                title=title,
+                level_name=level_name,
+                result=result,
+                happened_on=day,
+                points=points,
+            )
             return int(badge_id)
+        if category == "竞赛" and points_awarded is None:
+            points = 0.0
         cur = con.execute(
             """INSERT INTO student_badges
                    (student_id, category, level_id, title, level_name, result,
-                    happened_on, note, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    happened_on, note, points_awarded, awarded_by_user_id,
+                    created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 int(student_id),
                 category,
@@ -2910,14 +3108,33 @@ def save_student_badge(
                 result,
                 day,
                 (note or "").strip(),
+                points,
+                int(awarded_by_user_id) if awarded_by_user_id else None,
                 _today(),
             ),
         )
-        return int(cur.lastrowid)
+        badge_id = int(cur.lastrowid)
+        _sync_badge_point_transaction(
+            con,
+            badge_id=badge_id,
+            student_id=int(student_id),
+            category=category,
+            title=title,
+            level_name=level_name,
+            result=result,
+            happened_on=day,
+            points=points,
+        )
+        return badge_id
 
 
 def delete_student_badge(badge_id: int) -> None:
     with _connect() as con:
+        con.execute(
+            """DELETE FROM point_transactions
+                WHERE source_type = 'student_badge' AND source_id = ?""",
+            (int(badge_id),),
+        )
         con.execute("DELETE FROM student_badges WHERE id = ?", (int(badge_id),))
 
 
