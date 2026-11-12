@@ -980,10 +980,7 @@ class SettingsMixin:
             badge_text = ""
             badge_category = db.badge_category_for_level(l)
             level_title = db.level_display_name(l)
-            if badge_category == "竞赛":
-                level_title += f" · 比赛：{l['badge_event_name'] or '未填写'}"
-            elif badge_category == "考级":
-                level_title += f" · 考级：{l['badge_event_name'] or '未填写'}"
+            if badge_category == "考级":
                 badge_text = f" · {l['badge_exam_level'] or '级别未设置'}"
             rows.append(
                 ft.Container(

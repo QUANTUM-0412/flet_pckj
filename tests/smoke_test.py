@@ -5860,7 +5860,7 @@ ok(
     == "2026 机器人技术等级考试"
     and configured_badge_level["level_type"] == "考级"
     and db.level_display_name(configured_badge_level)
-    == "徽章测试-三级考级-考级",
+    == "徽章测试-三级考级-考级 · 考级：2026 机器人技术等级考试",
     "等级设置里可以配置考级徽章和 1～4 级，显示名称带类别",
 )
 ok(
@@ -5943,6 +5943,24 @@ ok(
         "GPL-Zecode-小低组-竞赛 · 比赛：2026-融智杯",
     ),
     "比赛名称直接显示在等级主标题里",
+)
+app._open_template_dialog(None)
+dlg = top_dialog(page)
+course_level = find_dropdown(dlg, "等级 *")
+ok(
+    any(
+        option.text
+        == "GPL-Zecode-小低组-竞赛 · 比赛：2026-融智杯"
+        for option in course_level.options
+    ),
+    "新增课程选择等级时能看到比赛名称",
+)
+app._close()
+ok(
+    db.lesson_label(competition_points_level).endswith(
+        "GPL-Zecode-小低组 · 比赛：2026-融智杯"
+    ),
+    "课程和课次里的等级也会带上比赛名称",
 )
 same_group_other_event_id = db.create_level(
     "GPL-Zecode",

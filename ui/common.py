@@ -143,6 +143,8 @@ def _school_inputs(value: str = "", width=None) -> tuple[ft.Control, ft.TextFiel
 
 
 def _level_title(enrollment: dict) -> str:
+    if enrollment.get("subject") or enrollment.get("level_name"):
+        return db.level_display_name(enrollment)
     subject = (enrollment.get("subject") or "").strip()
     name = (enrollment.get("level_name") or "").strip()
     title = f"{subject}-{name}" if subject else name
