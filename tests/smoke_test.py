@@ -2337,6 +2337,18 @@ find_checkbox(dlg, "也显示别的级别的孩子").value = False
 find_checkbox(dlg, "也显示别的级别的孩子").on_change(None)
 find_checkbox(dlg, "张晨希").value = True
 click(dlg, "保存")
+ok(
+    find_field(dlg, "开班日").error == "请填开课日",
+    "新增课程必须填写开班日",
+)
+find_field(dlg, "开班日").value = "2026-09-01"
+click(dlg, "保存")
+ok(
+    find_field(dlg, "结课日（到期自动结课）").error == "请填结课日",
+    "新增课程必须填写结课日",
+)
+find_field(dlg, "结课日（到期自动结课）").value = "2026-12-31"
+click(dlg, "保存")
 templates = db.list_templates()
 ok(len(templates) == 1, "固定课表建好了")
 ok(
@@ -4321,12 +4333,51 @@ old_style = db.create_template(
     term="1",
     seq=7,
 )
+normalize_comp_level = db.create_level(
+    "Python",
+    "初中",
+    90,
+    badge_category="竞赛",
+    level_type="竞赛",
+    badge_event_name="2026-规范杯",
+)
+normalize_comp_course = db.create_template(
+    2,
+    "12:00",
+    90,
+    zhengke["id"],
+    normalize_comp_level,
+    name="2027-1-Python-初中-竞赛-Cls-08",
+    year="2027",
+    term="1",
+    seq=8,
+)
 db.normalize_course_names()
 ok(
     db.get_template(old_style)["name"]
     == db.make_course_name("2027", "1", db.level_display_name(gpl3), 7),
     "老写法的课程名能规范成标准写法",
 )
+normalized_comp_name = db.get_template(normalize_comp_course)["name"]
+ok(
+    normalized_comp_name
+    == db.make_course_name(
+        "2027",
+        "1",
+        db.course_level_text(
+            next(
+                level
+                for level in db.list_levels()
+                if int(level["id"]) == normalize_comp_level
+            )
+        ),
+        8,
+    )
+    and "2026-规范杯" in normalized_comp_name,
+    "规范课程名不会丢掉比赛名称",
+)
+db.delete_template(normalize_comp_course)
+db.delete_level(normalize_comp_level, force=True)
 
 app.tab = 1
 app.lesson_id = None
@@ -4520,6 +4571,8 @@ find_checkbox(dlg, "周六").value = False
 find_checkbox(dlg, "不指定").value = True
 find_field(dlg, "课程名（自动生成，也可自己改）").value = "2026-2-不定时界面班"
 find_dropdown(dlg, "等级 *").value = str(gpl3["id"])
+find_field(dlg, "开班日").value = "2026-09-01"
+find_field(dlg, "结课日（到期自动结课）").value = "2026-12-31"
 click(dlg, "保存")
 ui_free = [t for t in db.list_templates(active_only=False) if t["name"] == "2026-2-不定时界面班"]
 ok(
@@ -4783,6 +4836,15 @@ filter_comp = db.create_template(
     start_date="2026-10-01",
     end_date="2026-12-31",
 )
+undated_filter_course = db.create_template(
+    -1,
+    "",
+    60,
+    rules["竞赛"]["id"],
+    filter_comp_level["id"],
+    name="未设置日期-可查找",
+    teacher_id=t_a,
+)
 ok(
     app.course_status_filter == "unclosed",
     "课程筛选默认隐藏已结课",
@@ -4820,6 +4882,61 @@ def course_list_text() -> str:
         for control in controls[title_index:]
         if isinstance(control, ft.Text)
     )
+app.course_month = "2035-01"
+app.course_status_filter = "all"
+app.course_teacher_filter = "all"
+app.course_subject_filter = ""
+app.render()
+ok(
+    "未设置日期-可查找" in course_list_text(),
+    "没填开课日和结课日的课程不会被月份筛选藏起来",
+)
+db.delete_template(undated_filter_course)
+app.course_month = "2026-10"
+app.course_status_filter = "unclosed"
+app.course_teacher_filter = str(t_a)
+app.course_subject_filter = ""
+app.render()
+cleanup_student = db.create_student({"name": "未日期清理保留娃"})
+cleanup_course = db.create_template(
+    -1,
+    "",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    name="未日期清理课程",
+    teacher_id=t_a,
+)
+cleanup_enrollment = db.create_enrollment(
+    cleanup_student,
+    gpl3["id"],
+    zhengke["id"],
+    60,
+    owner_teacher_id=t_a,
+    class_id=cleanup_course,
+)
+cleanup_lesson = db.create_lesson(
+    "2026-10-05",
+    "18:00",
+    60,
+    zhengke["id"],
+    gpl3["id"],
+    teacher_id=t_a,
+    template_id=cleanup_course,
+)
+with db._connect() as cleanup_con:
+    removed_undated = db._remove_legacy_undated_courses(
+        cleanup_con, [cleanup_course]
+    )
+ok(
+    removed_undated == 1
+    and db.get_template(cleanup_course) is None
+    and db.get_enrollment(cleanup_enrollment)["class_id"] is None
+    and db.get_lesson(cleanup_lesson)["template_id"] is None,
+    "旧的无日期课程会被删除，报名和课次保留并解除课程关联",
+)
+db.delete_lesson(cleanup_lesson)
+db.delete_student(cleanup_student)
 
 
 ok("筛选-王老师-在读" in course_list_text(), "老师自己的在读课程仍然显示")

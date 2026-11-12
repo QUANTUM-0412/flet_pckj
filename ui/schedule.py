@@ -1577,7 +1577,7 @@ class ScheduleMixin:
         def level_text() -> str:
             for l in levels:
                 if str(l["id"]) == (level_dd.value or ""):
-                    return db.level_display_name(l)
+                    return db.course_level_text(l)
             return ""
 
         name_touched = False
@@ -1671,7 +1671,9 @@ class ScheduleMixin:
             for field, label in ((start_date, "开课日"), (end_date, "结课日")):
                 day = (field.value or "").strip()
                 if not day:
-                    continue
+                    field.error = f"请填{label}"
+                    field.update()
+                    return
                 try:
                     date.fromisoformat(day)
                 except ValueError:

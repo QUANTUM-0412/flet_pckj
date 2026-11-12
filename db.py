@@ -617,9 +617,51 @@ def init_db() -> None:
         con.executescript(SCHEMA)
         _migrate(con)
         _seed(con)
+        if con.execute(
+            "SELECT 1 FROM meta WHERE key = 'legacy_undated_courses_removed'"
+        ).fetchone() is None:
+            _remove_legacy_undated_courses(con)
+            con.execute(
+                "INSERT OR REPLACE INTO meta(key, value) "
+                "VALUES('legacy_undated_courses_removed', '1')"
+            )
         _seed_default_course_package(con)
     advance_student_grades()
     ensure_default_admin()
+
+
+def _remove_legacy_undated_courses(
+    con: sqlite3.Connection, template_ids: list[int] | None = None
+) -> int:
+    """一次性清掉新规则上线前没有填写任何日期的课程。"""
+    where = (
+        "IFNULL(TRIM(start_date), '') = '' "
+        "AND IFNULL(TRIM(end_date), '') = ''"
+    )
+    args: list[Any] = []
+    if template_ids:
+        marks = ",".join("?" for _ in template_ids)
+        where += f" AND id IN ({marks})"
+        args = [int(item) for item in template_ids]
+    rows = con.execute(
+        f"SELECT id FROM schedule_templates WHERE {where}",
+        args,
+    ).fetchall()
+    for row in rows:
+        template_id = int(row["id"])
+        con.execute(
+            "UPDATE enrollments SET class_id = NULL WHERE class_id = ?",
+            (template_id,),
+        )
+        con.execute(
+            "UPDATE lessons SET template_id = NULL WHERE template_id = ?",
+            (template_id,),
+        )
+        con.execute(
+            "DELETE FROM schedule_templates WHERE id = ?",
+            (template_id,),
+        )
+    return len(rows)
 
 
 def _levels_need_event_unique(con: sqlite3.Connection) -> bool:
@@ -1308,6 +1350,24 @@ def make_course_name(year: str, term: str, level_text: str, seq: int) -> str:
     )
 
 
+def course_level_text(row: sqlite3.Row | dict) -> str:
+    """规范课程名里使用的等级文本，竞赛／考级带上活动名称。"""
+    data = dict(row)
+    subject = (data.get("subject") or "").strip()
+    name = (
+        (data.get("level_name") or data.get("name") or "").strip()
+    )
+    category = (
+        (data.get("badge_category") or "").strip()
+        or (data.get("level_type") or "").strip()
+    )
+    parts = [part for part in (subject, name, category) if part]
+    event_name = (data.get("badge_event_name") or "").strip()
+    if category in BADGE_CATEGORIES and event_name:
+        parts.append(event_name)
+    return "-".join(parts)
+
+
 def _backfill_course_name_parts(con: sqlite3.Connection) -> int:
     """从老课程名里把 年份／学期／序号 拆出来存好；没有序号的按顺序补。"""
     rows = con.execute(
@@ -1369,7 +1429,8 @@ def normalize_course_names() -> int:
     with _connect() as con:
         _backfill_course_name_parts(con)
         rows = con.execute(
-            """SELECT t.*, l.subject, l.name AS level_name, l.level_type
+            """SELECT t.*, l.subject, l.name AS level_name, l.level_type,
+                      l.badge_category, l.badge_event_name
                  FROM schedule_templates t
                  LEFT JOIN levels l ON l.id = t.level_id
                 ORDER BY t.id"""
@@ -1381,12 +1442,7 @@ def normalize_course_names() -> int:
             )
         }
         for row in rows:
-            subject = (row["subject"] or "").strip()
-            level_name = (row["level_name"] or "").strip()
-            level_text = f"{subject}-{level_name}" if subject else level_name
-            category = (row["level_type"] or "").strip()
-            if category:
-                level_text = f"{level_text}-{category}"
+            level_text = course_level_text(row)
             if not (row["year"] and row["term"] and level_text and row["seq"]):
                 continue
             seq = int(row["seq"])
@@ -1625,6 +1681,11 @@ def course_in_month(course: dict | sqlite3.Row, month: str) -> bool:
     没有可推算的上课日，只有在那个月实际记过课时才算。
     """
     data = dict(course)
+    start_text = (data.get("start_date") or "").strip()
+    end_text = (data.get("end_date") or "").strip()
+    if not start_text and not end_text:
+        # 还没设置日期时不属于任何月份，不能被月份筛选藏起来。
+        return True
     try:
         first_day = date.fromisoformat(f"{str(month)[:7]}-01")
     except (TypeError, ValueError):
@@ -1637,13 +1698,13 @@ def course_in_month(course: dict | sqlite3.Row, month: str) -> bool:
 
     try:
         course_start = (
-            date.fromisoformat((data.get("start_date") or "").strip())
-            if (data.get("start_date") or "").strip()
+            date.fromisoformat(start_text)
+            if start_text
             else first_day
         )
         course_end = (
-            date.fromisoformat((data.get("end_date") or "").strip())
-            if (data.get("end_date") or "").strip()
+            date.fromisoformat(end_text)
+            if end_text
             else last_day
         )
     except ValueError:
