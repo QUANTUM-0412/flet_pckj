@@ -5863,6 +5863,13 @@ ok(
     == "徽章测试-三级考级-考级",
     "等级设置里可以配置考级徽章和 1～4 级，显示名称带类别",
 )
+ok(
+    find_text(
+        app._levels_card(),
+        "徽章测试-三级考级-考级 · 考级：2026 机器人技术等级考试",
+    ),
+    "考级名称直接显示在等级主标题里",
+)
 app._open_level_dialog(None)
 dlg = top_dialog(page)
 competition_level_type = find_dropdown(dlg, "类别")
@@ -5929,6 +5936,13 @@ competition_high_level = next(
     level
     for level in db.list_levels()
     if int(level["id"]) == competition_high_level_id
+)
+ok(
+    find_text(
+        app._levels_card(),
+        "GPL-Zecode-小低组-竞赛 · 比赛：2026-融智杯",
+    ),
+    "比赛名称直接显示在等级主标题里",
 )
 manual_award_student = db.create_student(
     {

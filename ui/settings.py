@@ -979,22 +979,23 @@ class SettingsMixin:
             can_edit = self._can_manage_level(l)
             badge_text = ""
             badge_category = db.badge_category_for_level(l)
+            level_title = db.level_display_name(l)
             if badge_category == "竞赛":
-                badge_text = (
-                    f" · 比赛：{l['badge_event_name'] or '未填写'}"
-                )
+                level_title += f" · 比赛：{l['badge_event_name'] or '未填写'}"
             elif badge_category == "考级":
-                badge_text = (
-                    f" · 考级：{l['badge_event_name'] or '未填写'}"
-                    f" · {l['badge_exam_level'] or '级别未设置'}"
-                )
+                level_title += f" · 考级：{l['badge_event_name'] or '未填写'}"
+                badge_text = f" · {l['badge_exam_level'] or '级别未设置'}"
             rows.append(
                 ft.Container(
                     content=ft.Row(
                         [
                             ft.Column(
                                 [
-                                    ft.Text(db.level_display_name(l), size=14, weight=ft.FontWeight.W_600),
+                                    ft.Text(
+                                        level_title,
+                                        size=14,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
                                     ft.Text(
                                         f"默认 {l['default_minutes']} 分钟"
                                         + (
